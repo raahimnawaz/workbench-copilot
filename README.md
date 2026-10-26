@@ -12,7 +12,8 @@ Everything in this repository was written during the hackathon, starting Oct 26,
 |---|---|
 | `wbc/agent/` | Router loop, tool registry, `ask_coder`, voice front end, budget guard, console HUD |
 | `wbc/motion/kinematics.py` | URDF chain loader, forward kinematics, damped least-squares IK, the (x, y, z, pitch, roll) grasp frame |
-| `config/`, `fixtures/`, `scripts/`, `tests/` | Model routing config, the recorded bench for `--sim`, the smoke test, 45 tests |
+| `wbc/motion/sts.py`, `wbc/motion/probe.py` | A small STS3215 servo client and the gripper feedback probe |
+| `config/`, `fixtures/`, `scripts/`, `tests/` | Model routing config, the recorded bench for `--sim`, the smoke test and gripper probe, 62 tests |
 | `firmware/dut_demo/` | The Act 1 demo board firmware, with the wiring bug planted on purpose |
 
 | Reused | License | Used for |
@@ -21,7 +22,7 @@ Everything in this repository was written during the hackathon, starting Oct 26,
 | [LeRobot](https://github.com/huggingface/lerobot) | Apache-2.0 | Servo calibration and the Feetech bus (from Oct 27) |
 | Muse Spark, Muse Wonder, Muse Voice Transcribe, SAM 3.1 on the Meta Model API | Meta API terms | Routing, coding, speech, segmentation |
 | Muse Glimmer 30B weights | Apache-2.0 | The local backup router |
-| openai, numpy, PyYAML, httpx, sounddevice, pynput, pytest | Apache-2.0, BSD-3, MIT, BSD-3, MIT, LGPL-3.0, MIT | Python dependencies |
+| openai, numpy, PyYAML, httpx, sounddevice, pynput, pyserial, pytest | Apache-2.0, BSD-3, MIT, BSD-3, MIT, LGPL-3.0, BSD-3, MIT | Python dependencies |
 | Adafruit SSD1306 and Adafruit GFX | BSD | Demo board display driver |
 
 ## Status, Oct 26 (Day 1)
@@ -34,7 +35,8 @@ Everything in this repository was written during the hackathon, starting Oct 26,
 | Voice front end | WAV packing and upload are tested against a fake server. The endpoint and form fields are marked `VERIFY`. |
 | Budget guard | Built and tested. Spend persists in `.wbc/spend.json`. |
 | FK/IK | Tested on the real SO-101 URDF. 200 of 200 bench poses round-trip to within 0.2 mm and 0.5°, at about 33 ms per solve. |
-| Perception, servo bus, reflex loop, web HUD | Not started (blueprint sheet 10). Their tools return a clear "not wired yet" error, or use the recorded bench with `--sim`. |
+| STS3215 client and gripper probe | Packet format, decoding, the squeeze ramp and torque release are tested against a fake servo. Not yet run on the arm. |
+| Perception, motion layer, reflex loop, web HUD | Not started (blueprint sheet 10). Their tools return a clear "not wired yet" error, or use the recorded bench with `--sim`. |
 
 ## Setup (Apple Silicon)
 
@@ -58,6 +60,22 @@ Then type `Zero response on SPI. Check my wiring against the firmware.` With `--
 
 - `--voice` also listens on the foot pedal (`ears.pedal_key`, default F13). The first time, macOS asks you to allow Input Monitoring for your terminal. The Mac Studio has no built-in microphone, so plug one in.
 - `--backup` routes with Muse Glimmer on your own machine. Serve it with any OpenAI-compatible server that supports tool calls (llama.cpp's `llama-server`, LM Studio or Ollama), then set `backup.base_url` and `backup.model` in `config/models.yaml`. The 4-bit build fits easily in 64 GB.
+
+## Gripper probe: what can servo feedback feel?
+
+`scripts/gripper_probe.py` reads the gripper servo's position, load and current about 200 times a second, so you can measure whether servo feedback alone can see a grip, a pull or a slip. Install the arm extra first (`uv pip install -e '.[arm]'`), close LeRobot, and turn the servo power on.
+
+```bash
+python scripts/gripper_probe.py --list
+python scripts/gripper_probe.py --port /dev/tty.usbmodemXXXX watch
+python scripts/gripper_probe.py --port /dev/tty.usbmodemXXXX squeeze --closed 2150
+```
+
+- `watch` only reads. With torque off, move the jaws by hand and note the open and closed positions.
+- `squeeze` closes slowly toward `--closed` with the torque capped (300‰ by default, 600‰ at most), then holds. Hold still for 2 s, then type a label such as `pull` and press Enter as you start each action. Ctrl-C ends the run and releases the gripper.
+- Each run writes `.wbc/logs/gripper-<time>.csv` and prints, for every label, how far load, current and position moved and how that compares with the noise while holding still.
+
+The current register's units aren't confirmed for your servos, so compare the raw numbers with each other rather than converting them to mA.
 
 ## How the router works
 
