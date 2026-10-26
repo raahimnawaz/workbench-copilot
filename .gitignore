@@ -1,0 +1,16 @@
+# secrets
+.env
+
+# local state: spend tracking, logs, recordings
+.wbc/
+
+# python
+__pycache__/
+*.egg-info/
+.venv/
+.pytest_cache/
+
+# platformio
+.pio/
+
+.DS_Store

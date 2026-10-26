@@ -1,0 +1,14 @@
+# SO-101 kinematic chain, read from TheRobotStudio's URDF (vendored unchanged in hardware/, Apache-2.0).
+urdf: hardware/so101_new_calib.urdf
+base_link: base_link
+tip_link: gripper_frame_link          # the point between the jaws
+joints: [shoulder_pan, shoulder_lift, elbow_flex, wrist_flex, wrist_roll]
+
+# In the URDF the gripper's approach direction is its z-axis. Turning the tool frame -90° about y
+# makes approach the x-axis, which is what kinematics.task_to_pose expects.
+tool:
+  xyz: [0, 0, 0]
+  rpy: [0, -1.5708, 0]
+
+# LeRobot reports joint positions in its own calibrated units. The bus layer (D2) maps them to these
+# URDF radians. Check every sign against a ruler before trusting IK on the real arm.

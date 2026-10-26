@@ -1,0 +1,47 @@
+# Every model id and price lives here, never in code, so a renamed preview model is a one-line change.
+# Ids come from Meta's model page and playground (checked 2026-10-26).
+# Prices marked "third-party" come from write-ups, not Meta's pricing page. Confirm them on Day 1.
+
+api:
+  base_url: https://api.meta.ai/v1
+
+router:
+  model: muse-spark-1.3
+  fallback: muse-spark-1.1          # the version in Meta's tool-calling examples
+  max_steps: 12                     # tool rounds per turn before the loop gives up
+
+coder:
+  model: muse-wonder-1.0
+  effort: low
+  timeout_s: 30
+  max_files: 4
+  compile_cmd: pio run -d firmware/dut_demo   # runs in a sandbox copy; leave empty to skip
+  compile_dir: firmware/dut_demo
+  compile_timeout_s: 180
+
+eyes:
+  model: sam-3.1
+  fallback: local                   # facebook/sam3.1 weights, gated on Hugging Face: request access
+
+ears:
+  model: muse-voice-transcribe-1.0
+  url: https://api.meta.ai/v1/asr/transcribe  # from a third-party guide; verify in Meta's speech docs
+  sample_rate: 16000
+  pedal_key: f13                    # the key your foot pedal sends (any pynput key name)
+  keywords: [GPIO, SPI, MOSI, SCK, OLED, pins.h, chip select, regrasp, breadboard]
+
+backup:                             # open-weights router served on your own machine
+  model: muse-glimmer-30b           # the name your local server registers
+  base_url: http://127.0.0.1:8080/v1
+  reasoning: medium                 # Glimmer reads "Reasoning strength: <value>" from the system prompt
+
+budget:
+  limit_usd: 120                    # the agent stops here, before the $150 of credit runs out
+  state_file: .wbc/spend.json
+  prices:                           # USD. Tokens per 1M, audio per hour, images per 1,000.
+    muse-spark-1.3: {in: 1.25, cached_in: 0.15, out: 4.25}      # third-party
+    muse-spark-1.1: {in: 1.25, cached_in: 0.15, out: 4.25}      # cached rate assumed equal to 1.3
+    muse-wonder-1.0: {in: 4.00, cached_in: 0.20, out: 20.00}    # third-party
+    muse-voice-transcribe-1.0: {per_hour: 0.18}                # third-party
+    sam-3.1: {per_1k_images: 2.50}
+    muse-glimmer-30b: {in: 0, out: 0}                           # runs locally
