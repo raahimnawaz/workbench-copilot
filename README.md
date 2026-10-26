@@ -1,5 +1,7 @@
 # Workbench Co-Pilot
 
+[![tests](https://github.com/raahimnawaz/workbench-copilot/actions/workflows/tests.yml/badge.svg)](https://github.com/raahimnawaz/workbench-copilot/actions/workflows/tests.yml)
+
 An AI lab partner that lives in your code editor and on your workbench. You talk to it through a foot pedal. **Muse Spark** routes each request: **Muse Wonder** writes code, **SAM 3.1** reads the breadboard, **Muse Voice Transcribe** hears you, and an **SO-101** arm points, grasps and holds boards while you probe.
 
 Built for the Meta Global AI Developer Hackathon (Indie track, Push the Frontier), Oct 26 – Nov 4, 2026.

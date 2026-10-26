@@ -1,0 +1,21 @@
+# Runs the offline test suite on every push and pull request. No API keys or hardware needed:
+# the tests use fakes for the Meta API and the servo, and the vendored SO-101 URDF for kinematics.
+name: tests
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      # The voice extra is left out: it needs a microphone driver and a display, and no test imports it.
+      - run: pip install -e '.[dev,arm]'
+      - run: pytest -q
