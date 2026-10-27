@@ -1,0 +1,197 @@
+"""Setting servo ids on an assembled arm, against a fake line of factory-fresh servos."""
+import importlib.util
+
+import pytest
+
+from wbc.config import ROOT
+from wbc.motion import sts
+
+_spec = importlib.util.spec_from_file_location("set_servo_ids", ROOT / "scripts" / "set_servo_ids.py")
+set_servo_ids = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(set_servo_ids)
+
+
+class FakeLine:
+    """A servo bus with several servos, each plugged in or not. Servos sharing an id all answer at once, as
+    on the real arm: identical replies (a ping) overlap and still read cleanly, but replies that differ (each
+    servo's own position) collide and fail their checksum. Writes reach every servo with that id."""
+
+    def __init__(self, n=6, busy_after_id_write=0):
+        self.busy_after_id_write = busy_after_id_write  # requests ignored while a new id is saved
+        self.busy = 0
+        self.servos = [{"id": 1, "regs": bytearray(128), "on": False} for _ in range(n)]
+        for i, s in enumerate(self.servos):
+            s["regs"][sts.LOCK] = 1  # the EEPROM is locked at power-up
+            s["regs"][sts.FEEDBACK_START:sts.FEEDBACK_START + 2] = (2000 + 37 * i).to_bytes(2, "little")
+        self.servos[0]["on"] = True  # only the base is connected to start with
+        self.out = bytearray()
+
+    def ids(self):
+        return [s["id"] for s in self.servos]
+
+    def reset_input_buffer(self):
+        self.out.clear()
+
+    def write(self, data):
+        sid, instr, params = data[2], data[4], data[5:-1]
+        if self.busy:
+            self.busy -= 1
+            return
+        replies = [self._answer(s, instr, params) for s in self.servos if s["on"] and s["id"] == sid]
+        if instr == sts.WRITE and params[0] == sts.ID:
+            self.busy = self.busy_after_id_write
+        if not replies:
+            return
+        if all(r == replies[0] for r in replies):
+            self.out += replies[0]
+        else:
+            self.out += b"\xff\xff\x01\x02\x00\x00"  # different replies on top of each other: the checksum fails
+
+    @staticmethod
+    def _answer(s, instr, params):
+        reply = b""
+        if instr == sts.READ:
+            addr, n = params
+            reply = bytes(s["regs"][addr:addr + n])
+        elif instr == sts.WRITE:
+            addr, payload = params[0], bytes(params[1:])
+            if addr == sts.ID:
+                assert s["regs"][sts.LOCK] == 0, "id written while the EEPROM was locked"
+                s["id"] = payload[0]  # and it replies under the new id
+            s["regs"][addr:addr + len(payload)] = payload
+        body = bytes([s["id"], len(reply) + 2, 0]) + reply
+        return b"\xff\xff" + body + bytes([sts.checksum(body)])
+
+    def read(self, n):
+        chunk = bytes(self.out[:n])
+        del self.out[:n]
+        return chunk
+
+    def close(self):
+        pass
+
+
+def bus_on(line):
+    return sts.Bus("fake", serial_factory=lambda port, **kw: line)
+
+
+def plug_next(line, extra=0):
+    """What Raahim does at each prompt: plug in the next servo (and, by mistake, `extra` more)."""
+    off = [s for s in line.servos if not s["on"]]
+    for s in off[:1 + extra]:
+        s["on"] = True
+
+
+class ScriptedReplies:
+    """A line that answers every request with the same bytes, such as a reply garbled by a bad contact."""
+
+    def __init__(self, reply):
+        self.reply, self.out = reply, bytearray()
+
+    def reset_input_buffer(self):
+        self.out.clear()
+
+    def write(self, data):
+        self.out += self.reply
+
+    def read(self, n):
+        chunk = bytes(self.out[:n])
+        del self.out[:n]
+        return chunk
+
+    def close(self):
+        pass
+
+
+@pytest.mark.parametrize("reply", [b"\xff\xff\x01\x00", b"\xff\xff\x01\x01\x00", b"\xff\xff\x01\x02"])
+def test_garbled_replies_are_a_failed_ping_not_a_crash(reply):
+    # Seen on the real arm with a poor contact: the length byte came through as 0 and the client crashed
+    assert not bus_on(ScriptedReplies(reply)).ping(1)
+
+
+def test_set_id_unlocks_writes_and_relocks():
+    line = FakeLine(1)
+    bus = bus_on(line)
+    bus.set_id(1, 7)
+    assert line.ids() == [7] and line.servos[0]["regs"][sts.LOCK] == 1
+    assert bus.ping(7) and not bus.ping(1)
+
+
+def test_set_id_waits_while_the_servo_saves_its_new_id(monkeypatch):
+    # On the real arm the first ping after the id write went unanswered, and the id had in fact changed
+    monkeypatch.setattr(sts, "sleep", lambda s: None)
+    line = FakeLine(1, busy_after_id_write=3)
+    bus_on(line).set_id(1, 20)
+    assert line.ids() == [20] and line.servos[0]["regs"][sts.LOCK] == 1
+
+
+def test_set_id_refuses_an_id_that_is_taken():
+    line = FakeLine(2)
+    line.servos[1].update(id=2, on=True)
+    with pytest.raises(sts.STSError, match="already answers"):
+        bus_on(line).set_id(1, 2)
+    assert line.ids() == [1, 2]
+
+
+def test_whole_arm_gets_ids_one_to_six_in_chain_order():
+    line = FakeLine()
+    said = []
+    ok = set_servo_ids.run(bus_on(line), ask=lambda p: plug_next(line) or "", say=said.append)
+    assert ok and line.ids() == [1, 2, 3, 4, 5, 6]
+    assert all(s["regs"][sts.LOCK] == 1 for s in line.servos)
+    text = "\n".join(said)
+    assert "at the elbow end" in text and "into the gripper servo" in text
+    assert "Unplug the cable from the gripper" not in text  # the gripper is the end of the chain
+
+
+def test_two_new_servos_at_once_are_caught_and_retried():
+    line = FakeLine()
+    said, calls = [], {"n": 0}
+
+    def ask(prompt):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            plug_next(line, extra=1)  # forgot to unplug the cable leading on
+        elif calls["n"] == 2:
+            line.servos[2]["on"] = False  # unplugged it after the warning
+        else:
+            plug_next(line)
+        return ""
+
+    assert set_servo_ids.run(bus_on(line), ask=ask, say=said.append)
+    assert line.ids() == [1, 2, 3, 4, 5, 6]
+    assert any("more than one new servo" in s for s in said)
+
+
+def test_stopping_partway_and_running_again_carries_on():
+    line = FakeLine()
+    answers = iter(["", "", "q"])
+    bus = bus_on(line)
+
+    def ask(prompt):
+        a = next(answers)
+        if a != "q":
+            plug_next(line)
+        return a
+
+    assert not set_servo_ids.run(bus, ask=ask, say=lambda s: None)
+    assert line.ids()[:3] == [set_servo_ids.PARK_ID, 2, 3]
+    assert set_servo_ids.run(bus, ask=lambda p: plug_next(line) or "", say=lambda s: None)
+    assert line.ids() == [1, 2, 3, 4, 5, 6]
+
+
+def test_refuses_to_start_with_several_servos_on_the_line():
+    line = FakeLine()
+    line.servos[1]["on"] = True  # the base -> shoulder lift cable is still plugged in
+    said = []
+    assert not set_servo_ids.run(bus_on(line), ask=lambda p: "", say=said.append)
+    assert "Unplug the base -> shoulder lift cable" in said[0] and line.ids() == [1] * 6
+
+
+def test_a_finished_arm_is_left_alone():
+    line = FakeLine()
+    for i, s in enumerate(line.servos, 1):
+        s.update(id=i, on=True)
+    said = []
+    assert set_servo_ids.run(bus_on(line), ask=lambda p: pytest.fail("shouldn't ask"), say=said.append)
+    assert "Nothing to do" in said[0]

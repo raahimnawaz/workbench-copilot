@@ -15,6 +15,7 @@ Everything in this repository was written during the hackathon, starting Oct 26,
 | `wbc/agent/` | Router loop, tool registry, `ask_coder`, voice front end, budget guard, console HUD |
 | `wbc/motion/kinematics.py` | URDF chain loader, forward kinematics, damped least-squares IK, the (x, y, z, pitch, roll) grasp frame |
 | `wbc/motion/sts.py`, `wbc/motion/probe.py` | A small STS3215 servo client and the gripper feedback probe |
+| `scripts/set_servo_ids.py` | Gives each servo of an already-assembled arm its id, growing the chain from the base |
 | `wbc/reflex/fsr_link.py`, `wbc/reflex/fsr_cal.py` | The force sensor link (500 Hz frames with a CRC), per-sensor calibration fit and creep analysis |
 | `config/`, `fixtures/`, `scripts/`, `tests/` | Model routing config, the recorded bench for `--sim`, the smoke test, gripper probe and force sensor tools, 84 tests |
 | `firmware/dut_demo/` | The Act 1 demo board firmware, with the wiring bug planted on purpose |
@@ -66,6 +67,21 @@ Then type `Zero response on SPI. Check my wiring against the firmware.` With `--
 
 - `--voice` also listens on the foot pedal (`ears.pedal_key`, default F13). The first time, macOS asks you to allow Input Monitoring for your terminal. The Mac Studio has no built-in microphone, so plug one in.
 - `--backup` routes with Muse Glimmer on your own machine. Serve it with any OpenAI-compatible server that supports tool calls (llama.cpp's `llama-server`, LM Studio or Ollama), then set `backup.base_url` and `backup.model` in `config/models.yaml`. The 4-bit build fits easily in 64 GB.
+
+## Servo ids on an assembled arm
+
+New STS3215 servos all leave the factory as id 1. On a chained arm they all answer at once, so nothing reads cleanly. Their identical ping replies sometimes overlap well enough to pass, which makes the fault look like a flaky cable. LeRobot's `lerobot-setup-motors` fixes this one servo at a time, but it moves the board to each servo in turn. `scripts/set_servo_ids.py` grows the chain outward from the base instead, so the board → base cable never moves:
+
+```bash
+uv pip install -e '.[arm]'
+python scripts/set_servo_ids.py --port /dev/cu.usbmodemXXXX
+```
+
+1. Start with only the base servo connected: unplug the base → shoulder lift cable at the shoulder lift end.
+2. The script parks the base on id 20. Then, for each next servo, it tells you to unplug the cable leading on from that servo (at the far end) and plug in the one reaching it. The servo joins alone as id 1 and gets its real id (2–6).
+3. At the end the base returns to id 1, and the script lists all six.
+
+Before changing an id, it checks that five full reads at id 1 come back clean, which only happens with one servo on the line. Power the servos off while moving cables. If it stops partway, run it again and it carries on. It only writes ids; torque stays off.
 
 ## Gripper probe: what can servo feedback feel?
 
