@@ -28,11 +28,11 @@ echo "Zero response on SPI. Check my wiring against the firmware." | .venv/bin/p
 - **Open problem:** that Act 1 turn took 81 s, 75 of them in three Spark calls, against a 55 s slot. The router now asks for `effort: low` and logs each call's time. It hasn't been re-timed.
 - FK/IK (`wbc/motion/kinematics.py`) is tested on the real URDF: 200/200 bench poses within 0.2 mm and 0.5°.
 - `scripts/gripper_probe.py` (with `wbc/motion/sts.py`) has never run on the arm.
-- Force sensors (Oct 27): `firmware/fsr_sampler` is flashed on the ESP32 at `/dev/cu.usbserial-0001` and streams 500.0 Hz with no dropped or bad frames. `scripts/calibrate_fsr.py` (`watch`, `calibrate`, `creep`, with `wbc/reflex/fsr_link.py` and `fsr_cal.py`) is tested against a fake sensor but hasn't run with a real one.
+- Force sensors (Oct 27): `firmware/fsr_sampler` is flashed on the ESP32 at `/dev/cu.usbserial-0001` and streams 500.0 Hz with no dropped or bad frames. `scripts/calibrate_fsr.py` (`watch`, `calibrate`, `creep`, with `wbc/reflex/fsr_link.py` and `fsr_cal.py`) is tested against a fake sensor. Sensor SD is wired (10 kΩ). Creep test on SD (51 g of quarters pressing through a small bolt as the puck): the reading rose 6.8% over 3 s, 17% over 10 s and 28% over 60 s, then fell straight back to the floor on removal. So the compliant hold locks the jaw position instead of regulating force on this reading. Coins without a puck barely register: these sensors need the force concentrated. No sensor is calibrated yet.
 - Not started: SAM 3.1 client and breadboard netlist reader, web HUD, slip detector, motion skills, compliant hold.
 
 ## Next, in order
-0. Now: wire the sensors, calibrate each one, and run the creep test (100 g for 120 s). The result decides whether the compliant hold regulates force or locks the jaw position.
+0. Now: calibrate SD with the bolt puck, then wire SP, MD and MP and calibrate them. Creep is measured (see above).
 1. Re-time Act 1 with `effort: low` (paid, ask first). If it's still slow, cut router rounds and compare `muse-spark-1.1`.
 2. Arm bring-up: LeRobot calibration, scripted moves, test the power cut-off (a switched power strip). Then the gripper probe: `watch` to find the closed position, then `squeeze` with labeled pulls.
 3. Voice with the Razer mic (`--voice`). There's no foot pedal, so set `ears.pedal_key` to a key on the keyboard (for example `alt_r`).

@@ -189,6 +189,24 @@ def test_creep_in_newtons_with_a_calibration():
     assert "slip cue" in text and "lock the jaw position" in text and "re-zero" not in text.split("Lift:")[0]
 
 
+def test_creep_ignores_fumbled_placements():
+    # Two touches that fell off (like a coin stack that toppled) before the stack finally sat still at 20 s
+    t, mv, _ = creep_trace(t_on=20.0, t_off=130.0)
+    mv[((t > 5.0) & (t < 6.0)) | ((t > 10.0) & (t < 11.5))] = 900.0
+    r = fsr_cal.analyze_creep(t, mv)
+    assert r.t_on == pytest.approx(20.0, abs=0.01) and r.t_off == pytest.approx(130.0, abs=0.01)
+    assert [c for c, _, _ in r.checkpoints] == [3, 10, 30, 60]
+
+
+def test_longest_run_bridges_short_dips():
+    t = np.arange(0, 10, 0.1)
+    mask = (t > 1) & (t < 2) | (t > 4) & (t < 9)
+    mask[(t > 6) & (t < 6.25)] = False  # a 0.2 s dip inside the long stretch
+    i0, i1 = fsr_cal.longest_run(t, mask)
+    assert t[i0] == pytest.approx(4.1) and t[i1 - 1] == pytest.approx(8.9)
+    assert fsr_cal.longest_run(t, np.zeros(t.size, bool)) is None
+
+
 def test_creep_needs_a_load_step():
     t = np.arange(0, 10, 0.002)
     with pytest.raises(ValueError):
