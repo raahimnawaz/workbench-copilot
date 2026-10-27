@@ -154,6 +154,8 @@ class Bus:
                 break
             prev = b[0]
         head = self._read_exact(2)
+        if head[1] < 2:  # every reply carries at least an error byte and a checksum
+            raise STSError("reply garbled: impossible length")
         rest = self._read_exact(head[1])
         body = head + rest[:-1]
         if checksum(body) != rest[-1]:

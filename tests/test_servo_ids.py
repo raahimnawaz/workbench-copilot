@@ -69,6 +69,33 @@ def plug_next(line, extra=0):
         s["on"] = True
 
 
+class ScriptedReplies:
+    """A line that answers every request with the same bytes, such as a reply garbled by a bad contact."""
+
+    def __init__(self, reply):
+        self.reply, self.out = reply, bytearray()
+
+    def reset_input_buffer(self):
+        self.out.clear()
+
+    def write(self, data):
+        self.out += self.reply
+
+    def read(self, n):
+        chunk = bytes(self.out[:n])
+        del self.out[:n]
+        return chunk
+
+    def close(self):
+        pass
+
+
+@pytest.mark.parametrize("reply", [b"\xff\xff\x01\x00", b"\xff\xff\x01\x01\x00", b"\xff\xff\x01\x02"])
+def test_garbled_replies_are_a_failed_ping_not_a_crash(reply):
+    # Seen on the real arm with a poor contact: the length byte came through as 0 and the client crashed
+    assert not bus_on(ScriptedReplies(reply)).ping(1)
+
+
 def test_set_id_unlocks_writes_and_relocks():
     line = FakeLine(1)
     bus = bus_on(line)
