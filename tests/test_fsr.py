@@ -136,6 +136,8 @@ def test_fit_needs_two_readable_weights():
         fsr_cal.fit([(100, 500.0)], ZERO_MV)
     with pytest.raises(ValueError):
         fsr_cal.fit([(50, 10.0), (100, 15.0)], ZERO_MV)  # both below the unloaded reading
+    with pytest.raises(ValueError, match="same weight"):
+        fsr_cal.fit([(51, 1634.0), (51, 1727.0), (51, 1658.0)], 142.0)  # a repeat test, not a calibration
 
 
 def test_calibrations_save_and_load(tmp_path):
