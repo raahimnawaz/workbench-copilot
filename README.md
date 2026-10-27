@@ -18,7 +18,7 @@ Everything in this repository was written during the hackathon, starting Oct 26,
 | `scripts/set_servo_ids.py` | Gives each servo of an already-assembled arm its id, growing the chain from the base |
 | `scripts/first_moves.py` | The arm's first powered moves: torque on without a jump, then each joint a little, recording which way it turns |
 | `wbc/reflex/fsr_link.py`, `wbc/reflex/fsr_cal.py` | The force sensor link (500 Hz frames with a CRC), per-sensor calibration fit and creep analysis |
-| `config/`, `fixtures/`, `scripts/`, `tests/` | Model routing config, the recorded bench for `--sim`, the smoke test, gripper probe and force sensor tools, 109 tests |
+| `config/`, `fixtures/`, `scripts/`, `tests/` | Model routing config, the recorded bench for `--sim`, the smoke test, gripper probe and force sensor tools, 112 tests |
 | `firmware/dut_demo/` | The Act 1 demo board firmware, with the wiring bug planted on purpose |
 | `firmware/fsr_sampler/` | ESP32 firmware that samples the four jaw sensors at 500 Hz and streams them over USB |
 
@@ -92,10 +92,12 @@ After `lerobot-calibrate`, `scripts/first_moves.py` turns the motors on and move
 python scripts/first_moves.py --port /dev/cu.usbmodemXXXX
 ```
 
-- A servo drives to its goal register the moment torque comes on. After calibration and moving the arm by hand, that goal can be far from where the arm is, and LeRobot's `connect()` turns torque on without setting it. So the script runs LeRobot's `configure()` with its final torque-on held back, sets each goal to the present position, reads it back, and only then turns torque on. If any joint still shifts more than 3°, it stops before moving anything.
-- Each joint moves 10° toward the middle of its range over 2 s (`--degrees`, `--seconds`, `--joints`), holds while you say which way it went, then comes back. LeRobot's `max_relative_target` keeps every goal within 5° of where the joint is. A joint that doesn't follow stops the run.
-- Every step waits for Enter. Ctrl-C stops the moves and the arm holds where it is. The motors go off only after you say you're holding the arm, because it drops when they do.
-- Each run writes `.wbc/logs/first-moves-<time>.json`: what each joint was asked and did, which way plus turns it, and every reading.
+- A servo drives to its goal register the moment torque comes on. After calibration and moving the arm by hand, that goal can be far from where the arm is, and LeRobot's `connect()` turns torque on without setting it. So the script runs LeRobot's `configure()` with its final torque-on held back, caps torque at 50% (`--torque`), sets each goal to the present position and reads it back. Then it turns the joints on one at a time from the base out, watching the arm for 0.3 s after each.
+- If a joint moves more than 3° on its own as its torque comes on, or strays more than 5° from where it should be during a move, every motor is cut at once. The cut is one broadcast write that servos don't answer, so a servo flagging overload can't refuse it, the way it makes LeRobot's own torque-off fail.
+- Every joint that gets torque has to start inside its calibrated range, and the script asks you to move in any that aren't. Only the joints in `--joints` get torque, so hold the rest of the arm when you test a few.
+- Each joint moves 10° toward the middle of its range over 2 s (`--degrees`, `--seconds`), holds while you say which way it went, then comes back. LeRobot's `max_relative_target` keeps every goal within 5° of where the joint is.
+- Every step waits for Enter. Ctrl-C stops the moves and the arm holds where it is. After that, or a normal finish, the motors go off only once you say you're holding the arm, because it drops when they do.
+- Each run writes `.wbc/logs/first-moves-<time>.json`: every reading while each joint came on and moved, what each joint was asked and did, and which way plus turns it.
 
 ## Gripper probe: what can servo feedback feel?
 
