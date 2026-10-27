@@ -30,6 +30,8 @@ def main() -> int:
     models = config.load_yaml("models.yaml")
     client = config.meta_client(models)
     budget = Budget.from_config(models, config.ROOT)
+    budget.check()  # past the budget stop: make no paid calls at all
+    print(f"spent before this run: ${budget.spent:.4f} (stops at ${budget.limit:.0f})")
     router, coder = models["router"]["model"], models["coder"]["model"]
 
     def model_list():

@@ -9,6 +9,9 @@ router:
   model: muse-spark-1.3
   fallback: muse-spark-1.1          # the version in Meta's tool-calling examples
   max_steps: 12                     # tool rounds per turn before the loop gives up
+  # Routing is short decisions; the coder and the tools do the heavy work. At the API default, the
+  # Oct 26 Act 1 run took 81 s, 75 of them in three router calls. "low" is untimed so far.
+  effort: low
 
 coder:
   model: muse-wonder-1.0
@@ -25,10 +28,12 @@ eyes:
 
 ears:
   model: muse-voice-transcribe-1.0
-  url: https://api.meta.ai/v1/asr/transcribe  # from a third-party guide; verify in Meta's speech docs
+  url: https://api.meta.ai/v1/asr/transcribe  # checked against the live API on 2026-10-26
   sample_rate: 16000
   pedal_key: f13                    # the key your foot pedal sends (any pynput key name)
-  keywords: [GPIO, SPI, MOSI, SCK, OLED, pins.h, chip select, regrasp, breadboard]
+  # Acronyms only. In a test, these fixed "SBI" -> SPI and "Mosley" -> MOSI, while adding "pins.h"
+  # and "chip select" made those phrases come out worse ("pinsh h", "chip chip select").
+  keywords: [SPI, GPIO, MOSI, SCK, OLED, regrasp]
 
 backup:                             # open-weights router served on your own machine
   model: muse-glimmer-30b           # the name your local server registers
@@ -36,7 +41,11 @@ backup:                             # open-weights router served on your own mac
   reasoning: medium                 # Glimmer reads "Reasoning strength: <value>" from the system prompt
 
 budget:
-  limit_usd: 120                    # the agent stops here, before the $150 of credit runs out
+  # Hard stop. Every paid call checks it first, and the agent, coder, voice and smoke test stop once
+  # tracked spend reaches it. It sits a little under the $150 credit because the prices below are
+  # estimates, and calls made outside this repo (the playground, another machine) aren't tracked.
+  limit_usd: 140
+  warn_usd: 100                     # printed once, when tracked spend passes it
   state_file: .wbc/spend.json
   prices:                           # USD. Tokens per 1M, audio per hour, images per 1,000.
     muse-spark-1.3: {in: 1.25, cached_in: 0.15, out: 4.25}      # third-party

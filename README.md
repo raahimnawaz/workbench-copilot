@@ -34,7 +34,7 @@ Everything in this repository was written during the hackathon, starting Oct 26,
 | Router loop on Muse Spark (Responses API) | Built and tested against a fake API. Not yet run against the live API. |
 | Backup router on Muse Glimmer (Chat Completions) | Built and tested against a fake API. |
 | `ask_coder` on Muse Wonder | Diff extraction, `git apply --check` and sandbox compile are tested. The live model call isn't yet. |
-| Voice front end | WAV packing and upload are tested against a fake server. The endpoint and form fields are marked `VERIFY`. |
+| Voice front end | The request format was checked against the live API on Oct 26 and is tested against a fake server. Not yet tried with the pedal and a live mic. |
 | Budget guard | Built and tested. Spend persists in `.wbc/spend.json`. |
 | FK/IK | Tested on the real SO-101 URDF. 200 of 200 bench poses round-trip to within 0.2 mm and 0.5°, at about 33 ms per solve. |
 | STS3215 client and gripper probe | Packet format, decoding, the squeeze ramp and torque release are tested against a fake servo. Not yet run on the arm. |
@@ -86,7 +86,8 @@ Muse Spark is the only model that talks to you and the only one that decides. Ev
 - `ask_coder` sends a task, the bench facts and up to 4 files to Muse Wonder. The diff it returns must pass `git apply --check`, and, if `coder.compile_cmd` is set, a PlatformIO build in a sandbox copy. Only then does the router see it, as a `patch_id`.
 - `propose_patch(patch_id)` applies the diff to the working tree and opens VS Code at the first changed line. It never commits or flashes.
 - Tool calls in one round run in parallel, so the arm can point while Wonder writes.
-- Every model id and price lives in `config/models.yaml`. The budget guard stops the agent at `budget.limit_usd`, which defaults to $120 of the $150 credit.
+- Every model id and price lives in `config/models.yaml`.
+- **Budget stop:** every paid call checks tracked spend first. Nothing more goes out once it reaches `budget.limit_usd` ($140, just under the $150 credit), and the HUD warns once when it passes `budget.warn_usd` ($100). Tracked spend lives in `.wbc/spend.json` and uses the estimated prices in `models.yaml`. Calls made elsewhere, such as the playground or another machine, aren't counted, so keep the spend alert on the Meta Billing page as the backstop.
 
 ## Kinematics notes
 
@@ -98,6 +99,4 @@ Muse Spark is the only model that talks to you and the only one that decides. Ev
 ## Check on Day 1
 
 - Model ids and prices: run `scripts/smoke_test.py` and compare with Meta's pricing page. The Spark 1.3, Wonder and Voice Transcribe prices in `models.yaml` come from third-party write-ups.
-- The Voice Transcribe endpoint, form fields and response shape (marked `VERIFY` in `wbc/agent/ears.py`).
-- The `reasoning` parameter name for Muse Wonder (`wbc/agent/coder.py`).
 - The SAM 3.1 request format, which isn't in this scaffold yet. Also request access to the gated `facebook/sam3.1` weights.
