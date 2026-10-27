@@ -77,6 +77,8 @@ def fit(points, zero_mv: float, supply_mv: float = SUPPLY_MV, r_fixed: float = R
         raise ValueError("need at least two weights that read above the unloaded level")
     x = np.log([g for _, g in used])
     y = np.log([f for f, _ in used])
+    if np.ptp(y) < 1e-9:
+        raise ValueError("every reading used the same weight: a fit needs at least two different weights")
     if np.ptp(x) < 1e-9:
         raise ValueError("every weight gave the same reading: check the wiring")
     b, a = np.polyfit(x, y, 1)

@@ -28,11 +28,18 @@ echo "Zero response on SPI. Check my wiring against the firmware." | .venv/bin/p
 - **Open problem:** that Act 1 turn took 81 s, 75 of them in three Spark calls, against a 55 s slot. The router now asks for `effort: low` and logs each call's time. It hasn't been re-timed.
 - FK/IK (`wbc/motion/kinematics.py`) is tested on the real URDF: 200/200 bench poses within 0.2 mm and 0.5°.
 - `scripts/gripper_probe.py` (with `wbc/motion/sts.py`) has never run on the arm.
-- Force sensors (Oct 27): `firmware/fsr_sampler` is flashed on the ESP32 at `/dev/cu.usbserial-0001` and streams 500.0 Hz with no dropped or bad frames. `scripts/calibrate_fsr.py` (`watch`, `calibrate`, `creep`, with `wbc/reflex/fsr_link.py` and `fsr_cal.py`) is tested against a fake sensor. Sensor SD is wired (10 kΩ). Creep test on SD (51 g of quarters pressing through a small bolt as the puck): the reading rose 6.8% over 3 s, 17% over 10 s and 28% over 60 s, then fell straight back to the floor on removal. So the compliant hold locks the jaw position instead of regulating force on this reading. Coins without a puck barely register: these sensors need the force concentrated. No sensor is calibrated yet.
+- Force sensors (Oct 27): `firmware/fsr_sampler` is flashed on the ESP32 at `/dev/cu.usbserial-0001` and streams 500.0 Hz with no dropped or bad frames. `scripts/calibrate_fsr.py` (`watch`, `calibrate`, `creep`, with `wbc/reflex/fsr_link.py` and `fsr_cal.py`) is tested against a fake sensor and has run on real sensors.
+- **Force sensor bench work is paused (Oct 27), with an open problem we may need to go back to:**
+  - Wired: SD (GPIO 32) and SP (GPIO 33), each with 10 kΩ. MD and MP aren't wired.
+  - Coins pressing on a bare sensor barely register; pressing through a small bolt as the puck works. The jaw pads need a puck.
+  - Creep, measured on SD with 51 g: +6.8% over 3 s, +17% over 10 s, +28% over 60 s, then straight back to the floor on removal. Decision: the compliant hold locks the jaw position instead of regulating force. This result is solid.
+  - Calibration is rough only. With 9 quarters (up to 51 g) the fits miss by up to 27% (SD) and 20% (SP), and SP doesn't register 11.3 g. Those fits are in the local `config/fsr_cal.yaml`, which isn't committed.
+  - **Open problem:** on both sensors, 34 g and 51 g read about the same (about 1650 mV, sensor near 10 kΩ). Placement repeats within about 6% (51 g three times: 1634, 1727, 1658 mV), and a hard finger press reaches about 1 kΩ, so this flat spot is real. Either part of the load goes around the sensor as weight grows, or the sensor stops responding through a small puck above about 35 g. If it's the second, the gripper can't feel its 60–150 g grip, so **resolve this before building the jaw pads**. It needs heavier known weights: a cheap kitchen scale (press test at 50, 100, 200, 300 g while watching mV), or measured water.
+  - Keep the 10 kΩ resistors. 47 kΩ or 100 kΩ would push grip-range readings to the top of the ADC. Revisit (possibly 4.7 kΩ) only after the heavier test.
 - Not started: SAM 3.1 client and breadboard netlist reader, web HUD, slip detector, motion skills, compliant hold.
 
 ## Next, in order
-0. Now: calibrate SD with the bolt puck, then wire SP, MD and MP and calibrate them. Creep is measured (see above).
+0. Force sensors are paused (see above). Before the jaw pads (Oct 29): get a kitchen scale, run the heavier press test to settle the flat spot above about 35 g, wire MD and MP, then calibrate all four in the pads.
 1. Re-time Act 1 with `effort: low` (paid, ask first). If it's still slow, cut router rounds and compare `muse-spark-1.1`.
 2. Arm bring-up: LeRobot calibration, scripted moves, test the power cut-off (a switched power strip). Then the gripper probe: `watch` to find the closed position, then `squeeze` with labeled pulls.
 3. Voice with the Razer mic (`--voice`). There's no foot pedal, so set `ears.pedal_key` to a key on the keyboard (for example `alt_r`).

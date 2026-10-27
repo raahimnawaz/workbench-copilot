@@ -136,6 +136,8 @@ def test_fit_needs_two_readable_weights():
         fsr_cal.fit([(100, 500.0)], ZERO_MV)
     with pytest.raises(ValueError):
         fsr_cal.fit([(50, 10.0), (100, 15.0)], ZERO_MV)  # both below the unloaded reading
+    with pytest.raises(ValueError, match="same weight"):
+        fsr_cal.fit([(51, 1634.0), (51, 1727.0), (51, 1658.0)], 142.0)  # a repeat test, not a calibration
 
 
 def test_calibrations_save_and_load(tmp_path):
@@ -263,6 +265,28 @@ def test_calibrate_script_fits_and_saves(tmp_path, capsys):
     assert "SD" in fsr_cal.load(tmp_path / "fsr_cal.yaml")
     out = capsys.readouterr().out
     assert "Type a number" in out and "saved SD" in out
+
+
+def test_calibrate_script_flags_floor_readings_and_guesses(tmp_path, capsys):
+    clock = FakeClock()
+    load = {"grams": 0.0}
+    # The 5 g weight is too light to lift the reading off the unloaded floor
+    sampler = FakeSampler(clock, lambda t: (ZERO_MV if load["grams"] < 10 else
+                                            mv_for(fsr_cal.grams_to_newtons(load["grams"])), 0, 0, 0))
+    answers = iter(["", "5", "20", "50", ""])
+
+    def ask(prompt):
+        a = next(answers)
+        if a:
+            load["grams"] = float(a)
+        return a
+
+    cal, _ = calibrate_fsr.calibrate(sampler, "SD", tmp_path / "fsr_cal.yaml", ask=ask, clock=clock,
+                                     sleep=clock.sleep)
+    out = capsys.readouterr().out
+    assert cal is not None and "not used: it read no higher than unloaded" in out and "-100.0%" not in out
+    assert "guesses from the fit: your heaviest weight was 0.49 N" in out
+    assert "kΩ to" in out and "1–1 kΩ" not in out
 
 
 def test_creep_script_reports_and_logs(tmp_path, capsys):
