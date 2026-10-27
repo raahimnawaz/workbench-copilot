@@ -25,17 +25,31 @@ def _field(obj, *names, default=0):
 
 
 class Budget:
-    def __init__(self, limit_usd: float, prices: dict, state_file: Path | None = None):
+    def __init__(self, limit_usd: float, prices: dict, state_file: Path | None = None,
+                 warn_usd: float | None = None):
         self.limit = float(limit_usd)
+        self.warn = None if warn_usd is None else float(warn_usd)
         self.prices = prices
         self.path = Path(state_file) if state_file else None
         self._lock = threading.Lock()
         self.spent = self._load()
+        # Already past the warning line from earlier runs: say so once, at the first chance.
+        self._warning_due = self.warn is not None and self.spent >= self.warn
+        self._warned = self._warning_due
 
     @classmethod
     def from_config(cls, models: dict, root: Path) -> "Budget":
         b = models["budget"]
-        return cls(b["limit_usd"], b["prices"], root / b["state_file"])
+        return cls(b["limit_usd"], b["prices"], root / b["state_file"], b.get("warn_usd"))
+
+    def pop_warning(self) -> str | None:
+        """The spend warning, once, after tracked spend first passes warn_usd."""
+        with self._lock:
+            if not self._warning_due:
+                return None
+            self._warning_due = False
+        return (f"Spend has passed ${self.warn:.0f}: ${self.spent:.2f} of the ${self.limit:.0f} stop "
+                f"(${self.remaining:.2f} left).")
 
     @property
     def remaining(self) -> float:
@@ -44,7 +58,8 @@ class Budget:
     def check(self) -> None:
         if self.spent >= self.limit:
             raise BudgetExceeded(
-                f"Spent ${self.spent:.2f} of the ${self.limit:.2f} limit. Raise budget.limit_usd in "
+                f"Budget stop: tracked spend is ${self.spent:.2f}, at the ${self.limit:.2f} limit, so no "
+                f"more paid calls. Check the Billing page first; raise budget.limit_usd in "
                 f"config/models.yaml only if your credits allow it.")
 
     def add_tokens(self, model: str, usage) -> float:
@@ -71,6 +86,8 @@ class Budget:
     def _add(self, cost: float) -> float:
         with self._lock:
             self.spent += cost
+            if self.warn is not None and not self._warned and self.spent >= self.warn:
+                self._warned = self._warning_due = True
             self._save()
         return cost
 

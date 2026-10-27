@@ -34,7 +34,7 @@ def build(sim: bool, backup: bool):
     else:
         r = models["router"]
         router = Router(meta, r["model"], toolbox, budget, hud, SYSTEM, max_steps=max_steps,
-                        fallback=r.get("fallback"))
+                        fallback=r.get("fallback"), effort=r.get("effort"))
     return models, budget, hud, router
 
 
@@ -50,8 +50,16 @@ def main(argv=None) -> int:
     except RuntimeError as e:  # missing key or voice extras
         print(e, file=sys.stderr)
         return 2
-    hud.note(f"router: {router.label} ({router.model}) · budget left ${budget.remaining:.2f}"
-             + (" · SIM bench" if args.sim else ""))
+    hud.note(f"router: {router.label} ({router.model}) · spent ${budget.spent:.2f}, "
+             f"stops at ${budget.limit:.0f}" + (" · SIM bench" if args.sim else ""))
+    try:
+        budget.check()
+    except BudgetExceeded as e:
+        hud.note(str(e))
+        return 1
+    warning = budget.pop_warning()
+    if warning:
+        hud.note(warning)
     inbox = queue.Queue()
 
     def typed() -> None:

@@ -53,6 +53,30 @@ def test_unknown_model_names_the_config_file():
         Budget(10, PRICES).add_tokens("mystery", {})
 
 
+def test_warning_fires_once_when_spend_crosses_the_line():
+    b = Budget(10, PRICES, warn_usd=2.0)
+    b.add_images("sam", 400)            # $1.00
+    assert b.pop_warning() is None
+    b.add_images("sam", 600)            # $2.50
+    assert "passed $2" in b.pop_warning()
+    b.add_images("sam", 400)
+    assert b.pop_warning() is None
+
+
+def test_warning_repeats_once_after_a_restart_past_the_line(tmp_path):
+    state = tmp_path / "spend.json"
+    Budget(10, PRICES, state).add_images("sam", 1200)   # $3.00, saved
+    again = Budget(10, PRICES, state, warn_usd=2.0)
+    assert again.pop_warning() is not None
+    assert again.pop_warning() is None
+
+
+def test_from_config_reads_the_stop_and_the_warning(tmp_path):
+    models = {"budget": {"limit_usd": 140, "warn_usd": 100, "prices": PRICES, "state_file": "s.json"}}
+    b = Budget.from_config(models, tmp_path)
+    assert (b.limit, b.warn) == (140, 100)
+
+
 def test_missing_usage_costs_nothing():
     b = Budget(10, PRICES)
     assert b.add_tokens("spark", None) == 0

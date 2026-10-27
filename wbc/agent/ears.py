@@ -3,12 +3,13 @@
 v1 records while the pedal is down and uploads one WAV to Muse Voice Transcribe when you let go.
 Streaming partial transcripts over the realtime socket is the v2 upgrade (sheet 08).
 
-The upload's endpoint, form fields and response shape come from a third-party guide. They're
-marked VERIFY: check them against Meta's speech docs and run scripts/smoke_test.py.
+The request format was checked against the live API on 2026-10-26: a multipart upload with a JSON
+`request` part (model, audioEncoding, keywords) and an `audio` part, answered with {"transcript": ...}.
 """
 from __future__ import annotations
 
 import io
+import json
 import threading
 import wave
 
@@ -24,8 +25,8 @@ def pcm_to_wav(pcm: bytes, rate: int) -> bytes:
 
 
 def parse_transcript(payload: dict) -> str:
-    """Accept the likely response shapes until the real one is confirmed."""  # VERIFY
-    for key in ("text", "transcript"):
+    """The API answers with "transcript"; the other shapes are kept in case a later version changes it."""
+    for key in ("transcript", "text"):
         if isinstance(payload.get(key), str):
             return payload[key].strip()
     for key in ("turns", "segments", "results"):
@@ -46,11 +47,14 @@ class Transcriber:
 
     def transcribe(self, wav: bytes, seconds: float) -> str:
         self.budget.check()
+        request = {"model": self.cfg["model"], "audioEncoding": "WAV"}
+        if self.cfg.get("keywords"):
+            request["keywords"] = list(self.cfg["keywords"])
         r = self.http.post(
             self.cfg["url"],
             headers={"Authorization": f"Bearer {self.api_key}"},
-            files={"file": ("turn.wav", wav, "audio/wav")},                                    # VERIFY
-            data={"model": self.cfg["model"], "keywords": ",".join(self.cfg.get("keywords", []))},  # VERIFY
+            files={"request": (None, json.dumps(request), "application/json"),
+                   "audio": ("turn.wav", wav, "audio/wav")},
         )
         r.raise_for_status()
         self.budget.add_audio(self.cfg["model"], seconds)

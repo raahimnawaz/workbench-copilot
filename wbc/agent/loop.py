@@ -39,6 +39,11 @@ class _RouterBase:
         self.max_steps = max_steps
         self.pool = ThreadPoolExecutor(max_workers=4)
 
+    def _note_spend(self) -> None:
+        warning = self.budget.pop_warning()
+        if warning:
+            self.hud.note(warning)
+
     def _run_calls(self, calls: list) -> list:
         """Run one round of tool calls in parallel, so the arm can move while a coder call waits."""
         for c in calls:
@@ -63,9 +68,10 @@ class Router(_RouterBase):
 
     label = "Spark"
 
-    def __init__(self, *args, fallback: str | None = None, **kwargs):
+    def __init__(self, *args, fallback: str | None = None, effort: str | None = None, **kwargs):
         super().__init__(*args, **kwargs)
         self.fallback = fallback
+        self.effort = effort  # reasoning effort; None leaves the API default
         self.prev_id = None
 
     def run_turn(self, user_text: str) -> str:
@@ -98,6 +104,9 @@ class Router(_RouterBase):
         self.budget.check()
         kwargs = dict(instructions=self.system, tools=self.toolbox.schemas(), input=items,
                       previous_response_id=prev_id)
+        if self.effort:
+            kwargs["reasoning"] = {"effort": self.effort}
+        t0 = time.monotonic()
         try:
             r = self.client.responses.create(model=self.model, **kwargs)
         except Exception as e:
@@ -106,7 +115,9 @@ class Router(_RouterBase):
             self.hud.note(f"{self.model} not found; falling back to {self.fallback}")
             self.model, self.fallback = self.fallback, None
             r = self.client.responses.create(model=self.model, **kwargs)
+        self.hud.note(f"{self.label} answered in {time.monotonic() - t0:.1f} s")
         self.budget.add_tokens(self.model, getattr(r, "usage", None))
+        self._note_spend()
         return r
 
 
@@ -127,6 +138,7 @@ class ChatRouter(_RouterBase):
             r = self.client.chat.completions.create(model=self.model, messages=self.messages,
                                                     tools=self.toolbox.chat_schemas())
             self.budget.add_tokens(self.model, getattr(r, "usage", None))
+            self._note_spend()
             msg = r.choices[0].message
             calls = [Call(c.id, c.function.name, c.function.arguments) for c in (msg.tool_calls or [])]
             turn = {"role": "assistant", "content": msg.content or ""}

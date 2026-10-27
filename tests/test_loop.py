@@ -64,11 +64,38 @@ def test_parallel_tool_round_then_reply():
     assert router.budget.spent > 0
 
 
+def test_reasoning_effort_is_sent_only_when_set():
+    router, api, hud = make_router([response("r1", text="a"), response("r2", text="b")], Toolbox())
+    router.run_turn("one")
+    assert "reasoning" not in api.requests[0]
+    router.effort = "low"
+    router.run_turn("two")
+    assert api.requests[1]["reasoning"] == {"effort": "low"}
+    assert sum(1 for e in hud.events if e[0] == "note" and "answered in" in e[1]) == 2
+
+
 def test_next_turn_chains_on_the_last_response():
     router, api, _ = make_router([response("r1", text="hi"), response("r2", text="again")], Toolbox())
     router.run_turn("one")
     router.run_turn("two")
     assert api.requests[1]["previous_response_id"] == "r1"
+
+
+def test_router_stops_before_a_call_once_the_budget_is_spent():
+    from wbc.agent.budget import BudgetExceeded
+
+    router, api, _ = make_router([response("r1", text="hi")], Toolbox())
+    router.budget.spent = router.budget.limit
+    with pytest.raises(BudgetExceeded):
+        router.run_turn("hello")
+    assert api.requests == [], "no paid call may go out past the stop"
+
+
+def test_router_shows_the_spend_warning_on_the_hud():
+    router, _, hud = make_router([response("r1", text="hi")], Toolbox())
+    router.budget.warn = 0.0001
+    router.run_turn("hello")
+    assert any(e[0] == "note" and "Spend has passed" in e[1] for e in hud.events)
 
 
 def test_bad_json_arguments_come_back_as_a_tool_error():

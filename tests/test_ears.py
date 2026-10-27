@@ -1,4 +1,5 @@
 import io
+import json
 import wave
 from types import SimpleNamespace as NS
 
@@ -41,11 +42,14 @@ class FakeHttp:
 
 
 def test_transcriber_posts_wav_and_bills_audio():
-    http = FakeHttp({"text": "zero response on SPI"})
+    http = FakeHttp({"transcript": "zero response on SPI", "audioDurationMs": 3600000, "turns": []})
     b = Budget(10, {"ears": {"per_hour": 0.18}})
     t = Transcriber(CFG, "key", b, http=http)
     assert t.transcribe(b"RIFF...", seconds=3600) == "zero response on SPI"
     url, kwargs = http.sent
     assert kwargs["headers"]["Authorization"] == "Bearer key"
-    assert kwargs["data"] == {"model": "ears", "keywords": "GPIO,SPI"}
+    name, body, mime = kwargs["files"]["request"]
+    assert (name, mime) == (None, "application/json")
+    assert json.loads(body) == {"model": "ears", "audioEncoding": "WAV", "keywords": ["GPIO", "SPI"]}
+    assert kwargs["files"]["audio"] == ("turn.wav", b"RIFF...", "audio/wav")
     assert b.spent == pytest.approx(0.18)
