@@ -165,13 +165,20 @@ def calibrate(sampler, channel: str, cal_path: Path = CAL_PATH, supply_mv: float
 
     print(f"\n{'grams':>7} {'N':>7} {'mV':>6} {'sensor':>10} {'fit N':>7} {'error':>7}")
     for grams, n, mv, ohms, fitted, err in fsr_cal.fit_rows(cal):
-        print(f"{grams:7g} {n:7.3f} {mv:6.0f} {kohms(ohms):>10} {fitted:7.3f} {err:+6.1f}%")
+        if mv <= cal.zero_mv:
+            print(f"{grams:7g} {n:7.3f} {mv:6.0f} {kohms(ohms):>10}   not used: it read no higher than unloaded")
+        else:
+            print(f"{grams:7g} {n:7.3f} {mv:6.0f} {kohms(ohms):>10} {fitted:7.3f} {err:+6.1f}%")
     print(f"fit: F = {cal.k:.4g} × G^{cal.b:.3f}, with G in µS above unloaded (R² {cal.r2:.4f} in log-log)")
     if cal.b > 0:
         mid = cal.ohms_at(1.2)
-        print(f"Between 0.5 and 3 N the sensor measures {kohms(cal.ohms_at(3.0))} to {kohms(cal.ohms_at(0.5))}. "
-              f"The maker suggests a fixed resistor of a third to half the sensor's resistance in the working "
-              f"range: about {mid / 3000:.0f}–{mid / 2000:.0f} kΩ (at 1.2 N). You're using {r_fixed / 1000:g} kΩ.")
+        heaviest = max(fsr_cal.grams_to_newtons(g) for g, _ in points)
+        guess = (f" Those are guesses from the fit: your heaviest weight was {heaviest:.2f} N."
+                 if heaviest < 3.0 else "")
+        print(f"Between 0.5 and 3 N the sensor would measure {kohms(cal.ohms_at(3.0))} to "
+              f"{kohms(cal.ohms_at(0.5))}.{guess} The maker suggests a fixed resistor of a third to half the "
+              f"sensor's resistance in the working range: about {kohms(mid / 3)} to {kohms(mid / 2)} (at 1.2 N). "
+              f"You're using {kohms(r_fixed)}.")
 
     cals = fsr_cal.load(cal_path)
     cals[channel] = cal

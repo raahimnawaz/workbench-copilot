@@ -265,6 +265,28 @@ def test_calibrate_script_fits_and_saves(tmp_path, capsys):
     assert "Type a number" in out and "saved SD" in out
 
 
+def test_calibrate_script_flags_floor_readings_and_guesses(tmp_path, capsys):
+    clock = FakeClock()
+    load = {"grams": 0.0}
+    # The 5 g weight is too light to lift the reading off the unloaded floor
+    sampler = FakeSampler(clock, lambda t: (ZERO_MV if load["grams"] < 10 else
+                                            mv_for(fsr_cal.grams_to_newtons(load["grams"])), 0, 0, 0))
+    answers = iter(["", "5", "20", "50", ""])
+
+    def ask(prompt):
+        a = next(answers)
+        if a:
+            load["grams"] = float(a)
+        return a
+
+    cal, _ = calibrate_fsr.calibrate(sampler, "SD", tmp_path / "fsr_cal.yaml", ask=ask, clock=clock,
+                                     sleep=clock.sleep)
+    out = capsys.readouterr().out
+    assert cal is not None and "not used: it read no higher than unloaded" in out and "-100.0%" not in out
+    assert "guesses from the fit: your heaviest weight was 0.49 N" in out
+    assert "kΩ to" in out and "1–1 kΩ" not in out
+
+
 def test_creep_script_reports_and_logs(tmp_path, capsys):
     clock = FakeClock()
     g1 = (1.0 / K) ** (1 / B)
