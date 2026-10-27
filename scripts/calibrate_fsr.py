@@ -124,8 +124,9 @@ def calibrate(sampler, channel: str, cal_path: Path = CAL_PATH, supply_mv: float
         print("That's high for an unloaded sensor. Check that nothing presses on it and that the "
               f"{r_fixed / 1000:g} kΩ resistor goes from the pin to GND.")
 
-    print("Put a weight on the puck, let go, then type the total grams on the sensor and press Enter.\n"
-          "Count the puck and anything under the weight. Go from light to heavy. A blank line finishes.")
+    print("For each weight: type the total grams on the sensor, put the weight on the puck and let go, then\n"
+          "press Enter right away, so every reading is taken at the same moment after loading. Count the puck\n"
+          "and anything under the weight. Go from light to heavy. A blank line finishes.")
     points = []
     while True:
         line = ask("grams> ").strip()
