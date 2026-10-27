@@ -15,8 +15,10 @@ Everything in this repository was written during the hackathon, starting Oct 26,
 | `wbc/agent/` | Router loop, tool registry, `ask_coder`, voice front end, budget guard, console HUD |
 | `wbc/motion/kinematics.py` | URDF chain loader, forward kinematics, damped least-squares IK, the (x, y, z, pitch, roll) grasp frame |
 | `wbc/motion/sts.py`, `wbc/motion/probe.py` | A small STS3215 servo client and the gripper feedback probe |
-| `config/`, `fixtures/`, `scripts/`, `tests/` | Model routing config, the recorded bench for `--sim`, the smoke test and gripper probe, 62 tests |
+| `wbc/reflex/fsr_link.py`, `wbc/reflex/fsr_cal.py` | The force sensor link (500 Hz frames with a CRC), per-sensor calibration fit and creep analysis |
+| `config/`, `fixtures/`, `scripts/`, `tests/` | Model routing config, the recorded bench for `--sim`, the smoke test, gripper probe and force sensor tools, 84 tests |
 | `firmware/dut_demo/` | The Act 1 demo board firmware, with the wiring bug planted on purpose |
+| `firmware/fsr_sampler/` | ESP32 firmware that samples the four jaw sensors at 500 Hz and streams them over USB |
 
 | Reused | License | Used for |
 |---|---|---|
@@ -26,6 +28,7 @@ Everything in this repository was written during the hackathon, starting Oct 26,
 | Muse Glimmer 30B weights | Apache-2.0 | The local backup router |
 | openai, numpy, PyYAML, httpx, sounddevice, pynput, pyserial, pytest | Apache-2.0, BSD-3, MIT, BSD-3, MIT, LGPL-3.0, BSD-3, MIT | Python dependencies |
 | Adafruit SSD1306 and Adafruit GFX | BSD | Demo board display driver |
+| [PlatformIO](https://platformio.org) and the [Arduino core for ESP32](https://github.com/espressif/arduino-esp32) | Apache-2.0, LGPL-2.1 | Building and flashing both firmware projects |
 
 ## Status, Oct 26 (Day 1)
 
@@ -38,7 +41,8 @@ Everything in this repository was written during the hackathon, starting Oct 26,
 | Budget guard | Built and tested. Spend persists in `.wbc/spend.json`. |
 | FK/IK | Tested on the real SO-101 URDF. 200 of 200 bench poses round-trip to within 0.2 mm and 0.5°, at about 33 ms per solve. |
 | STS3215 client and gripper probe | Packet format, decoding, the squeeze ramp and torque release are tested against a fake servo. Not yet run on the arm. |
-| Perception, motion layer, reflex loop, web HUD | Not started (blueprint sheet 10). Their tools return a clear "not wired yet" error, or use the recorded bench with `--sim`. |
+| Force sensor sampler and tools (Oct 27) | The firmware runs on the ESP32: 500.0 Hz, no dropped frames and no CRC errors over a 5 s check. Calibration and the creep test are tested against a fake sensor but haven't run with a real one yet. |
+| Perception, motion layer, slip detector, web HUD | Not started (blueprint sheet 10). Their tools return a clear "not wired yet" error, or use the recorded bench with `--sim`. |
 
 ## Setup (Apple Silicon)
 
@@ -78,6 +82,31 @@ python scripts/gripper_probe.py --port /dev/tty.usbmodemXXXX squeeze --closed 21
 - Each run writes `.wbc/logs/gripper-<time>.csv` and prints, for every label, how far load, current and position moved and how that compares with the noise while holding still.
 
 The current register's units aren't confirmed for your servos, so compare the raw numbers with each other rather than converting them to mA.
+
+## Force sensors: calibration and creep
+
+Each jaw gets two thin-film force sensors, read by an ESP32 running `firmware/fsr_sampler` at 500 Hz. Each sensor is half of a voltage divider: one leg to 3V3, the other to its pin, and a 10 kΩ resistor from that pin to GND.
+
+| Sensor | Pin |
+|---|---|
+| SD, static jaw, distal (tip) | GPIO 32 |
+| SP, static jaw, proximal | GPIO 33 |
+| MD, moving jaw, distal | GPIO 34 |
+| MP, moving jaw, proximal | GPIO 35 |
+
+```bash
+uv pip install -e '.[arm,firmware]'
+pio run -d firmware/fsr_sampler -t upload --upload-port /dev/cu.usbserial-XXXX
+python scripts/calibrate_fsr.py --list          # the ESP32 is the CP210x or CH340 line, not the arm's adapter
+python scripts/calibrate_fsr.py --port /dev/cu.usbserial-XXXX watch
+python scripts/calibrate_fsr.py --port /dev/cu.usbserial-XXXX calibrate --channel SD
+python scripts/calibrate_fsr.py --port /dev/cu.usbserial-XXXX creep --channel SD --grams 100
+```
+
+- `watch` shows all four channels live, with the frame rate and any dropped or damaged frames. An unloaded sensor reads about 140 mV, which is the lowest voltage the ESP32's ADC reports.
+- `calibrate` zeroes one sensor, then takes a reading for each known weight you put on it, and fits `F = k · G^b`, where G is the sensor's conductance above unloaded. The fit for each channel goes to `config/fsr_cal.yaml`. Press through a small puck about the size of the 8 mm sensing area, because load that spreads past it reads low.
+- `creep` records 3 s unloaded, then the weight for 120 s, then 30 s unloaded again. It reports how far the reading drifts after 3, 10, 30, 60 and 120 s, the drift rate compared with the slip detector's 3 N/s cue, and what's left after you lift the weight off.
+- Both write `.wbc/logs/fsr-<mode>-<time>.csv`.
 
 ## How the router works
 

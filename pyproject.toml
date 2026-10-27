@@ -19,6 +19,7 @@ dependencies = [
 [project.optional-dependencies]
 voice = ["sounddevice>=0.4", "pynput>=1.7"]
 arm = ["pyserial>=3.5"]
+firmware = ["platformio>=6.1"]   # builds and flashes the ESP32 firmware; also turns on ask_coder's compile check
 dev = ["pytest>=8"]
 
 [project.scripts]
