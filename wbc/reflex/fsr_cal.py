@@ -153,7 +153,10 @@ class CreepReport:
                 line += f", {SLIP_N_PER_S / abs(self.rate):,.0f}x slower than the {SLIP_N_PER_S:g} N/s slip cue"
             out.append(line)
         if self.residual:
-            out.append("after removal: " + ", ".join(f"{c:g} s later {p:+.1f}% of the load" for c, _, p in self.residual))
+            line = "after removal: " + ", ".join(f"{c:g} s later {p:+.1f}% of the load" for c, _, p in self.residual)
+            if self.base_mv <= ADC_GOOD_MV[0]:
+                line += " (the ESP32 reads nothing below about 142 mV, so a small leftover wouldn't show)"
+            out.append(line)
 
         lift = self.pct_at(3)
         if lift is not None:
@@ -176,14 +179,30 @@ class CreepReport:
         return out
 
 
+def longest_run(t, mask, bridge_s: float = 0.5):
+    """(first, one past last) indices of the longest stretch where mask holds, bridging gaps under bridge_s."""
+    edges = np.diff(np.concatenate([[0], np.asarray(mask, dtype=np.int8), [0]]))
+    starts, ends = np.flatnonzero(edges == 1), np.flatnonzero(edges == -1)
+    if starts.size == 0:
+        return None
+    runs = [[starts[0], ends[0]]]
+    for s, e in zip(starts[1:], ends[1:]):
+        if t[s] - t[runs[-1][1] - 1] < bridge_s:
+            runs[-1][1] = e
+        else:
+            runs.append([s, e])
+    return tuple(max(runs, key=lambda r: t[r[1] - 1] - t[r[0]]))
+
+
 def analyze_creep(t, mv, cal: Calibration | None = None, grams: float | None = None,
                   checkpoints=(3, 10, 30, 60, 120), baseline_s: float = 2.0, ref_s: float = 1.0,
                   supply_mv: float = SUPPLY_MV, r_fixed: float = R_FIXED_OHM) -> CreepReport:
     """Find the load step in an unloaded-loaded-unloaded recording and measure the drift from 1 s after it.
 
-    t is in seconds, mv is one channel. The first baseline_s must be unloaded. Without a calibration the
-    drift is measured in conductance (supply_mv and r_fixed describe the divider), which is close to
-    proportional to force.
+    t is in seconds, mv is one channel. The first baseline_s must be unloaded. The load is the longest
+    stretch above the unloaded level, so a fumbled placement or two before it are ignored. Without a
+    calibration the drift is measured in conductance (supply_mv and r_fixed describe the divider), which
+    is close to proportional to force.
     """
     t = np.asarray(t, dtype=float)
     mv = np.asarray(mv, dtype=float)
@@ -192,10 +211,11 @@ def analyze_creep(t, mv, cal: Calibration | None = None, grams: float | None = N
         raise ValueError(f"need at least {baseline_s:g} s of unloaded readings at the start")
     base_mv = float(np.median(mv[base]))
     noise = float(np.std(mv[base]))
-    rising = np.flatnonzero(~base & (mv > base_mv + max(10 * noise, 30.0)))
-    if rising.size == 0:
+    hold = longest_run(t, ~base & (mv > base_mv + max(10 * noise, 30.0)))
+    if hold is None:
         raise ValueError("no load step found: the reading never rose above the unloaded level")
-    t_on = float(t[rising[0]])
+    i_on, i_end = hold
+    t_on = float(t[i_on])
 
     if cal is not None:
         sig, unit = cal.newtons(mv, zero_mv=base_mv), "N"  # re-zeroed on this run, as a grasp would be
@@ -211,8 +231,13 @@ def analyze_creep(t, mv, cal: Calibration | None = None, grams: float | None = N
         raise ValueError("the load was too light to read")
     mv_ref = float(np.median(mv[np.abs(t - (t_on + ref_s)) <= 0.1]))
 
-    falling = np.flatnonzero((t > t_on + ref_s) & (mv < base_mv + 0.5 * (mv_ref - base_mv)))
-    t_off = float(t[falling[0]]) if falling.size else None
+    t_off = None
+    if i_end < t.size:  # the load came off: removal is where the final drop crossed halfway down
+        mid = base_mv + 0.5 * (mv_ref - base_mv)
+        j = i_end
+        while j > i_on and mv[j - 1] < mid:
+            j -= 1
+        t_off = float(t[j])
     loaded_end = t_off if t_off is not None else float(t[-1])
 
     marks = []
