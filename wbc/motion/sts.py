@@ -10,6 +10,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+# EEPROM registers (kept through power cycles; writable only while LOCK is 0)
+ID = 5                # 1 byte. New servos all leave the factory as id 1.
+LOCK = 55             # 1 byte, in RAM: 0 unlocks the EEPROM, 1 locks it again
+
 # RAM registers
 TORQUE_ENABLE = 40    # 1 byte
 GOAL_POSITION = 42    # 2 bytes
@@ -110,6 +114,23 @@ class Bus:
     def read_feedback(self, servo_id: int) -> Feedback:
         err, data = self.read(servo_id, FEEDBACK_START, FEEDBACK_LEN)
         return parse_feedback(data, err)
+
+    def set_id(self, old_id: int, new_id: int) -> None:
+        """Move one servo to a new id, stored in its EEPROM. Exactly one servo may answer to old_id."""
+        if not 0 <= new_id <= 253:
+            raise ValueError("servo ids run from 0 to 253")
+        if new_id == old_id:
+            return
+        if self.ping(new_id):
+            raise STSError(f"a servo already answers to id {new_id}")
+        self.write_u8(old_id, LOCK, 0)
+        try:
+            self.write_u8(old_id, ID, new_id)
+        except STSError:
+            pass  # the servo may already answer under its new id; the ping below is the real check
+        if not self.ping(new_id):
+            raise STSError(f"servo {old_id} didn't come back as id {new_id}")
+        self.write_u8(new_id, LOCK, 1)
 
     def _transact(self, servo_id: int, instruction: int, params: bytes = b"") -> tuple:
         sent = packet(servo_id, instruction, params)
