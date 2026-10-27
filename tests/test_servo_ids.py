@@ -12,13 +12,15 @@ _spec.loader.exec_module(set_servo_ids)
 
 
 class FakeLine:
-    """A servo bus with several servos, each plugged in or not. Servos sharing an id all answer at once,
-    so their replies collide and nothing parses, like on the real arm."""
+    """A servo bus with several servos, each plugged in or not. Servos sharing an id all answer at once, as
+    on the real arm: identical replies (a ping) overlap and still read cleanly, but replies that differ (each
+    servo's own position) collide and fail their checksum. Writes reach every servo with that id."""
 
     def __init__(self, n=6):
         self.servos = [{"id": 1, "regs": bytearray(128), "on": False} for _ in range(n)]
-        for s in self.servos:
+        for i, s in enumerate(self.servos):
             s["regs"][sts.LOCK] = 1  # the EEPROM is locked at power-up
+            s["regs"][sts.FEEDBACK_START:sts.FEEDBACK_START + 2] = (2000 + 37 * i).to_bytes(2, "little")
         self.servos[0]["on"] = True  # only the base is connected to start with
         self.out = bytearray()
 
@@ -30,13 +32,17 @@ class FakeLine:
 
     def write(self, data):
         sid, instr, params = data[2], data[4], data[5:-1]
-        hits = [s for s in self.servos if s["on"] and s["id"] == sid]
-        if len(hits) > 1:
-            self.out += b"\xff\xff\x01\x02\x00\x00"  # two replies on top of each other: the checksum fails
+        replies = [self._answer(s, instr, params) for s in self.servos if s["on"] and s["id"] == sid]
+        if not replies:
             return
-        if not hits:
-            return
-        s, reply = hits[0], b""
+        if all(r == replies[0] for r in replies):
+            self.out += replies[0]
+        else:
+            self.out += b"\xff\xff\x01\x02\x00\x00"  # different replies on top of each other: the checksum fails
+
+    @staticmethod
+    def _answer(s, instr, params):
+        reply = b""
         if instr == sts.READ:
             addr, n = params
             reply = bytes(s["regs"][addr:addr + n])
@@ -47,7 +53,7 @@ class FakeLine:
                 s["id"] = payload[0]  # and it replies under the new id
             s["regs"][addr:addr + len(payload)] = payload
         body = bytes([s["id"], len(reply) + 2, 0]) + reply
-        self.out += b"\xff\xff" + body + bytes([sts.checksum(body)])
+        return b"\xff\xff" + body + bytes([sts.checksum(body)])
 
     def read(self, n):
         chunk = bytes(self.out[:n])
@@ -139,7 +145,7 @@ def test_two_new_servos_at_once_are_caught_and_retried():
 
     assert set_servo_ids.run(bus_on(line), ask=ask, say=said.append)
     assert line.ids() == [1, 2, 3, 4, 5, 6]
-    assert any("two new servos at once" in s for s in said)
+    assert any("more than one new servo" in s for s in said)
 
 
 def test_stopping_partway_and_running_again_carries_on():

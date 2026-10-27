@@ -35,14 +35,31 @@ def answering(bus) -> set:
     return {i for i in [*range(1, 7), PARK_ID] if bus.ping(i)}
 
 
+def alone_at(bus, sid: int, tries: int = 5) -> bool:
+    """True when every full read of `sid` comes back clean. Two servos sharing an id often still pass a
+    ping, because their short replies are identical, but their position readings differ and collide."""
+    for _ in range(tries):
+        try:
+            bus.read_feedback(sid)
+        except sts.STSError:
+            return False
+    return True
+
+
+TWO_AT_ONCE = ("Replies at id 1 come back garbled, which almost always means more than one new servo is "
+               "connected. Check that the cable leading on from the {where} servo is unplugged.")
+
+
 def run(bus, ask=input, say=print) -> bool:
     ids = answering(bus)
     if set(range(1, 7)) <= ids:
         say("All six servos already answer at ids 1-6. Nothing to do.")
         return True
     if PARK_ID not in ids:
-        if ids != {1}:
-            say(f"Expected only the base servo, at id 1, but these ids answer: {sorted(ids) or 'none'}.\n"
+        if ids != {1} or not alone_at(bus, 1):
+            found = sorted(ids) or "none"
+            say(f"Expected only the base servo, at id 1, but got: ids answering {found}"
+                f"{'' if alone_at(bus, 1) else ', with garbled replies at id 1'}.\n"
                 "Unplug the base -> shoulder lift cable at the shoulder lift end, so only the base is on "
                 "the line, then run this again.")
             return False
@@ -66,10 +83,13 @@ def run(bus, ask=input, say=print) -> bool:
             if ask("Press Enter when that's done (or type q to stop): ").strip().lower() == "q":
                 say("Stopped. Run this again to carry on from here.")
                 return False
-            if bus.ping(1):
+            if not bus.ping(1):
+                say("No servo answers at id 1 yet. Check that the cable is pushed all the way in and the power "
+                    "is on.")
+            elif not alone_at(bus, 1):
+                say(TWO_AT_ONCE.format(where=name))
+            else:
                 break
-            say("No servo answers at id 1 yet. Check that cable is pushed all the way in and the power is on, "
-                "and that the cable leading on from it is unplugged (two new servos at once can't be told apart).")
         bus.set_id(1, k)
         say(f"The {name} servo is now id {k}.")
 
