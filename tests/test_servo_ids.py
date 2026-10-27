@@ -16,7 +16,9 @@ class FakeLine:
     on the real arm: identical replies (a ping) overlap and still read cleanly, but replies that differ (each
     servo's own position) collide and fail their checksum. Writes reach every servo with that id."""
 
-    def __init__(self, n=6):
+    def __init__(self, n=6, busy_after_id_write=0):
+        self.busy_after_id_write = busy_after_id_write  # requests ignored while a new id is saved
+        self.busy = 0
         self.servos = [{"id": 1, "regs": bytearray(128), "on": False} for _ in range(n)]
         for i, s in enumerate(self.servos):
             s["regs"][sts.LOCK] = 1  # the EEPROM is locked at power-up
@@ -32,7 +34,12 @@ class FakeLine:
 
     def write(self, data):
         sid, instr, params = data[2], data[4], data[5:-1]
+        if self.busy:
+            self.busy -= 1
+            return
         replies = [self._answer(s, instr, params) for s in self.servos if s["on"] and s["id"] == sid]
+        if instr == sts.WRITE and params[0] == sts.ID:
+            self.busy = self.busy_after_id_write
         if not replies:
             return
         if all(r == replies[0] for r in replies):
@@ -108,6 +115,14 @@ def test_set_id_unlocks_writes_and_relocks():
     bus.set_id(1, 7)
     assert line.ids() == [7] and line.servos[0]["regs"][sts.LOCK] == 1
     assert bus.ping(7) and not bus.ping(1)
+
+
+def test_set_id_waits_while_the_servo_saves_its_new_id(monkeypatch):
+    # On the real arm the first ping after the id write went unanswered, and the id had in fact changed
+    monkeypatch.setattr(sts, "sleep", lambda s: None)
+    line = FakeLine(1, busy_after_id_write=3)
+    bus_on(line).set_id(1, 20)
+    assert line.ids() == [20] and line.servos[0]["regs"][sts.LOCK] == 1
 
 
 def test_set_id_refuses_an_id_that_is_taken():

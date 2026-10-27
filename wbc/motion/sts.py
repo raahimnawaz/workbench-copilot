@@ -9,6 +9,7 @@ are little-endian.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from time import sleep
 
 # EEPROM registers (kept through power cycles; writable only while LOCK is 0)
 ID = 5                # 1 byte. New servos all leave the factory as id 1.
@@ -128,7 +129,11 @@ class Bus:
             self.write_u8(old_id, ID, new_id)
         except STSError:
             pass  # the servo may already answer under its new id; the ping below is the real check
-        if not self.ping(new_id):
+        for _ in range(25):  # saving to EEPROM keeps it busy for a few ms (seen on the real arm)
+            if self.ping(new_id):
+                break
+            sleep(0.02)
+        else:
             raise STSError(f"servo {old_id} didn't come back as id {new_id}")
         self.write_u8(new_id, LOCK, 1)
 
