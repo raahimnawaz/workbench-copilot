@@ -27,7 +27,8 @@ echo "Zero response on SPI. Check my wiring against the firmware." | .venv/bin/p
 - Verified live on Oct 26: every model id is in the account's model list; Spark tool calls, Wonder diffs and Voice Transcribe all work; a `--sim` Act 1 run worked end to end.
 - **Open problem:** that Act 1 turn took 81 s, 75 of them in three Spark calls, against a 55 s slot. The router now asks for `effort: low` and logs each call's time. It hasn't been re-timed.
 - FK/IK (`wbc/motion/kinematics.py`) is tested on the real URDF: 200/200 bench poses within 0.2 mm and 0.5°.
-- `scripts/gripper_probe.py` (with `wbc/motion/sts.py`) has never run on the arm.
+- `scripts/gripper_probe.py` hasn't run on the arm yet. `wbc/motion/sts.py` has (Oct 27): `scripts/set_servo_ids.py` gave the freshly built arm's servos ids 1–6, all on 5.3 V with no error flags. On the real servos, the first ping after an id write goes unanswered while the servo saves to EEPROM, and servos sharing an id still pass pings about a third of the time, so `set_id` retries and the script checks with full reads.
+- LeRobot 0.6.1 is installed (the `lerobot` extra, kept out of CI). The arm's port is `/dev/cu.usbmodem5B910297421`. Next for the arm: `lerobot-calibrate --robot.type=so101_follower --robot.port=/dev/cu.usbmodem5B910297421 --robot.id=wbc_follower`.
 - Force sensors (Oct 27): `firmware/fsr_sampler` is flashed on the ESP32 at `/dev/cu.usbserial-0001` and streams 500.0 Hz with no dropped or bad frames. `scripts/calibrate_fsr.py` (`watch`, `calibrate`, `creep`, with `wbc/reflex/fsr_link.py` and `fsr_cal.py`) is tested against a fake sensor and has run on real sensors.
 - **Force sensor bench work is paused (Oct 27), with an open problem we may need to go back to:**
   - Wired: SD (GPIO 32) and SP (GPIO 33), each with 10 kΩ. MD and MP aren't wired.
