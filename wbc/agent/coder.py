@@ -1,17 +1,17 @@
 """ask_coder: the router's only path to code changes. Muse Wonder writes a diff, and code checks it.
 
 A diff reaches the router only after it applies cleanly and, when a compile command is set,
-builds in a sandbox copy of the firmware. The working tree is untouched until propose_patch.
+builds in a sandbox copy of the firmware. The working tree is untouched until the patch is staged.
 """
 from __future__ import annotations
 
-import hashlib
 import json
 import re
 import shlex
 import shutil
 import subprocess
-import tempfile
+import threading
+import time
 from pathlib import Path
 
 CODER_SYS = (Path(__file__).parent / "prompts" / "coder.md").read_text(encoding="utf-8")
@@ -80,30 +80,43 @@ def git_apply(diff: str, cwd: Path, check: bool = True, reverse: bool = False) -
     return p.returncode == 0, (p.stdout + p.stderr).strip()
 
 
-def compile_in_sandbox(diff: str, root: Path, cfg: dict) -> tuple:
-    """Build the patched firmware in a temp copy. Returns (ok, compiled, log).
+_sandbox_lock = threading.Lock()  # the start-up warm-up and a patch must not build in the sandbox at once
 
-    The sandbox keeps its own .pio cache between calls, so only the first build is slow.
+
+def sandbox_dir(root: Path) -> Path:
+    """Where patches get compiled. It's under .wbc/ so its build cache survives reboots, unlike the temp folder."""
+    return root / ".wbc" / "sandbox"
+
+
+def compile_in_sandbox(diff: str, root: Path, cfg: dict) -> tuple:
+    """Build the firmware with `diff` applied, in a copy of the project. Returns (ok, compiled, log).
+
+    The copy keeps its own .pio build cache, so after the first build only the changed files recompile:
+    about 1 s against 14 s cold for the pins.h fix (Oct 28). An empty diff builds the firmware as it is,
+    which the agent does at start to warm that cache.
     """
     cmd = (cfg.get("compile_cmd") or "").strip()
     if not cmd:
         return True, False, "compile skipped: no compile_cmd in config/models.yaml"
     if shutil.which(shlex.split(cmd)[0]) is None:
         return True, False, f"compile skipped: {shlex.split(cmd)[0]} is not on PATH"
-    sandbox = Path(tempfile.gettempdir()) / f"wbc-sandbox-{hashlib.sha1(str(root).encode()).hexdigest()[:8]}"
+    sandbox = sandbox_dir(root)
     rel = cfg["compile_dir"]
-    shutil.copytree(root / rel, sandbox / rel, dirs_exist_ok=True, ignore=shutil.ignore_patterns(".pio"))
-    ok, log = git_apply(diff, sandbox, check=False)
-    if not ok:
-        return False, False, log
-    try:
-        p = subprocess.run(shlex.split(cmd), cwd=sandbox, capture_output=True, text=True,
-                           timeout=cfg.get("compile_timeout_s", 180))
-        ok, log = p.returncode == 0, p.stdout + p.stderr
-    except subprocess.TimeoutExpired:
-        ok, log = False, "compile timed out"
-    finally:
-        git_apply(diff, sandbox, check=False, reverse=True)
+    with _sandbox_lock:
+        shutil.copytree(root / rel, sandbox / rel, dirs_exist_ok=True, ignore=shutil.ignore_patterns(".pio"))
+        if diff:
+            ok, log = git_apply(diff, sandbox, check=False)
+            if not ok:
+                return False, False, log
+        try:
+            p = subprocess.run(shlex.split(cmd), cwd=sandbox, capture_output=True, text=True,
+                               timeout=cfg.get("compile_timeout_s", 180))
+            ok, log = p.returncode == 0, p.stdout + p.stderr
+        except subprocess.TimeoutExpired:
+            ok, log = False, "compile timed out"
+        finally:
+            if diff:
+                git_apply(diff, sandbox, check=False, reverse=True)
     return ok, True, log
 
 
@@ -118,22 +131,29 @@ def ask_coder(client, cfg: dict, budget, root: Path, task: str, files: list, fac
     prompt = (f"{task}\n\nMeasured on the bench (trust these over comments in the code):\n"
               f"{json.dumps(facts or {}, indent=1)}\n\n{sources}")
     budget.check()
+    t0 = time.monotonic()
     try:
         r = client.responses.create(model=cfg["model"], instructions=CODER_SYS, input=prompt,
                                     reasoning={"effort": cfg.get("effort", "low")},
                                     timeout=cfg.get("timeout_s", 30))
     except Exception as e:
-        return {"ok": False, "error": f"coder unavailable: {type(e).__name__}: {e}"}
+        return {"ok": False, "error": f"coder unavailable: {type(e).__name__}: {e}",
+                "_timing": {"wonder": time.monotonic() - t0}}
+    timing = {"wonder": time.monotonic() - t0}  # "_" keys go to the HUD, not to the router
     budget.add_tokens(cfg["model"], getattr(r, "usage", None))
     text = getattr(r, "output_text", "") or ""
     diff, why = split_diff(text)
     if not diff:
-        return {"ok": False, "error": "coder returned no diff", "raw": text[:400]}
+        return {"ok": False, "error": "coder returned no diff", "raw": text[:400], "_timing": timing}
     ok, log = git_apply(diff, root)
     if not ok:
-        return {"ok": False, "error": "diff does not apply", "diff": diff, "why": why, "log": log[-800:]}
+        return {"ok": False, "error": "diff does not apply", "diff": diff, "why": why, "log": log[-800:],
+                "_timing": timing}
+    t0 = time.monotonic()
     ok, compiled, log = compile_in_sandbox(diff, root, cfg)
-    result = {"ok": ok, "diff": diff, "why": why, "compiled": compiled, "log": log[-800:]}
+    if compiled:
+        timing["compile"] = time.monotonic() - t0
+    result = {"ok": ok, "diff": diff, "why": why, "compiled": compiled, "log": log[-800:], "_timing": timing}
     if not ok:
         result["error"] = "patched firmware does not compile"
     return result

@@ -127,6 +127,88 @@ def test_stops_after_max_steps_and_does_not_chain_onto_pending_calls():
     assert any(e[0] == "note" and "stopped" in e[1] for e in hud.events)
 
 
+PREFETCH = [{"tool": "read_breadboard"}, {"tool": "read_file", "args": {"path": "pins.h"}}]
+
+
+def facts_toolbox(log, board=None):
+    tb = Toolbox()
+
+    @tb.register("read_breadboard", "", {"type": "object", "properties": {}}, label="SAM")
+    def read_breadboard():
+        log.append("board")
+        return dict(board or {"ok": True, "mismatches": [{"signal": "OLED_CS"}]})
+
+    @tb.register("read_file", "", {"type": "object", "properties": {"path": {"type": "string"}}})
+    def read_file(path):
+        log.append(path)
+        return {"ok": True, "path": path, "text": "#define OLED_CS 5"}
+
+    return tb
+
+
+def test_bench_facts_go_out_with_the_first_call():
+    """Act 1 on Oct 28 spent its first router round (4.4 s) only asking for the board read and pins.h."""
+    log = []
+    router, api, hud = make_router([response("r1", text="CS is on 13.")], facts_toolbox(log), prefetch=PREFETCH)
+    router.run_turn("check my wiring")
+    assert sorted(log) == ["board", "pins.h"] and len(api.requests) == 1
+    first = api.requests[0]["input"][0]["content"]
+    assert first.startswith("check my wiring") and "OLED_CS" in first and "#define OLED_CS 5" in first
+    assert ("call", "SAM", "read_breadboard") in hud.events
+
+
+def test_facts_the_conversation_has_are_not_sent_again():
+    board = {"ok": True, "mismatches": []}
+    router, api, _ = make_router([response(f"r{i}", text="ok") for i in range(3)], facts_toolbox([], board),
+                                 prefetch=PREFETCH)
+    router.run_turn("one")
+    router.run_turn("two")
+    second = api.requests[1]["input"][0]["content"]
+    assert second.count("unchanged since you last saw it") == 2 and "mismatches" not in second
+    board["mismatches"] = [{"signal": "OLED_CS"}]
+    router.run_turn("three")
+    third = api.requests[2]["input"][0]["content"]
+    assert "OLED_CS" in third and third.count("unchanged") == 1  # only pins.h stayed the same
+
+
+def test_a_broken_chain_gets_every_fact_again():
+    looping = [response(f"r{i}", [function_call(f"c{i}", "read_breadboard", "{}")]) for i in range(2)]
+    router, api, _ = make_router(looping + [response("r9", text="ok")], facts_toolbox([]), prefetch=PREFETCH,
+                                 max_steps=1)
+    router.run_turn("loop")  # stops after one round, so the next turn starts a new conversation
+    router.run_turn("again")
+    assert "unchanged" not in api.requests[-1]["input"][0]["content"]
+
+
+def test_a_prefetched_image_rides_with_the_first_call():
+    router, api, _ = make_router([response("r1", text="ok")], facts_toolbox([], {"ok": True, "_image": PNG}),
+                                 prefetch=PREFETCH[:1])
+    router.run_turn("look")
+    content = api.requests[0]["input"][0]["content"]
+    assert content[0]["type"] == "input_text" and "_image" not in content[0]["text"]
+    assert content[-1]["image_url"].startswith("data:image/png;base64,")
+
+
+def test_private_keys_stay_out_of_what_the_model_sees():
+    tb = Toolbox()
+
+    @tb.register("ask_coder", "", {"type": "object", "properties": {}}, label="Wonder")
+    def ask_coder():
+        return {"ok": True, "_timing": {"wonder": 7.0, "compile": 14.0}}
+
+    router, api, _ = make_router([response("r1", [function_call("c1", "ask_coder", "{}")]),
+                                  response("r2", text="done")], tb)
+    router.run_turn("fix it")
+    assert "_timing" not in api.requests[1]["input"][0]["output"]
+
+
+def test_chat_router_gets_the_same_bench_facts():
+    router = ChatRouter(FakeChatClient([chat_response(content="ok")]), "glimmer", facts_toolbox([]),
+                        Budget(10, PRICES), SilentHud(), "system", prefetch=PREFETCH)
+    router.run_turn("check my wiring")
+    assert "#define OLED_CS 5" in router.messages[1]["content"]
+
+
 def test_chat_router_message_order():
     client = FakeChatClient([
         chat_response(tool_calls=[("t1", "point_at", '{"target": "c41"}')]),

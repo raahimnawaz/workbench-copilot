@@ -11,9 +11,10 @@ Entry for the Meta Global AI Developer Hackathon (Indie track, Push the Frontier
 ## Commands (Python 3.12 via uv, which lives in `~/.local/bin`)
 ```bash
 uv venv --clear --python 3.12 && uv pip install -e '.[voice,dev,arm,firmware]'   # also after moving the folder: .venv stores absolute paths
-.venv/bin/python -m pytest -q                                   # 158 offline tests; CI runs them on every push
+.venv/bin/python -m pytest -q                                   # 168 offline tests; CI runs them on every push
 .venv/bin/python scripts/smoke_test.py                          # PAID, about $0.01: one call to each hosted model
-echo "Zero response on SPI. Check my wiring against the firmware." | .venv/bin/python -m wbc.agent --sim   # PAID, about $0.04
+echo "Zero response on SPI. Check my wiring against the firmware." | .venv/bin/python -m wbc.agent --sim   # PAID, about $0.025
+echo "Zero response on SPI. Check my wiring against the firmware." | .venv/bin/python -m wbc.agent --sim --router-model muse-spark-1.1   # PAID, about $0.025: the same turn routed by Spark 1.1
 .venv/bin/python -m wbc.agent --hear                           # PAID, about $0.0001 a sentence: prints what the mic hears, routes nothing
 .venv/bin/python scripts/gripper_probe.py --list                # free: find the servo bus port
 .venv/bin/python scripts/gripper_probe.py --port /dev/cu.usbmodem5B910297421 watch   # read only: the gripper's settings and jaw positions
@@ -25,12 +26,14 @@ echo "Zero response on SPI. Check my wiring against the firmware." | .venv/bin/p
 ```
 - A `--sim` run applies Wonder's real patch to `firmware/dut_demo/include/pins.h` (`OLED_CS` 5 → 13). **Restore it afterwards** with `git checkout -- firmware/dut_demo/include/pins.h`. That bug is the Act 1 demo: the CS wire goes to GPIO 13 while `pins.h` says 5.
 - Tracked spend lives in `.wbc/spend.json` ($0.049 on Oct 27). The hard stop is $140 and the warning $100 (`budget` in `config/models.yaml`).
-- PlatformIO is installed in the venv (the `firmware` extra), and both firmware projects compile. `ask_coder` runs its compile check only when `pio` is on PATH, so activate the venv first.
+- PlatformIO is installed in the venv (the `firmware` extra), and both firmware projects compile. `ask_coder` runs its compile check only when `pio` is on PATH, so activate the venv first. The check builds in `.wbc/sandbox`, which the agent warms at start, so a patch compiles in about 1–2 s instead of about 13 s cold.
 
 ## State on Oct 27
 - Router (`wbc/agent/loop.py`): Muse Spark 1.3 on the Responses API with parallel tool calls. `ask_coder` sends code changes to Muse Wonder and returns only diffs that apply (and compile, when `pio` is present). A Chat Completions router for Muse Glimmer on this Mac is coded (`--backup`) but has never run.
 - Verified live on Oct 26: every model id is in the account's model list; Spark tool calls, Wonder diffs and Voice Transcribe all work; a `--sim` Act 1 run worked end to end.
-- **Open problem:** that Act 1 turn took 81 s, 75 of them in three Spark calls, against a 55 s slot. The router now asks for `effort: low` and logs each call's time. It hasn't been re-timed.
+- **Open problem, Act 1's time against its 55 s slot:** 81 s on Oct 26 at the API default. On Oct 28, spoken and at `effort: low`, about 63 s: four Spark calls (4.4, 14.0, 11.2 and 12.3 s) and `ask_coder` 21.1 s, of which about 14 s was the sandbox's first, cold compile and about 7 s Wonder. Round 1 only asked for the board read and pins.h, and round 3 only called `propose_patch`.
+  - Changed on Oct 28: code runs `router.prefetch` (the board read and pins.h) before Spark's first call and sends only what changed since Spark last saw it. `ask_coder` stages a checked diff itself (`coder.auto_stage`). The compile sandbox moved from the temp folder, which macOS clears, to `.wbc/sandbox` (12.5 s cold, 1.6 s warm), and the agent warms it at start. The HUD splits `ask_coder`'s time into wonder and compile.
+  - So Act 1 should take two Spark rounds, about 26 s plus Wonder. Not re-timed yet. `--router-model muse-spark-1.1` routes the same turn with Spark 1.1 to compare.
 - FK/IK (`wbc/motion/kinematics.py`) is tested on the real URDF: 200/200 bench poses within 0.2 mm and 0.5°.
 - `scripts/gripper_probe.py` prints the gripper's own settings first. LeRobot's `configure()` sets the gripper's Max_Torque_Limit to 500, Protection_Current to 250 and Overload_Torque to 25. Feetech's manual says an output above Overload_Torque for Protection_Time gets cut to Protective_Torque, so `squeeze` refuses a torque limit of 25% or more (default 20%): a stalled squeeze above it would weaken partway through a measurement. It also refuses a `--closed` outside the calibrated limits (1278 closed to 2827 open since Oct 28; higher is more open), and won't turn torque on until the hold-here goal reads back.
   - `watch` ran twice on Oct 28. The servo reports overload protection on (starting at 25% for 2.00 s, cutting to 20%), and current and overheat protection, but not voltage. Fully open reads 2825 (the calibrated end is 2827). Closed without holding, the jaws stop at 1277–1290 (−3.6% on LeRobot's scale) with about a 5 mm gap at the tips. Closing that gap takes force and turned the shaft less than 1°, so it's flex or play in the jaw, not the servo. Closed by hand on the board: 1348.
@@ -75,7 +78,7 @@ echo "Zero response on SPI. Check my wiring against the firmware." | .venv/bin/p
 
 ## Next, in order
 0. Force sensors are paused (see above). Before the jaw pads (Oct 29): get a kitchen scale, run the heavier press test to settle the flat spot above about 35 g, wire MD and MP, then calibrate all four in the pads.
-1. Re-time Act 1 with `effort: low` (paid, ask first). If it's still slow, cut router rounds and compare `muse-spark-1.1`.
+1. Re-time Act 1 now that it takes two router rounds (paid, about $0.025, ask first). If it's still over 55 s, compare `muse-spark-1.1` with `--router-model`.
 2. Arm bring-up: calibrated Oct 27. `scripts/first_moves.py` has moved every joint and found its sign, and the elbow lifts its folded forearm at P = 32 (see above). The power cut-off test is done (see above). The gripper probe is done (Oct 28, see above). The gripper servo feels only its jaw moving, and the board sits too near the jaws' stop for the cap to set the squeeze at P 32 or less. Settle grip force with the force pads and the grip loop: P 48–64, or a PWM force mode.
 3. Gravity model of the arm, once the scripted moves have logged joint loads (about half a day, before Oct 31). It predicts each joint's load from the pose, using the link masses already in `hardware/so101_new_calib.urdf`, plus a small fitted correction for friction and the units of Present_Load. It's a fitted physics model, not a neural network: there's little data, and it has to be checkable. Three uses:
    - Weigh a gripped object: measured minus predicted load at the shoulder and elbow. The regrasp force estimate in step 8 needs this.
