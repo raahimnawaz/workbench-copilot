@@ -282,10 +282,10 @@ def try_joint(robot, joint: str, powered: list, step: float, seconds: float, hz:
     return result
 
 
-def wait_until_ready(robot, joints: list, cap: int, ask, say) -> bool:
+def wait_until_ready(robot, joints: list, cap: int, ask, say, face_forward: bool = True) -> bool:
     """Show where the arm is and wait for the go-ahead. Every joint that will get torque has to start inside
     its calibrated range, and the shoulder lift's question needs the base facing forward, so until both hold,
-    this asks for them first."""
+    this asks for them first. face_forward=False skips the base check, for runs that ask no questions."""
     bus, cal = robot.bus, robot.calibration
     while True:
         pos = bus.sync_read("Present_Position", num_retry=2)
@@ -301,7 +301,7 @@ def wait_until_ready(robot, joints: list, cap: int, ask, say) -> bool:
                 return False
             continue
         off = (raw["shoulder_pan"] - CALIBRATION_POSE) / TICKS_PER_DEGREE
-        if "shoulder_lift" in joints and abs(off) > FORWARD:
+        if face_forward and "shoulder_lift" in joints and abs(off) > FORWARD:
             reply = ask(f"The base is turned {abs(off):.0f}° from forward. Turn it to face forward, the way it "
                         "faced in calibration Part 1, then press Enter (go = start anyway, q = quit): ")
             reply = reply.strip().lower()
