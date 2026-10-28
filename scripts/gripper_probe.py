@@ -111,7 +111,10 @@ def main(argv=None) -> int:
         def poll_marks():
             out = []
             while not labels.empty():
-                out.append(labels.get_nowait())
+                label = labels.get_nowait()
+                if label.lower() == "q":
+                    raise KeyboardInterrupt  # q and Enter stops a run the same way Ctrl-C does
+                out.append(label)
             return out
 
         shown = [0.0]
@@ -132,9 +135,9 @@ def main(argv=None) -> int:
             at_gain = f" at P gain {args.gain}" if args.gain is not None else ""
             print(f"Closing toward {args.closed} with torque limit {args.torque_limit}{at_gain}. Once it holds, let go "
                   "and keep your hands off for 2 s. Then press Enter as you start each action. To stop, hold the "
-                  "object and press Ctrl-C: the gripper lets go.")
+                  "object and press Ctrl-C (or q, Enter): the gripper lets go.")
         else:
-            print("\nWatching (read only). Press Enter to mark where the jaws are. Ctrl-C to stop.")
+            print("\nWatching (read only). Press Enter to mark where the jaws are. Ctrl-C (or q, Enter) to stop.")
 
         started = True
         probe.run_probe(
