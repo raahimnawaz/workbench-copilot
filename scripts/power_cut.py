@@ -10,10 +10,10 @@ what they came back with: torque off, so the arm stays limp, and which settings 
 
 Then hold. The motors come on at 50% torque the way first_moves.py turns them on, with this arm's elbow at
 P = 32, and hold the arm in a pose you set. Once it holds on its own, you put a hand under it and switch the
-strip off, and it records when the arm let go. An arm that doesn't sink as you let go has no weight on its
-motors and nothing to drop, so it says so before the cut. If a joint moves more than 5° while the voltage is
-still normal, every motor is cut at once, and if the servos still answer 2 s after the voltage starts to
-fall, it cuts them itself. Then the same checks as idle once the power is back.
+strip off, and it records the cut until the servos go silent. An arm that doesn't sink as you let go has no
+weight on its motors and nothing to drop, so it says so before the cut. If a joint moves more than 5° while
+the voltage is still normal, every motor is cut at once, and if the servos still answer 2 s after the
+voltage starts to fall, it cuts them itself. Then the same checks as idle once the power is back.
 
 Both wait as long as you take to switch the strip, so you can step away, and Ctrl-C stops either one. Each
 run writes .wbc/logs/power-cut-<step>-<time>.json. It needs LeRobot (uv pip install -e '.[lerobot]') and,

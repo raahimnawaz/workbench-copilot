@@ -111,11 +111,13 @@ python scripts/power_cut.py --port /dev/cu.usbmodemXXXX hold
 ```
 
 - `idle` comes first. The motors stay off and nothing is written to the servos. You switch the strip off, and the script records how the supply voltage falls until the servos stop answering. You switch it back on, and it checks what they came back with: torque off on all six, and which settings the cut reset.
-- `hold` turns the motors on at 50% torque the way `first_moves.py` does, with the elbow at P = 32, and holds a pose you set once you've let go and it has settled. With a hand under the elbow, you switch the strip off, and it records when the arm let go. If the arm doesn't sink as you let go, its motors carry no weight and there's nothing to drop, so the script says so before the cut and that run doesn't count. If a joint moves more than 5° while the voltage is still normal, every motor is cut at once. If the servos still answer 2 s after the voltage starts to fall, the script cuts them itself.
+- `hold` turns the motors on at 50% torque the way `first_moves.py` does, with the elbow at P = 32, and holds a pose you set once you've let go and it has settled. With a hand under the arm, you switch the strip off, and it records every joint and the supply voltage until the servos go silent. If the arm doesn't sink as you let go, its motors carry no weight and there's nothing to drop, so the script says so before the cut and that run doesn't count. If a joint moves more than 5° while the voltage is still normal, every motor is cut at once. If the servos still answer 2 s after the voltage starts to fall, the script cuts them itself.
 - Both wait as long as you take, so you can step away. Ctrl-C stops either one, and in `hold` the motors go off only once you say you're holding the arm.
 - The supply keeps its output up for a moment after the switch, which the servos can't report, so `hold` asks whether the arm let go at once.
 - If the USB adapter disappears along with the servos, the strip powers the adapter or its hub too, and the script says so.
 - Each run writes `.wbc/logs/power-cut-<step>-<time>.json`: the servo registers before and after, and every reading around the cut.
+
+What it found on this arm (Oct 27–28): the strip cuts only the servo supply. Once the supply voltage starts to fall, the servos stop answering within about 10 ms, with or without torque on, before a loaded joint has moved even a degree. A loaded elbow let go at the click and fell onto its stop. The servos come back limp, with every goal at 0 and the torque cap back at each servo's stored maximum, so code that turns torque on after a cut has to set its cap again. Folded poses near upright hold themselves up by gear friction, so only a joint carrying weight drops.
 
 ## Gripper probe: what can servo feedback feel?
 
