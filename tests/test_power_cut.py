@@ -121,8 +121,17 @@ def idle(arm, **kw):
     return ok, record, you
 
 
-def hold(arm, replies=("", "", "1"), **kw):
-    """The hold step, answering: motors on, it holds on its own, and it let go at once."""
+def settles(arm, degrees=3.0):
+    """A reply for the let-go prompt: you let go, and the shoulder sinks as its motor takes the weight."""
+    def let_go():
+        arm.pos["shoulder_lift"] -= degrees
+        return ""
+    return let_go
+
+
+def hold(arm, replies=None, **kw):
+    """The hold step, answering by default: motors on, it settles and holds on its own, and it let go at once."""
+    replies = ("", settles(arm), "1") if replies is None else replies
     you, record = Bench(arm, replies=replies, **kw), {}
     ok = power_cut.run_hold(arm, record, ask=you.ask, say=you.say, sleep=you.sleep, clock=Clock())
     return ok, record, you
@@ -194,6 +203,23 @@ def test_hold_records_when_the_arm_lets_go_and_finds_it_limp_after():
     assert "all torque off" in arm.events[on:] and not any(e.startswith("torque on") for e in arm.events[on:])
 
 
+def test_an_arm_with_no_weight_on_its_motors_is_flagged_and_its_run_doesnt_count():
+    arm = PoweredArm(start=POSE)  # balanced: it doesn't sink as you let go, and nothing falls in the cut
+    ok, record, you = hold(arm, replies=("", "", ""))  # motors on, let go, cut the power anyway
+    prompts = [e for e in arm.events if e.startswith("ask:")]
+    assert "It didn't sink as you let go" in prompts[2] and len(prompts) == 3  # and no let-go question after
+    assert not ok and "switched on" in arm.events and "let_go" not in record
+    assert "this run couldn't show it letting go" in you.text() and "The strip stops the arm" not in you.text()
+
+
+def test_q_at_the_no_weight_warning_turns_the_motors_off_once_youre_holding_the_arm():
+    arm = PoweredArm(start=POSE)
+    ok, record, you = hold(arm, replies=("", "", "q", ""))
+    hold_prompt = max(i for i, e in enumerate(arm.events) if e.startswith("ask: Hold the arm"))
+    assert not ok and "cut" not in record and "switched off" not in arm.events
+    assert arm.events[hold_prompt + 1] == "all torque off" and not any(arm.torque.values())
+
+
 def test_a_joint_that_moves_with_the_power_on_cuts_every_motor_at_once():
     arm = PoweredArm(start=POSE)
     ok, record, you = hold(arm, cut=lambda: arm.runaway.update(elbow_flex=0.3))
@@ -204,12 +230,7 @@ def test_a_joint_that_moves_with_the_power_on_cuts_every_motor_at_once():
 
 def test_an_arm_that_cant_hold_its_pose_is_cut_before_the_test():
     arm = PoweredArm(start=POSE)
-
-    def sink():  # you let go and the shoulder can't take the weight
-        arm.pos["shoulder_lift"] -= 20.0
-        return ""
-
-    ok, record, you = hold(arm, replies=("", sink))
+    ok, record, you = hold(arm, replies=("", settles(arm, 20.0)))  # the shoulder can't take the weight
     assert not ok and "shoulder lift sank -20.0° as you let go" in record["stopped"]
     assert "all torque off" in arm.events and "cut" not in record
 
@@ -239,7 +260,7 @@ def test_ctrl_c_before_the_cut_lets_the_arm_go_only_once_youre_holding_it():
     def interrupt():
         raise KeyboardInterrupt
 
-    ok, record, you = hold(arm, replies=("", "", ""), cut=interrupt)
+    ok, record, you = hold(arm, replies=("", settles(arm), ""), cut=interrupt)
     hold_prompt = max(i for i, e in enumerate(arm.events) if e.startswith("ask: Hold the arm"))
     assert not ok and "cut" not in record and arm.events[hold_prompt + 1] == "all torque off"
     assert not any(arm.torque.values()) and arm.torque_limit == arm.max_limit  # the cap is lifted again

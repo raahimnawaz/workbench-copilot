@@ -10,9 +10,10 @@ what they came back with: torque off, so the arm stays limp, and which settings 
 
 Then hold. The motors come on at 50% torque the way first_moves.py turns them on, with this arm's elbow at
 P = 32, and hold the arm in a pose you set. Once it holds on its own, you put a hand under it and switch the
-strip off, and it records when the arm let go. If a joint moves more than 5° while the voltage is still
-normal, every motor is cut at once, and if the servos still answer 2 s after the voltage starts to fall, it
-cuts them itself. Then the same checks as idle once the power is back.
+strip off, and it records when the arm let go. An arm that doesn't sink as you let go has no weight on its
+motors and nothing to drop, so it says so before the cut. If a joint moves more than 5° while the voltage is
+still normal, every motor is cut at once, and if the servos still answer 2 s after the voltage starts to
+fall, it cuts them itself. Then the same checks as idle once the power is back.
 
 Both wait as long as you take to switch the strip, so you can step away, and Ctrl-C stops either one. Each
 run writes .wbc/logs/power-cut-<step>-<time>.json. It needs LeRobot (uv pip install -e '.[lerobot]') and,
@@ -41,6 +42,7 @@ SAG = 0.3        # volts under the reading when the watch began that mean the su
 SILENT = 3       # failed reads in a row that mean the servos have lost power
 DROP = 1.0       # degrees a held joint has to fall to count as the arm letting go
 MAX_SINK = 15.0  # degrees the arm may sink as you let go of it and the motors take its weight
+MIN_SINK = 0.5   # degrees it has to sink to show the motors carry weight: at P = 16 that's about 2% effort
 GRACE = 2.0      # seconds the servos may still answer after the voltage starts to fall, in hold
 POLL = 0.25      # seconds between pings while the power is off
 BOOT = 0.5       # seconds to let the servos finish starting up once all six answer again
@@ -48,7 +50,7 @@ KEEP = 500       # readings kept from before the voltage started to fall
 # Read before and after each cut. Present_Voltage is in tenths of a volt and Torque_Limit in tenths of a
 # percent. Torque_Limit is the RAM copy of Max_Torque_Limit that a servo makes at power-up.
 STATE = ["Present_Voltage", "Torque_Enable", "Torque_Limit", "Max_Torque_Limit", "P_Coefficient",
-         "Goal_Position", "Present_Position", "Present_Temperature", "Status", "Lock"]
+         "Goal_Position", "Present_Position", "Present_Load", "Present_Temperature", "Status", "Lock"]
 # Status bits every Feetech table names the same way. Bits 1 and 4 mean different things in different tables.
 FLAGS = {0: "voltage", 2: "overheat", 3: "current", 5: "overload"}
 PORT_LOST = ("The arm's USB adapter went away too, so the strip seems to power the adapter or its USB hub as "
@@ -174,8 +176,7 @@ def describe(cut: dict, hold: dict | None = None) -> list:
     if hold:
         when, joint = let_go(readings, hold)
         if when is None:
-            lines.append(f"No joint had fallen {DROP:.0f}° by the last reading, so the arm let go as the servos "
-                         "went silent.")
+            lines.append(f"No joint had fallen {DROP:.0f}° before the servos went silent.")
         else:
             ref, what = (sag, "the voltage did") if sag is not None else (last, "the servos last answered")
             gap = 1000 * (when - ref)
@@ -312,8 +313,8 @@ def run_hold(robot, record: dict, cap: int = TORQUE_CAP, gains: dict | None = No
         say("The servos' calibration doesn't match the file. Run lerobot-calibrate again.")
         return False
     bus = robot.bus
-    say("Pose the arm so the motors have weight to hold, with room under the elbow for your hand: the upper arm "
-        f"tipped forward partway and the forearm hanging down. A level upper arm may be more than {cap}% can hold.")
+    say("Pose the arm so its weight hangs out in front of the shoulder, with room under the elbow for your hand: "
+        f"the upper arm tipped well forward of upright. A level upper arm may be more than {cap}% can hold.")
     try:
         if not wait_until_ready(robot, JOINTS, cap, ask, say, face_forward=False):
             return False
@@ -334,10 +335,20 @@ def run_hold(robot, record: dict, cap: int = TORQUE_CAP, gains: dict | None = No
             return False
         record["hold"] = hold = bus.sync_read("Present_Position", normalize=False, num_retry=2)
         sank = {m: (hold[m] - on_at[m]) / TICKS_PER_DEGREE for m in JOINTS}
+        record["sank"] = {m: round(v, 2) for m, v in sank.items()}
         worst = max(sank, key=lambda m: abs(sank[m]))
         if abs(sank[worst]) > MAX_SINK:
             raise Tripped(f"the {NAMES[worst]} sank {sank[worst]:+.1f}° as you let go, more than the motors hold "
                           f"at {cap}%")
+        loaded = abs(sank[worst]) >= MIN_SINK
+        if not loaded:
+            reply = ask("\nIt didn't sink as you let go, so its motors are carrying almost no weight, and it may not "
+                        "drop when the power goes. Press Enter to cut the power anyway, or q to turn the motors off "
+                        "and pose it with more weight in front of the shoulder: ")
+            if reply.strip().lower().startswith("q"):
+                release(robot, ask, say)
+                put_back(bus, limits)
+                return False
         record["before"] = before = read_state(bus)
         where = f", at the {NAMES[worst]}" if abs(sank[worst]) >= 0.1 else ""
         say(f"Holding on its own. The most it sank as you let go was {abs(sank[worst]):.1f}°{where}.\n"
@@ -377,19 +388,25 @@ def run_hold(robot, record: dict, cap: int = TORQUE_CAP, gains: dict | None = No
     on = [m for m in JOINTS if after["Torque_Enable"][m]]
     cut_torque(robot)  # nothing should be on, and nothing may come on by itself
     say("All six answer again:\n" + table(after))
+    showed = loaded or let_go(cut["readings"], hold)[0] is not None  # weight on the motors, or a fall seen
     say("\nResults:")
-    say("  The strip stops the arm: its servos lost power and let go." if cut["cut_at"] is None else
-        f"  The servos kept answering {GRACE:.0f} s after the voltage started to fall, so this cut the motors "
-        "itself. Check that the strip switches the servos' supply.")
+    if cut["cut_at"] is not None:
+        say(f"  The servos kept answering {GRACE:.0f} s after the voltage started to fall, so this cut the motors "
+            "itself. Check that the strip switches the servos' supply.")
+    elif showed:
+        say("  The strip stops the arm: its servos lost power and let go.")
+    else:
+        say("  The servos lost power, but the arm carried no weight, so this run couldn't show it letting go.")
     for line in changes(before, after, held=True):
         say("  " + line)
-    try:
-        felt = choose(ask, "\nDid the arm let go the moment you switched the strip off? 1 = at once, "
-                           "2 = after a short pause, 3 = a second or more later: ", "123")
-        record["let_go"] = {"1": "at once", "2": "after a short pause", "3": "a second or more later"}[felt]
-    except (KeyboardInterrupt, EOFError):
-        pass
-    return not on and cut["cut_at"] is None
+    if showed:
+        try:
+            felt = choose(ask, "\nDid the arm let go the moment you switched the strip off? 1 = at once, "
+                               "2 = after a short pause, 3 = a second or more later: ", "123")
+            record["let_go"] = {"1": "at once", "2": "after a short pause", "3": "a second or more later"}[felt]
+        except (KeyboardInterrupt, EOFError):
+            pass
+    return not on and cut["cut_at"] is None and showed
 
 
 def main(argv=None) -> int:
