@@ -11,7 +11,7 @@ import threading
 from pathlib import Path
 
 from wbc import config
-from wbc.agent import ears
+from wbc.agent import coder, ears
 from wbc.agent.budget import Budget, BudgetExceeded
 from wbc.agent.hud import ConsoleHud
 from wbc.agent.loop import ChatRouter, Router
@@ -20,21 +20,22 @@ from wbc.agent.tools import Bench, build_toolbox
 SYSTEM = (Path(__file__).parent / "prompts" / "system.md").read_text(encoding="utf-8")
 
 
-def build(sim: bool, backup: bool):
+def build(sim: bool, backup: bool, router_model: str | None = None):
     models = config.load_yaml("models.yaml")
     budget = Budget.from_config(models, config.ROOT)
     hud = ConsoleHud()
     meta = config.meta_client(models)  # the coder always runs on the Meta Model API
     toolbox = build_toolbox(Bench(config.ROOT, models, meta, budget, sim=sim))
     max_steps = models["router"].get("max_steps", 12)
+    prefetch = models["router"].get("prefetch")
     if backup:
         b = models["backup"]
         router = ChatRouter(config.backup_client(models), b["model"], toolbox, budget, hud, SYSTEM,
-                            max_steps=max_steps, reasoning=b.get("reasoning"))
+                            max_steps=max_steps, prefetch=prefetch, reasoning=b.get("reasoning"))
     else:
         r = models["router"]
-        router = Router(meta, r["model"], toolbox, budget, hud, SYSTEM, max_steps=max_steps,
-                        fallback=r.get("fallback"), effort=r.get("effort"))
+        router = Router(meta, router_model or r["model"], toolbox, budget, hud, SYSTEM, max_steps=max_steps,
+                        prefetch=prefetch, fallback=r.get("fallback"), effort=r.get("effort"))
     return models, budget, hud, router
 
 
@@ -45,10 +46,12 @@ def main(argv=None) -> int:
     ap.add_argument("--hear", action="store_true",
                     help="mic check: print what the mic hears and route nothing (implies --voice)")
     ap.add_argument("--backup", action="store_true", help="route with the local open-weights model")
+    ap.add_argument("--router-model", metavar="ID",
+                    help="route with this model instead of router.model, e.g. muse-spark-1.1 to compare speed")
     args = ap.parse_args(argv)
 
     try:
-        models, budget, hud, router = build(args.sim, args.backup)
+        models, budget, hud, router = build(args.sim, args.backup, args.router_model)
     except RuntimeError as e:  # missing key or voice extras
         print(e, file=sys.stderr)
         return 2
@@ -71,6 +74,8 @@ def main(argv=None) -> int:
         inbox.put(None)
 
     threading.Thread(target=typed, daemon=True).start()
+    if not args.hear:  # build the firmware once now, so the session's first patch skips the cold build
+        threading.Thread(target=coder.compile_in_sandbox, args=("", config.ROOT, models["coder"]), daemon=True).start()
     if args.voice or args.hear:
         on_text = (lambda text: None) if args.hear else inbox.put  # listen_forever prints what it heard
         threading.Thread(target=ears.listen_forever, daemon=True,

@@ -5,6 +5,7 @@ from fakes import FakeClient, usage
 
 from wbc.agent import coder
 from wbc.agent.budget import Budget
+from wbc.agent.tools import Bench, build_toolbox
 from wbc.config import ROOT
 
 PINS = "firmware/dut_demo/include/pins.h"
@@ -103,6 +104,38 @@ def test_compile_runs_on_the_patched_sandbox_and_leaves_it_clean(tmp_path):
 def test_compile_failure_is_reported(tmp_path):
     out = coder.ask_coder(wonder_says(FIX), cfg(compile_cmd="false"), budget(), project(tmp_path), "x", [PINS])
     assert out["ok"] is False and out["error"] == "patched firmware does not compile"
+
+
+def test_ask_coder_times_wonder_and_the_compile(tmp_path):
+    out = coder.ask_coder(wonder_says(FIX), cfg(compile_cmd="true"), budget(), project(tmp_path), "Fix CS", [PINS])
+    assert out["ok"] and set(out["_timing"]) == {"wonder", "compile"}
+
+
+def test_an_empty_diff_warms_the_sandbox(tmp_path):
+    """The agent builds the unpatched firmware at start, so the first patch doesn't pay the cold build."""
+    root = project(tmp_path)
+    ok, compiled, _ = coder.compile_in_sandbox("", root, cfg(compile_cmd="true"))
+    assert ok and compiled and (coder.sandbox_dir(root) / PINS).exists()
+
+
+def test_auto_stage_puts_a_checked_patch_in_the_working_tree(tmp_path):
+    """Oct 28: the router spent a whole round (11.2 s) just calling propose_patch."""
+    root = project(tmp_path)
+    tb = build_toolbox(Bench(root, {"coder": cfg(auto_stage=True)}, wonder_says(FIX), budget()))
+    out = tb.dispatch("ask_coder", {"task": "Fix CS", "files": [PINS]})
+    assert out["ok"] and out["staged"]["ok"] and out["staged"]["line"] == 8
+    assert "#define OLED_CS   13" in (root / PINS).read_text()
+    again = tb.dispatch("propose_patch", {"patch_id": out["patch_id"]})
+    assert again["ok"] and again["already_staged"]
+
+
+def test_without_auto_stage_the_tree_waits_for_propose_patch(tmp_path):
+    root = project(tmp_path)
+    tb = build_toolbox(Bench(root, {"coder": cfg()}, wonder_says(FIX), budget()))
+    out = tb.dispatch("ask_coder", {"task": "Fix CS", "files": [PINS]})
+    assert out["ok"] and "staged" not in out and "#define OLED_CS   5 " in (root / PINS).read_text()
+    assert tb.dispatch("propose_patch", {"patch_id": out["patch_id"]})["ok"]
+    assert "#define OLED_CS   13" in (root / PINS).read_text()
 
 
 def test_propose_patch_applies_to_the_working_tree(tmp_path):

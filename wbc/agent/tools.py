@@ -96,7 +96,8 @@ def build_toolbox(bench: Bench) -> Toolbox:
 
     @tb.register("ask_coder", (
         "Have Muse Wonder write a code change. Send the bench facts and only the files involved. Returns a "
-        "patch_id plus a diff that already applies cleanly and compiles, or an error."), {
+        "patch_id plus a diff that already applies cleanly and compiles, or an error. When the result has "
+        "`staged`, the patch is already in the working tree and open in VS Code."), {
         "type": "object",
         "properties": {
             "task": {"type": "string", "description": "What to change and why, in one or two sentences"},
@@ -109,10 +110,14 @@ def build_toolbox(bench: Bench) -> Toolbox:
         if result.get("ok"):
             result["patch_id"] = next(patch_ids)
             bench.patches[result["patch_id"]] = result
+            if bench.models["coder"].get("auto_stage"):
+                # Staging a checked diff here saves the router a whole round spent calling propose_patch.
+                result["staged"] = coder.propose_patch(bench.root, result["diff"], result["why"])
         return result
 
     @tb.register("propose_patch", (
-        "Apply a patch from ask_coder to the working tree and open it in VS Code. Never commits or flashes."), {
+        "Apply a patch from ask_coder to the working tree and open it in VS Code, if ask_coder didn't stage it "
+        "already. Never commits or flashes."), {
         "type": "object",
         "properties": {"patch_id": {"type": "string", "description": "patch_id returned by ask_coder"}},
         "required": ["patch_id"]})
@@ -120,6 +125,8 @@ def build_toolbox(bench: Bench) -> Toolbox:
         patch = bench.patches.get(patch_id)
         if patch is None:
             return {"ok": False, "error": f"no patch {patch_id!r}; call ask_coder first"}
+        if coder.git_apply(patch["diff"], bench.root, reverse=True)[0]:  # it reverses cleanly: it's in the tree
+            return {"ok": True, "already_staged": True, "why": patch["why"]}
         return coder.propose_patch(bench.root, patch["diff"], patch["why"])
 
     @tb.register("read_breadboard", (

@@ -19,7 +19,7 @@ Everything in this repository was written during the hackathon, starting Oct 26,
 | `scripts/first_moves.py` | The arm's first powered moves: torque on without a jump, then each joint a little, recording which way it turns |
 | `scripts/power_cut.py` | The power cut-off test: switching the servo supply off makes the arm let go, and it stays limp when the power returns |
 | `wbc/reflex/fsr_link.py`, `wbc/reflex/fsr_cal.py` | The force sensor link (500 Hz frames with a CRC), per-sensor calibration fit and creep analysis |
-| `config/`, `fixtures/`, `scripts/`, `tests/` | Model routing config, the recorded bench for `--sim`, the smoke test, gripper probe and force sensor tools, 158 tests |
+| `config/`, `fixtures/`, `scripts/`, `tests/` | Model routing config, the recorded bench for `--sim`, the smoke test, gripper probe and force sensor tools, 168 tests |
 | `firmware/dut_demo/` | The Act 1 demo board firmware, with the wiring bug planted on purpose |
 | `firmware/fsr_sampler/` | ESP32 firmware that samples the four jaw sensors at 500 Hz and streams them over USB |
 
@@ -37,9 +37,9 @@ Everything in this repository was written during the hackathon, starting Oct 26,
 
 | Piece | State |
 |---|---|
-| Router loop on Muse Spark (Responses API) | Built and tested against a fake API. Not yet run against the live API. |
+| Router loop on Muse Spark (Responses API) | Runs live. On Oct 28 a spoken Act 1 on the recorded bench took about 63 s in four router rounds. Code now fetches the bench facts first and stages checked patches itself, and the same turn takes 25 s in two rounds. |
 | Backup router on Muse Glimmer (Chat Completions) | Built and tested against a fake API. |
-| `ask_coder` on Muse Wonder | Diff extraction, `git apply --check` and sandbox compile are tested. The live model call isn't yet. |
+| `ask_coder` on Muse Wonder | Runs live: Wonder wrote the Act 1 fix in 3–7 s on Oct 28. The fix compiles in a sandbox copy in about 8 s once its build cache is warm (about 14 s cold). |
 | Voice front end | The request format was checked against the live API on Oct 26. The wake phrase and the loudness gate that cuts the mic into utterances are tested on synthetic audio, and on Oct 28 they worked on the live mic (the Razer, run from Terminal.app). |
 | Budget guard | Built and tested. Spend persists in `.wbc/spend.json`. |
 | FK/IK | Tested on the real SO-101 URDF. 200 of 200 bench poses round-trip to within 0.2 mm and 0.5°, at about 33 ms per solve. |

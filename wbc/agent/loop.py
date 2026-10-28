@@ -26,10 +26,16 @@ def image_data_url(image) -> str:
     return f"data:{mime};base64,{base64.b64encode(data).decode()}"
 
 
+def _private(result: dict) -> dict:
+    """Pop the keys meant for this process, not the model: "_image" goes in as an image, "_timing" to the HUD."""
+    return {k: result.pop(k) for k in [k for k in result if k.startswith("_")]}
+
+
 class _RouterBase:
     label = "router"
 
-    def __init__(self, client, model: str, toolbox, budget, hud, system: str, max_steps: int = 12):
+    def __init__(self, client, model: str, toolbox, budget, hud, system: str, max_steps: int = 12,
+                 prefetch: list | None = None):
         self.client = client
         self.model = model
         self.toolbox = toolbox
@@ -37,7 +43,30 @@ class _RouterBase:
         self.hud = hud
         self.system = system
         self.max_steps = max_steps
+        self.prefetch = prefetch or []  # [{tool, args}] that code runs before the first call of every turn
+        self._seen = {}  # each prefetched result as this conversation last saw it
         self.pool = ThreadPoolExecutor(max_workers=4)
+
+    def _bench_facts(self) -> tuple:
+        """Run the prefetch tools, so the router starts a turn with the bench facts instead of spending a
+        round asking for them. Returns (text, images) to send; facts the conversation already has go out
+        as "unchanged" instead of in full."""
+        calls = [Call(f"prefetch{i}", p["tool"], json.dumps(p.get("args", {}))) for i, p in enumerate(self.prefetch)]
+        if not calls:
+            return "", []
+        lines, images = [], []
+        for c, res in zip(calls, self._run_calls(calls)):
+            image = _private(res).get("_image")
+            key, value = f"{c.name} {c.arguments}", json.dumps(res)
+            if self._seen.get(key) == value:
+                lines.append(f"{key}: unchanged since you last saw it")
+                continue
+            self._seen[key] = value
+            lines.append(f"{key}: {value}")
+            if image is not None:
+                images.append((c.name, image))
+        return ("Bench facts that code fetched before this turn. Act on them, and call these tools again only for "
+                "something they don't cover:\n" + "\n".join(lines)), images
 
     def _note_spend(self) -> None:
         warning = self.budget.pop_warning()
@@ -75,7 +104,15 @@ class Router(_RouterBase):
         self.prev_id = None
 
     def run_turn(self, user_text: str) -> str:
-        r = self._create([{"role": "user", "content": user_text}], self.prev_id)
+        if self.prev_id is None:
+            self._seen = {}  # a new conversation hasn't been sent anything yet
+        facts, fetched = self._bench_facts()
+        text = f"{user_text}\n\n{facts}" if facts else user_text
+        content = text if not fetched else [{"type": "input_text", "text": text}] + [
+            part for name, image in fetched for part in (
+                {"type": "input_text", "text": f"Image from {name}:"},
+                {"type": "input_image", "image_url": image_data_url(image)})]
+        r = self._create([{"role": "user", "content": content}], self.prev_id)
         for _ in range(self.max_steps):
             calls = [Call(i.call_id, i.name, i.arguments) for i in r.output
                      if getattr(i, "type", "") == "function_call"]
@@ -85,7 +122,7 @@ class Router(_RouterBase):
             results = self._run_calls(calls)
             items, images = [], []
             for c, res in zip(calls, results):
-                image = res.pop("_image", None)
+                image = _private(res).get("_image")
                 items.append({"type": "function_call_output", "call_id": c.id, "output": json.dumps(res)})
                 if image is not None:
                     images.append({"role": "user", "content": [
@@ -132,7 +169,11 @@ class ChatRouter(_RouterBase):
         self.messages = [{"role": "system", "content": system}]
 
     def run_turn(self, user_text: str) -> str:
-        self.messages.append({"role": "user", "content": user_text})
+        facts, fetched = self._bench_facts()
+        self.messages.append({"role": "user", "content": f"{user_text}\n\n{facts}" if facts else user_text})
+        self.messages.extend({"role": "user", "content": [
+            {"type": "text", "text": f"Image from {name}:"},
+            {"type": "image_url", "image_url": {"url": image_data_url(image)}}]} for name, image in fetched)
         for _ in range(self.max_steps):
             self.budget.check()
             r = self.client.chat.completions.create(model=self.model, messages=self.messages,
@@ -152,7 +193,7 @@ class ChatRouter(_RouterBase):
             results = self._run_calls(calls)
             images = []
             for c, res in zip(calls, results):
-                image = res.pop("_image", None)
+                image = _private(res).get("_image")
                 self.messages.append({"role": "tool", "tool_call_id": c.id, "content": json.dumps(res)})
                 if image is not None:
                     images.append({"role": "user", "content": [

@@ -18,7 +18,8 @@ class ConsoleHud:
 
     def result(self, label: str, name: str, result: dict, seconds: float) -> None:
         status = "ok" if result.get("ok", True) else f"FAILED: {_short(result.get('error', ''), 120)}"
-        print(f"  [{label}] ← {name} {status} ({seconds:.1f} s)", flush=True)
+        split = "".join(f", {part} {s:.1f} s" for part, s in (result.get("_timing") or {}).items())
+        print(f"  [{label}] ← {name} {status} ({seconds:.1f} s{split})", flush=True)
 
     def note(self, text: str) -> None:
         print(f"  · {text}", flush=True)
