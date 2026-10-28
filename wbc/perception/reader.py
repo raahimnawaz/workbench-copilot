@@ -36,7 +36,8 @@ def locate_boards(frame: np.ndarray, bench: dict, parts: dict) -> tuple:
 
 def register_all(boards: list, view: np.ndarray, area, reader: dict) -> list:
     return [breadboard.register(b, view, area, reader["px_per_mm"], reader.get("register_mm", 1.2),
-                                reader.get("register_deg", 1.0)) for b in boards]
+                                reader.get("register_deg", 1.0), tuple(reader.get("register_scale", (0.97, 1.06))))
+            for b in boards]
 
 
 def read_board(frame: np.ndarray, bench: dict, parts: dict, client, eyes: dict, budget, root: Path,

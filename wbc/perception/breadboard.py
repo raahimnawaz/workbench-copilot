@@ -5,8 +5,10 @@ way its letters run from a to j (config/bench.yaml). In each row the a-e holes f
 another, and the power rails run the board's length (config/parts.yaml).
 
 A board never lies exactly where its printed outline says, so register() finds it in the top-down view.
-The holes are small dark squares: it shifts and turns the grid, by less than half a pitch, until the
-predicted holes land on the darkest spots.
+The holes are small dark squares: it shifts and turns the grid, by less than half a pitch, and scales it,
+until the predicted holes land on the darkest spots. The scale is there because the board's top sits about
+10 mm above the printed sheet the tags are on, so from 30 cm up it looks about 3% larger than it is, and
+a printer that didn't print at exactly 100% adds its own error. Only the right scale lines up all 63 rows.
 """
 from __future__ import annotations
 
@@ -33,10 +35,12 @@ class Board:
     v: tuple  # unit vector from column a toward j
     spec: dict  # parts.yaml breadboard
     prefix: str = ""  # "name:" when the bench has several boards
+    scale: float = 1.0  # how much larger than life the board looks on the carrier (see the module notes)
 
     @property
     def pitch(self) -> float:
-        return self.spec["pitch_mm"]
+        """The pitch as it looks on the carrier, mm."""
+        return self.spec["pitch_mm"] * self.scale
 
     def at(self, row: float, step: float) -> np.ndarray:
         """The carrier point at a row and a column step (pitches from column a); both may be fractional."""
@@ -64,7 +68,7 @@ class Board:
 
     def body(self) -> np.ndarray:
         """The corners of the plastic body on the carrier, assuming the holes sit centered in it."""
-        length, width = self.spec["body_mm"]
+        length, width = (d * self.scale for d in self.spec["body_mm"])
         c, u, v = self.center(), np.asarray(self.u), np.asarray(self.v)
         return np.array([c + su * length / 2 * u + sv * width / 2 * v for su, sv in ((-1, -1), (1, -1), (1, 1), (-1, 1))])
 
@@ -72,7 +76,7 @@ class Board:
         return next(s for s in self.spec["strips"] if column in s)
 
     def locate(self, xy) -> Hit:
-        """The terminal hole or rail nearest a carrier point."""
+        """The terminal hole or rail nearest a carrier point, with the distance in real mm on the board."""
         row_f, step_f = self.coords(xy)
         cols = self.spec["columns"]
         row = int(np.clip(round(row_f), 1, self.spec["rows"]))
@@ -80,23 +84,23 @@ class Board:
         center = self.at(row, cols[col])
         strip = self.strip(col)
         best = Hit(f"{self.prefix}{col}{row}", f"{self.prefix}{row}{strip[0]}-{strip[-1]}",
-                   float(np.linalg.norm(np.asarray(xy) - center)), row, tuple(center))
+                   float(np.linalg.norm(np.asarray(xy) - center)) / self.scale, row, tuple(center))
         if 0.5 <= row_f <= self.spec["rows"] + 0.5:  # beside the rails' run
             for name, step in self.spec.get("rails", {}).items():
-                distance = abs(step_f - step) * self.pitch
+                distance = abs(step_f - step) * self.spec["pitch_mm"]
                 if distance < best.distance_mm:
                     best = Hit(f"{self.prefix}{name}", f"{self.prefix}rail {name}", distance, None,
                                tuple(self.at(row_f, step)))
         return best
 
-    def moved(self, shift_mm, turn_deg: float) -> "Board":
-        """This board turned by turn_deg about its center, then shifted."""
+    def moved(self, shift_mm, turn_deg: float, scale: float = 1.0) -> "Board":
+        """This board turned by turn_deg and scaled about its center, then shifted."""
         t = np.radians(turn_deg)
         R = np.array([[np.cos(t), -np.sin(t)], [np.sin(t), np.cos(t)]])
         c = self.center()
-        a1 = c + R @ (np.asarray(self.a1) - c) + np.asarray(shift_mm)
+        a1 = c + scale * R @ (np.asarray(self.a1) - c) + np.asarray(shift_mm)
         return Board(self.name, tuple(a1), tuple(R @ np.asarray(self.u)), tuple(R @ np.asarray(self.v)), self.spec,
-                     self.prefix)
+                     self.prefix, self.scale * scale)
 
 
 def boards_from(bench: dict, parts: dict) -> list:
@@ -131,41 +135,46 @@ def _sample(score: np.ndarray, points_mm: np.ndarray, region_mm, px_per_mm: floa
 
 
 def register(board: Board, view: np.ndarray, region_mm, px_per_mm: float, max_mm: float = 1.2,
-             max_deg: float = 1.0) -> tuple:
+             max_deg: float = 1.0, scales=(0.97, 1.06)) -> tuple:
     """Find the board in the top-down view: (the board where its holes are, a report).
 
     The search stays within max_mm and max_deg of where the board is supposed to be, under half a pitch,
-    because a grid shifted by a whole pitch fits the holes as well as the right one does.
+    because a grid shifted by a whole pitch fits the holes as well as the right one does. The scale is
+    searched across `scales`, about the board's center.
     """
     gray = view if view.ndim == 2 else cv2.cvtColor(view, cv2.COLOR_BGR2GRAY)
     k = int(round(2.5 * px_per_mm)) | 1  # wider than a hole (about 1 mm) and narrower than the gaps between them
     score = cv2.morphologyEx(gray, cv2.MORPH_BLACKHAT, cv2.getStructuringElement(cv2.MORPH_RECT, (k, k)))
     score = np.minimum(score, np.percentile(score, 99)).astype(np.float32)  # wires and parts don't dominate
+    score = cv2.GaussianBlur(score, (0, 0), 0.4 * px_per_mm)  # one peak per hole, at its center, not a plateau
     _, holes = board.holes()
     center = board.center()
 
-    def search(turns, shifts, around=(0.0, 0.0)) -> tuple:
+    def search(turns, sizes, shifts, around=(0.0, 0.0)) -> tuple:
         offsets = np.array([(dx, dy) for dy in shifts for dx in shifts]) + np.asarray(around)
-        best, means = (-1.0, 0.0, (0.0, 0.0)), []
-        for turn in turns:
-            t = np.radians(turn)
-            R = np.array([[np.cos(t), -np.sin(t)], [np.sin(t), np.cos(t)]])
-            turned = (holes - center) @ R.T + center
-            m = _sample(score, turned[None, :, :] + offsets[:, None, :], region_mm, px_per_mm).mean(axis=1)
-            means.append(m)
-            i = int(np.argmax(m))
-            if m[i] > best[0]:
-                best = (float(m[i]), float(turn), tuple(offsets[i]))
+        best, means = (-1.0, 0.0, 1.0, (0.0, 0.0)), []
+        for size in sizes:
+            for turn in turns:
+                t = np.radians(turn)
+                R = size * np.array([[np.cos(t), -np.sin(t)], [np.sin(t), np.cos(t)]])
+                turned = (holes - center) @ R.T + center
+                m = _sample(score, turned[None, :, :] + offsets[:, None, :], region_mm, px_per_mm).mean(axis=1)
+                means.append(m)
+                i = int(np.argmax(m))
+                if m[i] > best[0]:
+                    best = (float(m[i]), float(turn), float(size), tuple(offsets[i]))
         return best, np.concatenate(means)
 
-    coarse = np.arange(-max_mm, max_mm + 1e-9, 0.1)
-    (peak, turn, shift), means = search(np.arange(-max_deg, max_deg + 1e-9, 0.25), coarse)
+    lo, hi = scales
+    (peak, turn, size, shift), means = search(np.arange(-max_deg, max_deg + 1e-9, 0.25),
+                                              np.arange(lo, hi + 1e-9, 0.004), np.arange(-max_mm, max_mm + 1e-9, 0.1))
     typical = float(np.median(means))
-    (peak, turn, shift), _ = search(np.arange(turn - 0.25, turn + 0.25 + 1e-9, 0.05),
-                                    np.arange(-0.12, 0.12 + 1e-9, 0.02), around=shift)
+    (peak, turn, size, shift), _ = search(np.arange(turn - 0.25, turn + 0.25 + 1e-9, 0.05),
+                                          np.arange(size - 0.004, size + 0.004 + 1e-9, 0.001),
+                                          np.arange(-0.12, 0.12 + 1e-9, 0.02), around=shift)
     contrast = peak / max(typical, 1e-6)
     report = {"board": board.name, "shift_mm": [round(float(shift[0]), 2), round(float(shift[1]), 2)],
-              "turn_deg": round(float(turn), 2), "contrast": round(float(contrast), 2)}
+              "turn_deg": round(float(turn), 2), "scale": round(float(size), 3), "contrast": round(float(contrast), 2)}
     if contrast < 1.5:
         report["problem"] = (f"board {board.name}: couldn't find its hole grid (contrast {contrast:.2f}), so its "
                              f"printed position is used")
@@ -173,4 +182,7 @@ def register(board: Board, view: np.ndarray, region_mm, px_per_mm: float, max_mm
     if max(abs(shift[0]), abs(shift[1])) > max_mm - 0.15:
         report["problem"] = (f"board {board.name}: its holes fit best at the edge of the search, so it may sit a "
                              f"pitch off its outline")
-    return board.moved(shift, turn), report
+    elif not lo + 0.002 < size < hi - 0.002:
+        report["problem"] = (f"board {board.name}: its holes fit best at the edge of the scales searched "
+                             f"({lo}-{hi}): check the carrier printed at 100% and the camera's height")
+    return board.moved(shift, turn, size), report

@@ -67,7 +67,8 @@ def cmd_check(args, bench: dict, parts: dict) -> int:
     for board, report in reader.register_all(boards, view, area, bench["reader"]):
         found.append(board)
         print(f"board {report['board']}: holes found {report['shift_mm'][0]:+.2f}, {report['shift_mm'][1]:+.2f} mm "
-              f"and {report['turn_deg']:+.2f}° from its outline, contrast {report['contrast']:.1f}"
+              f"and {report['turn_deg']:+.2f}° from its outline, looking {report.get('scale', 1):.3f}x life size "
+              f"(its top stands above the sheet), contrast {report['contrast']:.1f}"
               + (f"\n  ! {report['problem']}" if "problem" in report else ""))
     OUT.mkdir(parents=True, exist_ok=True)
     path = OUT / f"check-{stamp()}.png"

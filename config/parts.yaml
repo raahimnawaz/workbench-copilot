@@ -7,9 +7,10 @@ breadboard:                         # full-size, 830 tie points
   # Pitches from column a. The center channel between e and f is 3 pitches wide.
   columns: {a: 0, b: 1, c: 2, d: 3, e: 4, f: 7, g: 8, h: 9, i: 10, j: 11}
   strips: [abcde, fghij]            # in each row, the holes of one strip are connected
-  # Power rails run the board's length. Pitches from column a (negative is beyond a, past j is beyond j).
-  # Rough for a typical 830 board: check them on the reader's grid overlay (scripts/read_board.py check).
-  rails: {"a-": -3.2, "a+": -2.2, "j+": 13.2, "j-": 14.2}
+  # Power rails run the board's length: pitches from column a (negative is beyond a, past 11 is beyond j).
+  # Measured on Raahim's board from a check photo (Oct 28): each side has a - row and a + row, marked by the
+  # blue and red stripes beside them. The reader's check drawing shows them as thin blue and red lines.
+  rails: {"a-": -3.93, "a+": -2.85, "j-": 13.74, "j+": 14.8}
   body_mm: [165.1, 54.6]            # length along the rows, width across; the holes sit centered in it
 
 modules:

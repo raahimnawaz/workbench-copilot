@@ -58,7 +58,7 @@ def test_holes_strips_and_rails():
     hit = b.locate(b.hole("f10") + [0.4, 0.3])
     assert (hit.hole, hit.node, hit.row) == ("f10", "10f-j", 10) and hit.distance_mm == pytest.approx(0.5)
     assert b.locate(b.hole("c41")).node == "41a-e"
-    rail = b.locate(b.at(30.3, -2.2))
+    rail = b.locate(b.at(30.3, PARTS["breadboard"]["rails"]["a+"]))
     assert (rail.hole, rail.node, rail.row) == ("a+", "rail a+", None) and rail.distance_mm < 1e-9
     assert b.locate(b.at(30, 5.5)).hole in ("e30", "f30")  # mid-channel goes to the nearer side
     length, width = np.ptp(b.body() @ np.array([np.asarray(b.u), np.asarray(b.v)]).T, axis=0)
@@ -78,6 +78,24 @@ def test_registration_finds_a_board_off_its_outline():
     found, report = breadboard.register(configured, view, area, bench["reader"]["px_per_mm"])
     assert "problem" not in report and report["contrast"] > 3
     assert np.abs(found.holes()[1] - actual.holes()[1]).max() < 0.15
+
+
+def test_registration_finds_how_much_larger_the_board_looks():
+    # Oct 28, the real bench: the board's top stands about 10 mm above the sheet, so it looked 1.9% larger, and an
+    # unscaled grid fitted the middle of the board but sat a millimeter off the holes at both ends.
+    frame, actual, bench = photo(shift_mm=(-0.3, 0.5), turn_deg=0.3, scale=1.03)
+    _, (configured,), area, view = reader.locate_boards(frame, bench, PARTS)
+    found, report = breadboard.register(configured, view, area, bench["reader"]["px_per_mm"])
+    assert report["scale"] == pytest.approx(1.03, abs=0.003) and "problem" not in report
+    assert np.abs(found.holes()[1] - actual.holes()[1]).max() < 0.15
+    assert found.locate(actual.hole("j63")).hole == "j63" and found.locate(actual.hole("a1")).distance_mm < 0.15
+
+
+def test_reader_reads_a_board_that_looks_larger_than_life():
+    frame, actual, bench = photo(shift_mm=(0.4, -0.3), turn_deg=-0.2, scale=1.03)
+    result = reader.read_board(frame, bench, PARTS, sam_for(bench, actual), EYES, budget(), ROOT)
+    assert {tuple(sorted(w["ends"])) for w in result["wires"]} == {tuple(sorted((a, z))) for a, z, _ in WIRES}
+    assert result["mismatches"][0]["hole"] == "a22" and result["endpoint_residual_mm"]["max"] < 0.6
 
 
 def test_registration_without_holes_keeps_the_printed_position():

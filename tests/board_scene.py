@@ -47,17 +47,18 @@ def bar(board, a: str, b: str, width=WIRE_MM) -> np.ndarray:
     """A flat jumper's outline on the carrier: a bar from hole a's center to hole b's."""
     pa, pb = board.hole(a), board.hole(b)
     d = (pb - pa) / np.linalg.norm(pb - pa)
-    n = np.array([-d[1], d[0]]) * width / 2
+    n = np.array([-d[1], d[0]]) * width * board.scale / 2
     return np.array([pa + n, pb + n, pb - n, pa - n])
 
 
-def carrier_image(bench: dict, wires=WIRES, shift_mm=(0.0, 0.0), turn_deg=0.0) -> tuple:
-    """(the carrier at S px/mm with the board and wires, the board where it actually lies)."""
+def carrier_image(bench: dict, wires=WIRES, shift_mm=(0.0, 0.0), turn_deg=0.0, scale=1.0) -> tuple:
+    """(the carrier at S px/mm with the board and wires, the board where it actually lies). scale > 1 draws the
+    board larger than life, as the camera sees a board whose top stands above the sheet."""
     w_mm, h_mm = bench["carrier"]["paper_mm"]
     img = np.full((int(round(h_mm * S)), int(round(w_mm * S)), 3), 255, np.uint8)
     tags.draw(img, bench["carrier"], S)
     (board,) = breadboard.boards_from(bench, PARTS)
-    board = board.moved(shift_mm, turn_deg)
+    board = board.moved(shift_mm, turn_deg, scale)
     cv2.fillConvexPoly(img, _poly(board.body(), S, center_offset=0.5), (226, 226, 226), cv2.LINE_AA, 4)
     u, v = np.asarray(board.u), np.asarray(board.v)
     for c in board.holes()[1]:  # holes about 1 mm square
@@ -81,10 +82,10 @@ def camera_homography() -> np.ndarray:
     return np.array([[1, 0, 960], [0, 1, 540], [0, 0, 1]]) @ turn @ tilt @ center
 
 
-def photo(shift_mm=(0.0, 0.0), turn_deg=0.0, wires=WIRES, seed=0) -> tuple:
+def photo(shift_mm=(0.0, 0.0), turn_deg=0.0, wires=WIRES, seed=0, scale=1.0) -> tuple:
     """(a 1920 x 1080 camera frame of the bench, the board where it actually lies, the bench config)."""
     bench = bench_config()
-    img, board = carrier_image(bench, wires, shift_mm, turn_deg)
+    img, board = carrier_image(bench, wires, shift_mm, turn_deg, scale)
     img = cv2.GaussianBlur(img, (0, 0), 1.2)  # the print's own softness, and no aliasing when the camera shrinks it
     px_to_mm = np.array([[1 / S, 0, 0.5 / S], [0, 1 / S, 0.5 / S], [0, 0, 1]])
     cam = cv2.warpPerspective(img, camera_homography() @ px_to_mm, (1920, 1080), flags=cv2.INTER_LINEAR,

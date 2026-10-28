@@ -21,7 +21,7 @@ Everything in this repository was written during the hackathon, starting Oct 26,
 | `wbc/reflex/fsr_link.py`, `wbc/reflex/fsr_cal.py` | The force sensor link (500 Hz frames with a CRC), per-sensor calibration fit and creep analysis |
 | `wbc/perception/` | The SAM 3.1 client (one noun phrase per request, sent in parallel; masks decoded and drawn), camera capture, and the board reader: the carrier's tags, the top-down board view, the hole grid fit, wire tracing, the netlist and its check against `pins.h` |
 | `scripts/sam_probe.py`, `scripts/read_board.py`, `scripts/make_carrier.py` | What SAM 3.1 finds in a still; the board reader on a still; the printable carrier sheet |
-| `config/`, `fixtures/`, `scripts/`, `tests/` | Model routing config, the recorded bench for `--sim`, the smoke test, gripper probe and force sensor tools, 205 tests |
+| `config/`, `fixtures/`, `scripts/`, `tests/` | Model routing config, the recorded bench for `--sim`, the smoke test, gripper probe and force sensor tools, 207 tests |
 | `firmware/dut_demo/` | The Act 1 demo board firmware, with the wiring bug planted on purpose |
 | `firmware/fsr_sampler/` | ESP32 firmware that samples the four jaw sensors at 500 Hz and streams them over USB |
 
@@ -189,7 +189,7 @@ python scripts/sam_probe.py replay .wbc/vision/sam-<time>.json   # free: parse a
 
 1. **Tags.** The breadboard lies on a printed carrier sheet with four AprilTags (tag36h11, ids 10–13, 20 mm). Their corners map the photo onto the sheet in millimeters, so a bumped camera or a refocus doesn't move the hole grid, and there's no camera calibration to keep.
 2. **Top-down view.** Code cuts out the board area at 5.5 px/mm, about 970 × 360 px. That's under the 1008 px SAM works at, so thin wires keep their detail, and SAM's masks come back in board millimeters.
-3. **SAM 3.1 and the hole grid.** SAM segments `jumper wire` in the view. Meanwhile code finds where the board really lies: its holes are small dark squares, and it shifts and turns the grid, by up to 1.2 mm and 1°, until the predicted holes sit on the darkest spots. That's under half a pitch, because a grid a whole pitch off fits just as well.
+3. **SAM 3.1 and the hole grid.** SAM segments `jumper wire` in the view. Meanwhile code finds where the board really lies: its holes are small dark squares, and it shifts and turns the grid, by up to 1.2 mm and 1°, until the predicted holes sit on the darkest spots. That's under half a pitch, because a grid a whole pitch off fits just as well. It scales the grid too: the board's top stands about 10 mm above the sheet the tags are printed on, so from 30 cm the camera sees it about 2% larger than life, enough to put the end rows a millimeter off. Only the right scale lines up all 63 rows.
 4. **Wires.** Each mask is thinned to its center line and followed out to both tips. A flat jumper's legs go into its holes at its tips, so each tip snaps to the nearest hole within 1.2 mm, and a tip farther from every hole is flagged. A mask that branches is flagged as two wires that may touch.
 5. **Netlist and `pins.h`.** Each row's a–e and f–j strips and each rail is a node, wires join nodes, and the ESP32's and display's pins sit in holes given in `config/bench.yaml`. Plain code then compares each display pin's GPIO with `pins.h` and reports the mismatch, its wire and hole, and the line to fix.
 

@@ -141,10 +141,13 @@ def trace(instances: list, view: np.ndarray, region_mm, px_per_mm: float, boards
             continue
         length_px = sum(np.hypot(a[0] - b[0], a[1] - b[1]) for a, b in zip(path, path[1:]))
         width_mm = area_mm2 / max(length_px / px_per_mm, 1e-6)
-        reach = min(len(path) - 1, max(2, int(round(3 * width_mm * px_per_mm))))
+        # Thinning forks toward a square end's corners, so the path's last wire-width may veer off the axis:
+        # march to the tip from a wire-width back, along the line from three widths further in.
+        trim = min(len(path) // 3, int(round(width_mm * px_per_mm)))
+        reach = min(len(path) - 1 - trim, max(2, int(round(3 * width_mm * px_per_mm))))
         ends = []
-        for tip_i, back_i in ((0, reach), (-1, -1 - reach)):
-            (ty, tx), (by, bx) = path[tip_i], path[back_i]
+        for start_i, back_i in ((trim, trim + reach), (-1 - trim, -1 - trim - reach)):
+            (ty, tx), (by, bx) = path[start_i], path[back_i]
             d = np.array([tx - bx, ty - by], float)
             d /= max(np.linalg.norm(d), 1e-9)
             tip = _tip(mask, np.array([tx, ty], float), d)

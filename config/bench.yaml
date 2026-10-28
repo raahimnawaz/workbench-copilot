@@ -11,17 +11,21 @@ carrier:                            # printed by scripts/make_carrier.py: print 
 
 boards:
   # Each breadboard's hole a1 on the carrier, the way its row numbers grow, and the way its letters run
-  # from a to j. This one is centered on the sheet with row 1 on the left and column a nearest you.
-  main: {a1_mm: [60.96, 121.92], rows_toward: [1, 0], letters_toward: [0, -1]}
+  # from a to j. This one is centered on the sheet. Raahim's board (Oct 28): row 1 at the sheet's left and
+  # column a along its top edge, the far side when the sheet reads upright.
+  main: {a1_mm: [60.96, 93.98], rows_toward: [1, 0], letters_toward: [0, 1]}
 
 reader:
   px_per_mm: 5.5                    # the top-down board view SAM sees; the open SAM 3 works at 1008 px
-  margin_mm: 5                      # around the boards' bodies
+  margin_mm: 7                      # around the boards' bodies, which look up to 6% larger (register_scale)
   wire_phrase: jumper wire
   snap_mm: 1.2                      # a wire end farther than this from every hole is flagged
   tip_inset_mm: 0.0                 # from the end of a wire's mask back to its hole: calibrate on the golden set
   register_mm: 1.2                  # how far a board may sit from its printed outline (under half a pitch)
   register_deg: 1.0
+  # The board's top is about 10 mm above the sheet, so it looks larger than life: 1.019 on Oct 28 with the
+  # C920 about 30 cm up. A printer that didn't print at exactly 100% adds its own error.
+  register_scale: [0.97, 1.06]
 
 # Which hole each module's headers start in, and which way along the rows they run (+1 or -1).
 # Empty until the demo board is wired: without it the reader still traces every wire, but can't
