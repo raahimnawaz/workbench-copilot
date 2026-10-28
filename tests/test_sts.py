@@ -13,6 +13,8 @@ class FakeServo:
         self.error = 0
         self.writes = []
         self.out = bytearray()
+        self.drop = 0          # replies still to lose, one per request
+        self.ignore = set()    # addresses whose writes are answered but don't land
 
     def set_u16(self, addr, value):
         self.regs[addr], self.regs[addr + 1] = value & 0xFF, value >> 8
@@ -27,13 +29,17 @@ class FakeServo:
         sid, instr, params = data[2], data[4], data[5:-1]
         if self.silent or sid != self.id:
             return
+        if self.drop:
+            self.drop -= 1
+            return
         reply = b""
         if instr == sts.READ:
             addr, n = params
             reply = bytes(self.regs[addr:addr + n])
         elif instr == sts.WRITE:
             addr, payload = params[0], bytes(params[1:])
-            self.regs[addr:addr + len(payload)] = payload
+            if addr not in self.ignore:
+                self.regs[addr:addr + len(payload)] = payload
             self.writes.append((addr, payload))
         body = bytes([self.id, len(reply) + 2, self.error]) + reply
         pkt = b"\xff\xff" + body + bytes([sts.checksum(body) ^ (0xFF if self.corrupt else 0)])
@@ -50,6 +56,23 @@ class FakeServo:
 
 def bus_for(servo):
     return sts.Bus("fake", serial_factory=lambda port, **kw: servo)
+
+
+def gripper(position=2000):
+    """A fake servo set up like this arm's gripper after lerobot-calibrate and LeRobot's configure()."""
+    servo = FakeServo()
+    servo.set_u16(56, position)
+    servo.set_u16(sts.MIN_POSITION_LIMIT, 1278)
+    servo.set_u16(sts.MAX_POSITION_LIMIT, 2827)
+    servo.set_u16(sts.TORQUE_LIMIT, 500)
+    servo.set_u16(sts.MAX_TORQUE_LIMIT, 500)
+    servo.set_u16(sts.PROTECTION_CURRENT, 250)
+    servo.regs[sts.P_COEFFICIENT] = 16
+    servo.regs[sts.UNLOADING_CONDITION] = 0b101100  # overheat, current and overload
+    servo.regs[sts.OVERLOAD_TORQUE] = 25
+    servo.regs[sts.PROTECTION_TIME] = 200
+    servo.regs[sts.PROTECTIVE_TORQUE] = 20
+    return servo
 
 
 class FakeClock:
@@ -123,26 +146,36 @@ def test_watch_never_writes():
     assert servo.writes == []
 
 
+def test_read_settings_reads_without_writing():
+    servo = gripper()
+    s = probe.read_settings(bus_for(servo), 6)
+    assert (s["min_position"], s["max_position"], s["max_torque_limit"], s["overload_torque"]) == (1278, 2827, 500, 25)
+    assert s["torque_on"] == 0 and s["protection"] >> probe.OVERLOAD & 1
+    assert servo.writes == []
+    text = " ".join(probe.describe_settings(s))
+    assert "Torque is off" in text and "above 25% for 2.00 s is cut to 20%" in text
+
+
 def test_squeeze_ramps_caps_torque_and_releases():
-    servo, clock = FakeServo(), FakeClock()
-    servo.set_u16(56, 2000)               # jaws start open at 2000
-    servo.set_u16(sts.TORQUE_LIMIT, 1000)  # the power-up value, restored at the end
-    rows, _ = probe.run_probe(bus_for(servo), 6, "squeeze", closed=2300, torque_limit=300, speed=300,
+    servo, clock = gripper(position=2000), FakeClock()  # jaws open at 2000; this arm closes toward lower
+    rows, _ = probe.run_probe(bus_for(servo), 6, "squeeze", closed=1700, torque_limit=200, speed=300,
                               hz=100, seconds=2.0, clock=clock, sleep=clock.sleep)
     order = [addr for addr, _ in servo.writes]
     # goal set to the current position, then the torque cap, then torque on
     assert order[:3] == [sts.GOAL_POSITION, sts.TORQUE_LIMIT, sts.TORQUE_ENABLE]
-    assert servo.writes[1][1] == (300).to_bytes(2, "little")
+    assert servo.writes[0][1] == (2000).to_bytes(2, "little")
+    assert servo.writes[1][1] == (200).to_bytes(2, "little")
     goals = [r["goal"] for r in rows]
-    assert goals == sorted(goals) and goals[-1] == 2300
-    reached = next(r["t"] for r in rows if r["goal"] == 2300)
+    assert goals == sorted(goals, reverse=True) and goals[-1] == 1700
+    reached = next(r["t"] for r in rows if r["goal"] == 1700)
     assert 0.9 <= reached <= 1.1  # 300 ticks at 300 ticks/s
     assert servo.writes[-2] == (sts.TORQUE_ENABLE, b"\x00")
-    assert servo.writes[-1] == (sts.TORQUE_LIMIT, (1000).to_bytes(2, "little"))
+    assert servo.writes[-1] == (sts.TORQUE_LIMIT, (500).to_bytes(2, "little"))  # the cap it had before
+    assert servo.regs[sts.TORQUE_ENABLE] == 0
 
 
 def test_squeeze_releases_torque_when_the_run_crashes():
-    servo, clock = FakeServo(), FakeClock()
+    servo, clock = gripper(), FakeClock()
     calls = iter(range(1000))
 
     def poll():
@@ -151,15 +184,103 @@ def test_squeeze_releases_torque_when_the_run_crashes():
         return []
 
     with pytest.raises(RuntimeError):
-        probe.run_probe(bus_for(servo), 6, "squeeze", closed=2300, hz=100, poll_marks=poll,
+        probe.run_probe(bus_for(servo), 6, "squeeze", closed=1700, hz=100, poll_marks=poll,
                         clock=clock, sleep=clock.sleep)
     assert (sts.TORQUE_ENABLE, b"\x00") in servo.writes
+    assert servo.regs[sts.TORQUE_ENABLE] == 0
 
 
-@pytest.mark.parametrize("kwargs", [{}, {"closed": 2300, "torque_limit": 900}])
-def test_squeeze_refuses_unsafe_settings(kwargs):
+@pytest.mark.parametrize("position, kwargs", [
+    (2000, {}),                                         # no closed position
+    (2000, {"closed": 1200}),                           # past the closed end of the limits
+    (2000, {"closed": 1700, "torque_limit": 250}),      # where overload protection starts
+    (2000, {"closed": 1700, "torque_limit": 900}),      # over the stored maximum
+    (2000, {"closed": 1700, "gain": 100}),              # a gain out of range
+    (1270, {"closed": 1278}),                           # jaws resting past their limit: torque-on would snap
+    (1290, {"closed": 1278}),                           # jaws already closed, with nothing between them
+])
+def test_squeeze_refuses_unsafe_settings_before_writing_anything(position, kwargs):
+    servo = gripper(position=position)
     with pytest.raises(ValueError):
-        probe.run_probe(bus_for(FakeServo()), 6, "squeeze", **kwargs)
+        probe.run_probe(bus_for(servo), 6, "squeeze", **kwargs)
+    assert servo.writes == []
+
+
+def test_a_cap_over_25_percent_is_allowed_when_overload_protection_is_off():
+    s = probe.read_settings(bus_for(gripper()), 6)
+    s["protection"] = 0b001100
+    probe.check_squeeze(s, 1700, 400)
+    with pytest.raises(ValueError):
+        probe.check_squeeze(s, 1700, 501)  # still not over the stored maximum
+
+
+def test_a_squeeze_gain_goes_on_before_torque_and_comes_off_after():
+    servo, clock = gripper(), FakeClock()
+    probe.run_probe(bus_for(servo), 6, "squeeze", closed=1700, gain=32, hz=100, seconds=0.5,
+                    clock=clock, sleep=clock.sleep)
+    writes = [(addr, payload[0]) for addr, payload in servo.writes]
+    on = writes.index((sts.TORQUE_ENABLE, 1))
+    assert writes[:3] == [(sts.LOCK, 0), (sts.P_COEFFICIENT, 32), (sts.LOCK, 1)] and on > 3
+    assert writes[-3:] == [(sts.LOCK, 0), (sts.P_COEFFICIENT, 16), (sts.LOCK, 1)]
+    assert servo.regs[sts.P_COEFFICIENT] == 16 and servo.regs[sts.LOCK] == 1
+
+
+def test_a_gain_that_does_not_take_keeps_torque_off():
+    servo, clock = gripper(), FakeClock()
+    servo.ignore = {sts.P_COEFFICIENT}
+    with pytest.raises(sts.STSError, match="gain reads 16, not 32"):
+        probe.run_probe(bus_for(servo), 6, "squeeze", closed=1700, gain=32, hz=100, seconds=0.5,
+                        clock=clock, sleep=clock.sleep)
+    assert (sts.TORQUE_ENABLE, b"\x01") not in servo.writes
+
+
+def test_torque_stays_off_if_the_hold_here_goal_does_not_take():
+    servo, clock = gripper(), FakeClock()
+    servo.ignore = {sts.GOAL_POSITION}  # still 0 from power-up: torque on would drive the jaws there
+    with pytest.raises(sts.STSError, match="didn't take"):
+        probe.run_probe(bus_for(servo), 6, "squeeze", closed=1700, hz=100, seconds=1.0,
+                        clock=clock, sleep=clock.sleep)
+    assert (sts.TORQUE_ENABLE, b"\x01") not in servo.writes
+
+
+def test_a_missed_reply_is_skipped():
+    servo, clock = gripper(), FakeClock()
+    servo.drop = probe.MISSES - 1
+    rows, _ = probe.run_probe(bus_for(servo), 6, "watch", hz=100, seconds=0.5, clock=clock, sleep=clock.sleep)
+    assert 45 <= len(rows) <= 51
+
+
+def test_a_silent_servo_stops_the_run_and_its_rows_are_kept():
+    servo, clock = gripper(), FakeClock()
+    calls = iter(range(1000))
+
+    def poll():
+        if next(calls) == 19:
+            servo.silent = True
+        return []
+
+    rows = []
+    with pytest.raises(sts.STSError, match="stopped answering"):
+        probe.run_probe(bus_for(servo), 6, "squeeze", closed=1700, hz=100, rows=rows, poll_marks=poll,
+                        clock=clock, sleep=clock.sleep)
+    assert len(rows) == 20
+
+
+def test_release_reads_back_that_torque_is_off():
+    servo = gripper()
+    servo.regs[sts.TORQUE_ENABLE] = 1
+    assert probe.release(bus_for(servo), 6) and servo.regs[sts.TORQUE_ENABLE] == 0
+    assert not probe.release(bus_for(FakeServo(silent=True)), 6)
+
+
+def test_jaws_and_flags_say_where_the_jaws_were():
+    settings = {"min_position": 1331, "max_position": 2827}
+    rows = [{"t": i / 100, "position": p, "error": 0x20 if i == 3 else 0}
+            for i, p in enumerate([2827, 2500, 1500, 1331, 1340])]
+    lines = probe.jaws(rows, [(0.03, "touching")], settings)
+    assert lines[0] == "The jaws went from 1331 (0.0% open) to 2827 (100.0% open)."
+    assert lines[1] == "'touching' at 0.03 s: 1331 (0.0% open)"
+    assert probe.flags(rows) == ["The servo flagged overload, first at 0.03 s, in 1 of 5 readings."]
 
 
 def test_marks_are_timestamped():
