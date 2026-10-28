@@ -46,11 +46,19 @@ class FakeBus:
             if motor not in self.arm.deaf:
                 self.arm.goal_raw[motor] = value
             self.arm.events.append(f"goal {motor}")
+        elif name == "P_Coefficient":
+            if motor not in self.arm.deaf:
+                self.arm.gain[motor] = value
+            self.arm.events.append(f"gain {motor} {value}")
         else:
             assert name == "Torque_Limit"
             self.arm.torque_limit[motor] = value
             if value != 1000:
                 self.arm.events.append(f"cap {motor} {value}")
+
+    def read(self, name, motor, *, normalize=True, num_retry=0):
+        assert name == "P_Coefficient" and not normalize
+        return self.arm.gain[motor]
 
     def sync_write(self, name, values, *, normalize=True, num_retry=0):
         assert name == "Torque_Enable" and not normalize and not any(values.values())
@@ -82,6 +90,7 @@ class FakeArm:
         self.goal_raw = {m: 2047 for m in JOINTS}
         self.torque = {m: False for m in JOINTS}
         self.torque_limit = {m: 1000 for m in JOINTS}
+        self.gain = {m: 32 for m in JOINTS}  # the servos' factory P gain
         self.stuck, self.deaf, self.jolt, self.runaway = set(stuck), set(deaf), jolt or {}, runaway or {}
         self.calibrated = calibrated
         self.calibration = {m: SimpleNamespace(range_min=2047 - 1200, range_max=2047 + 1200) for m in JOINTS}
@@ -98,6 +107,7 @@ class FakeArm:
 
     def configure(self):  # like LeRobot's: set the motors up with torque off, then turn it on
         self.bus.disable_torque()
+        self.gain = {m: 16 for m in JOINTS}
         self.events.append("configured")
         self.bus.enable_torque()
 
@@ -180,6 +190,29 @@ def test_joints_come_on_one_at_a_time_after_every_goal_is_set_and_torque_is_capp
     lazy = FakeArm(start={"elbow_flex": -55.3})  # LeRobot's configure() alone, with the stale goals
     lazy.configure()
     assert lazy.pos["elbow_flex"] == pytest.approx(0.0)
+
+
+def test_a_gain_is_set_after_lerobots_setup_and_before_any_torque():
+    arm = FakeArm()
+    first_moves.power_on(arm, JOINTS, 50, [], gains={"elbow_flex": 32}, clock=Clock())
+    events = arm.events
+    assert events.index("configured") < events.index("gain elbow_flex 32") < events.index("torque on shoulder_pan")
+    assert arm.gain == {**{m: 16 for m in JOINTS}, "elbow_flex": 32}
+
+
+def test_a_gain_that_doesnt_take_keeps_torque_off():
+    arm = FakeArm(deaf={"elbow_flex"})
+    ok, record, said = session(arm, [""], gains={"elbow_flex": 32})
+    assert not ok and not any(e.startswith("torque on") for e in arm.events)
+    assert "elbow's gain didn't take" in record["stopped"]
+
+
+def test_gains_parse_as_joint_equals_value():
+    assert first_moves.parse_gains(["elbow_flex=32", "wrist_flex=24"]) == {"elbow_flex": 32, "wrist_flex": 24}
+    assert first_moves.parse_gains([]) == {}
+    for bad in ["elbow=32", "elbow_flex=200", "elbow_flex=", "elbow_flex", "elbow_flex=-8"]:
+        with pytest.raises(ValueError):
+            first_moves.parse_gains([bad])
 
 
 def test_a_servo_that_runs_away_as_its_torque_comes_on_is_cut_before_the_next_joint():

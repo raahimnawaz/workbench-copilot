@@ -11,7 +11,7 @@ Entry for the Meta Global AI Developer Hackathon (Indie track, Push the Frontier
 ## Commands (Python 3.12 via uv, which lives in `~/.local/bin`)
 ```bash
 uv venv --clear --python 3.12 && uv pip install -e '.[voice,dev,arm,firmware]'   # also after moving the folder: .venv stores absolute paths
-.venv/bin/python -m pytest -q                                   # 112 offline tests; CI runs them on every push
+.venv/bin/python -m pytest -q                                   # 115 offline tests; CI runs them on every push
 .venv/bin/python scripts/smoke_test.py                          # PAID, about $0.01: one call to each hosted model
 echo "Zero response on SPI. Check my wiring against the firmware." | .venv/bin/python -m wbc.agent --sim   # PAID, about $0.04
 .venv/bin/python scripts/gripper_probe.py --list                # free: find the servo bus port

@@ -9,8 +9,11 @@ because it drops when they do.
 
     python scripts/first_moves.py --port /dev/cu.usbmodem5B910297421
     python scripts/first_moves.py --port /dev/cu.usbmodem5B910297421 --joints elbow_flex
+    python scripts/first_moves.py --port /dev/cu.usbmodem5B910297421 --joints elbow_flex --gain elbow_flex=32
 
-Only the joints in --joints get torque, so hold the rest of the arm when you test a few. It needs LeRobot
+Only the joints in --joints get torque, so hold the rest of the arm when you test a few. --gain sets a joint's
+P gain after LeRobot's setup has set every joint to 16: this arm's elbow, a weaker 1:191 servo, can't lift its
+folded forearm at 16. It needs LeRobot
 (uv pip install -e '.[lerobot]') and a calibration from lerobot-calibrate under the same --id. Ctrl-C stops
 the moves, and the arm holds where it is until you release it. Each run writes
 .wbc/logs/first-moves-<time>.json. Close any other program using the port first.
@@ -50,6 +53,7 @@ MAX_JUMP = 3.0    # degrees a joint may move on its own as torque comes on befor
 MAX_STRAY = 5.0   # degrees a joint may be from where it should be during a move before every motor is cut
 MAX_STEP = 5.0    # LeRobot's max_relative_target: no goal goes more than this far from where the joint is
 TORQUE_CAP = 50   # percent of full torque while this runs (each servo's Torque_Limit), unless --torque says
+GAIN_RANGE = (8, 64)  # P gains --gain accepts. LeRobot's configure() sets every joint to 16
 
 
 class Stopped(Exception):
@@ -91,6 +95,18 @@ def choose(ask, prompt: str, keys: str) -> str:
             return reply[0]
 
 
+def parse_gains(items: list) -> dict:
+    """--gain values such as "elbow_flex=32", as {joint: P}. Raises ValueError on a bad one."""
+    gains = {}
+    for item in items:
+        joint, _, value = item.partition("=")
+        if joint not in JOINTS or not value.isdigit() or not GAIN_RANGE[0] <= int(value) <= GAIN_RANGE[1]:
+            raise ValueError(f"--gain takes JOINT=P, with a joint from {', '.join(JOINTS)} and P from "
+                             f"{GAIN_RANGE[0]} to {GAIN_RANGE[1]}, not {item!r}")
+        gains[joint] = int(value)
+    return gains
+
+
 def cut_torque(robot) -> None:
     """Every motor off at once. This is one broadcast write that servos don't answer, so a servo flagging
     overload can't refuse it the way it makes LeRobot's one-servo writes fail. Sent twice in case one is lost."""
@@ -127,15 +143,17 @@ def watch(robot, joint: str, powered: list, still: dict, shift: dict, samples: l
                           f"(load {load[worst]:+d})")
 
 
-def power_on(robot, joints: list, cap: int, samples: list, clock=time.monotonic) -> dict:
+def power_on(robot, joints: list, cap: int, samples: list, gains: dict | None = None,
+             clock=time.monotonic) -> dict:
     """Turn torque on for `joints`, one at a time from the base out, without the arm moving. Returns how far
     each powered joint shifted, in degrees.
 
     A servo drives to whatever its goal register holds the moment torque comes on. After calibration changed
     the homing offsets and the arm was moved by hand, that can be far from where the arm is, and LeRobot's
     connect() turns torque on without setting it. So this runs LeRobot's own configure() with its final
-    torque-on held back, caps the torque, sets each goal to the present position and reads it back, then
-    turns the joints on one by one, watching the arm for 0.3 s after each."""
+    torque-on held back, sets the P gains in `gains` over the 16 it gives every joint, caps the torque, sets
+    each goal to the present position and reads it back, then turns the joints on one by one, watching the
+    arm for 0.3 s after each."""
     bus = robot.bus
     enable = bus.enable_torque
     bus.enable_torque = lambda *args, **kwargs: None  # configure() ends by turning torque on: not yet
@@ -143,6 +161,10 @@ def power_on(robot, joints: list, cap: int, samples: list, clock=time.monotonic)
         robot.configure()
     finally:
         del bus.enable_torque  # back to the bus's own method
+    for m, p in (gains or {}).items():  # an EEPROM register, which configure() leaves unlocked
+        bus.write("P_Coefficient", m, p, normalize=False, num_retry=2)
+        if bus.read("P_Coefficient", m, normalize=False, num_retry=2) != p:
+            raise RuntimeError(f"the {NAMES[m]}'s gain didn't take, so torque stayed off")
     for m in JOINTS:
         bus.write("Torque_Limit", m, cap * 10, normalize=False, num_retry=2)
     present = bus.sync_read("Present_Position", normalize=False, num_retry=2)
@@ -325,7 +347,8 @@ def summary(results: list) -> str:
 
 
 def run(robot, record: dict, joints=JOINTS, step: float = 10.0, seconds: float = 2.0, hz: float = 50.0,
-        cap: int = TORQUE_CAP, ask=input, say=print, sleep=time.sleep, clock=time.monotonic) -> bool:
+        cap: int = TORQUE_CAP, gains: dict | None = None, ask=input, say=print, sleep=time.sleep,
+        clock=time.monotonic) -> bool:
     """The whole session on a connected bus: checks, torque on, each joint, then release. Fills `record`
     (results, samples, power_on, power_on_shift, stopped) as it goes, so it survives an early stop. True if
     every joint tried moved as asked."""
@@ -348,7 +371,7 @@ def run(robot, record: dict, joints=JOINTS, step: float = 10.0, seconds: float =
     limits = robot.bus.sync_read("Torque_Limit", normalize=False, num_retry=2)
     ok, holding = True, True
     try:
-        shift = power_on(robot, joints, cap, record["power_on"], clock=clock)
+        shift = power_on(robot, joints, cap, record["power_on"], gains=gains, clock=clock)
         record["power_on_shift"] = {m: round(v, 2) for m, v in shift.items()}
         say(f"Torque on at {cap}%, holding. The most any joint shifted as it came on was "
             f"{max(shift.values()):.1f}°.")
@@ -395,7 +418,15 @@ def main(argv=None) -> int:
     ap.add_argument("--seconds", type=float, default=2.0, help="how long each move takes, at least 1 (default 2)")
     ap.add_argument("--torque", type=int, default=TORQUE_CAP,
                     help=f"torque cap in percent of full, 10-100 (default {TORQUE_CAP})")
+    ap.add_argument("--gain", action="append", default=[], metavar="JOINT=P",
+                    help=f"a joint's P gain, set after LeRobot's setup gives every joint 16, e.g. elbow_flex=32 "
+                         f"({GAIN_RANGE[0]}-{GAIN_RANGE[1]}; repeat for more joints). It stays on the servo until "
+                         "LeRobot's setup runs again")
     args = ap.parse_args(argv)
+    try:
+        gains = parse_gains(args.gain)
+    except ValueError as e:
+        ap.error(str(e))
     if not 0 < args.degrees <= 20:
         ap.error("--degrees must be more than 0 and at most 20")
     if args.seconds < 1:
@@ -415,10 +446,11 @@ def main(argv=None) -> int:
         print(f"Can't reach the arm on {args.port}: {e}")
         return 1
     record = {"port": args.port, "id": args.id, "joints": args.joints, "degrees": args.degrees,
-              "seconds": args.seconds, "torque": args.torque}
+              "seconds": args.seconds, "torque": args.torque, "gains": gains}
     ok = False
     try:
-        ok = run(robot, record, joints=args.joints, step=args.degrees, seconds=args.seconds, cap=args.torque)
+        ok = run(robot, record, joints=args.joints, step=args.degrees, seconds=args.seconds, cap=args.torque,
+                 gains=gains)
     finally:
         cut_torque(robot)  # in case the run ended some way that skipped it
         try:
