@@ -9,7 +9,7 @@
 3. squeeze: put an object between the jaws. The gripper closes slowly toward --closed with a capped
    torque, then holds. Wait 2 s, then pull, twist or push the object. Type a label (e.g. "pull") and
    press Enter as you start each action. Ctrl-C ends the run and releases the gripper.
-       python scripts/gripper_probe.py --port /dev/cu.usbmodem5B910297421 squeeze --closed 1331
+       python scripts/gripper_probe.py --port /dev/cu.usbmodem5B910297421 squeeze --closed 1278
 
 Both start by printing the gripper's own settings: its position limits from lerobot-calibrate, its torque cap,
 and its overload protection. A squeeze refuses a --closed outside those limits, and a torque limit at or above
