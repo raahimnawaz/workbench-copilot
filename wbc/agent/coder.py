@@ -91,9 +91,9 @@ def sandbox_dir(root: Path) -> Path:
 def compile_in_sandbox(diff: str, root: Path, cfg: dict) -> tuple:
     """Build the firmware with `diff` applied, in a copy of the project. Returns (ok, compiled, log).
 
-    The copy keeps its own .pio build cache, so after the first build only the changed files recompile:
-    about 1 s against 14 s cold for the pins.h fix (Oct 28). An empty diff builds the firmware as it is,
-    which the agent does at start to warm that cache.
+    The copy keeps its own .pio build cache, so after the first build only the changed files recompile and
+    relink: the pins.h fix took 8.4 s warm against about 14 s cold (Oct 28). An empty diff builds the
+    firmware as it is, which the agent does at start to warm that cache.
     """
     cmd = (cfg.get("compile_cmd") or "").strip()
     if not cmd:

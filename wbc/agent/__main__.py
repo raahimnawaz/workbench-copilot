@@ -74,7 +74,7 @@ def main(argv=None) -> int:
         inbox.put(None)
 
     threading.Thread(target=typed, daemon=True).start()
-    if not args.hear:  # build the firmware once now, so the session's first patch compiles in about a second
+    if not args.hear:  # build the firmware once now, so the session's first patch skips the cold build
         threading.Thread(target=coder.compile_in_sandbox, args=("", config.ROOT, models["coder"]), daemon=True).start()
     if args.voice or args.hear:
         on_text = (lambda text: None) if args.hear else inbox.put  # listen_forever prints what it heard

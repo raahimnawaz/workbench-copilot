@@ -37,9 +37,9 @@ Everything in this repository was written during the hackathon, starting Oct 26,
 
 | Piece | State |
 |---|---|
-| Router loop on Muse Spark (Responses API) | Runs live. A spoken Act 1 on the recorded bench took about 63 s on Oct 28 in four router rounds. Code now fetches the bench facts first and stages checked patches itself, so the same turn takes two rounds. Not re-timed yet. |
+| Router loop on Muse Spark (Responses API) | Runs live. On Oct 28 a spoken Act 1 on the recorded bench took about 63 s in four router rounds. Code now fetches the bench facts first and stages checked patches itself, and the same turn takes 25 s in two rounds. |
 | Backup router on Muse Glimmer (Chat Completions) | Built and tested against a fake API. |
-| `ask_coder` on Muse Wonder | Runs live: Wonder wrote the Act 1 fix in about 7 s on Oct 28. The fix compiles in a sandbox copy in about 1–2 s once its build cache is warm. |
+| `ask_coder` on Muse Wonder | Runs live: Wonder wrote the Act 1 fix in 3–7 s on Oct 28. The fix compiles in a sandbox copy in about 8 s once its build cache is warm (about 14 s cold). |
 | Voice front end | The request format was checked against the live API on Oct 26. The wake phrase and the loudness gate that cuts the mic into utterances are tested on synthetic audio, and on Oct 28 they worked on the live mic (the Razer, run from Terminal.app). |
 | Budget guard | Built and tested. Spend persists in `.wbc/spend.json`. |
 | FK/IK | Tested on the real SO-101 URDF. 200 of 200 bench poses round-trip to within 0.2 mm and 0.5°, at about 33 ms per solve. |
