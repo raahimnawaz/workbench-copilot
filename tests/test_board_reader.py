@@ -277,7 +277,11 @@ def test_read_board_script_checks_and_reads_a_saved_photo(tmp_path, monkeypatch,
 
     assert script.main(["check", "--photo", str(path)]) == 0
     out = capsys.readouterr().out
-    assert "saw [10, 11, 12, 13]" in out and "holes found +0.5" in out and client.requests == []
+    import re
+
+    shift = re.search(r"holes found ([-+][\d.]+), ([-+][\d.]+) mm and ([-+][\d.]+)", out)
+    assert "saw [10, 11, 12, 13]" in out and client.requests == []
+    assert [float(v) for v in shift.groups()] == pytest.approx([0.6, -0.5, 0.4], abs=0.1)  # as the photo was made
 
     assert script.main(["read", "--photo", str(path)]) == 0
     out = capsys.readouterr().out
