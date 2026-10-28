@@ -174,11 +174,11 @@ SAM 3.1 on the Meta Model API takes one short noun phrase and one image per requ
 uv pip install -e '.[eyes]'
 python scripts/sam_probe.py cameras                  # free: which cameras macOS and OpenCV see
 python scripts/sam_probe.py capture --camera 0       # free: a 1920x1080 still in .wbc/vision/
-python scripts/sam_probe.py segment .wbc/vision/photo-<time>.png --phrase "jumper wire"   # $0.0025 per phrase
+python scripts/sam_probe.py segment .wbc/vision/photo-<time>.png --phrase "wire"   # $0.0025 per phrase
 python scripts/sam_probe.py replay .wbc/vision/sam-<time>.json   # free: parse and draw a saved reply again
 ```
 
-- Name the thing, not an instruction: `"jumper wire"`, not `"find the wires"`. A list or an "and" doesn't segment two things, so pass `--phrase` once per thing.
+- Name the thing, not an instruction: `"wire"`, not `"find the wires"`, and use the plainest word. On the bench, `"jumper wire"` matched nothing at all, where `"wire"` found every wire. A list or an "and" doesn't segment two things, so pass `--phrase` once per thing.
 - No match is a normal, empty result, not an error.
 - `segment` draws every mask over the photo in `.wbc/vision/sam-<time>.png`, lists each match's box, area and confidence, and keeps SAM's whole reply in the run's `.json`, so `replay` can parse it again without paying.
 - `--crop X,Y,W,H` sends only part of the photo. The open SAM 3 model works on 1008 × 1008 pixel images, so a crop of just the breadboard may show thin wires at more detail than the whole 1920 × 1080 frame.
@@ -189,7 +189,7 @@ python scripts/sam_probe.py replay .wbc/vision/sam-<time>.json   # free: parse a
 
 1. **Tags.** The breadboard lies on a printed carrier sheet with four AprilTags (tag36h11, ids 10–13, 20 mm). Their corners map the photo onto the sheet in millimeters, so a bumped camera or a refocus doesn't move the hole grid, and there's no camera calibration to keep.
 2. **Top-down view.** Code cuts out the board area at 5.5 px/mm, about 970 × 360 px. That's under the 1008 px SAM works at, so thin wires keep their detail, and SAM's masks come back in board millimeters.
-3. **SAM 3.1 and the hole grid.** SAM segments `jumper wire` in the view. Meanwhile code finds where the board really lies: its holes are small dark squares, and it shifts and turns the grid, by up to 1.2 mm and 1°, until the predicted holes sit on the darkest spots. That's under half a pitch, because a grid a whole pitch off fits just as well. It scales the grid too: the board's top stands about 10 mm above the sheet the tags are printed on, so from 30 cm the camera sees it about 2% larger than life, enough to put the end rows a millimeter off. Only the right scale lines up all 63 rows.
+3. **SAM 3.1 and the hole grid.** SAM segments `wire` in the view. Meanwhile code finds where the board really lies: its holes are small dark squares, and it shifts and turns the grid, by up to 1.2 mm and 1°, until the predicted holes sit on the darkest spots. That's under half a pitch, because a grid a whole pitch off fits just as well. It scales the grid too: the board's top stands about 10 mm above the sheet the tags are printed on, so from 30 cm the camera sees it about 2% larger than life, enough to put the end rows a millimeter off. Only the right scale lines up all 63 rows.
 4. **Wires.** Each mask is thinned to its center line and followed out to both tips. A flat jumper's legs go into its holes at its tips, so each tip snaps to the nearest hole within 1.2 mm, and a tip farther from every hole is flagged. A mask that branches is flagged as two wires that may touch.
 5. **Netlist and `pins.h`.** Each row's a–e and f–j strips and each rail is a node, wires join nodes, and the ESP32's and display's pins sit in holes given in `config/bench.yaml`. Plain code then compares each display pin's GPIO with `pins.h` and reports the mismatch, its wire and hole, and the line to fix.
 

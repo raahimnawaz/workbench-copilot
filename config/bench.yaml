@@ -18,7 +18,7 @@ boards:
 reader:
   px_per_mm: 5.5                    # the top-down board view SAM sees; the open SAM 3 works at 1008 px
   margin_mm: 7                      # around the boards' bodies, which look up to 6% larger (register_scale)
-  wire_phrase: jumper wire
+  wire_phrase: wire                 # SAM 3.1 matched nothing for "jumper wire" and all 3 wires for "wire" (Oct 28)
   snap_mm: 1.2                      # a wire end farther than this from every hole is flagged
   tip_inset_mm: 0.0                 # from the end of a wire's mask back to its hole: calibrate on the golden set
   register_mm: 1.2                  # how far a board may sit from its printed outline (under half a pitch)

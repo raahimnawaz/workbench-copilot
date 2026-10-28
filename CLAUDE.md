@@ -24,7 +24,7 @@ echo "Zero response on SPI. Check my wiring against the firmware." | .venv/bin/p
 .venv/bin/pio run -d firmware/fsr_sampler -t upload --upload-port /dev/cu.usbserial-0001   # flash the force sensor sampler
 .venv/bin/python scripts/calibrate_fsr.py --port /dev/cu.usbserial-0001 watch   # free: also calibrate / creep --channel SD
 .venv/bin/python scripts/sam_probe.py cameras                  # free, from Terminal.app: then capture --camera N for a still in .wbc/vision/
-.venv/bin/python scripts/sam_probe.py segment .wbc/vision/photo-<time>.png --phrase "jumper wire"   # PAID, $0.0025 per phrase; replay <run>.json is free
+.venv/bin/python scripts/sam_probe.py segment .wbc/vision/photo-<time>.png --phrase "wire"   # PAID, $0.0025 per phrase; replay <run>.json is free
 .venv/bin/python scripts/make_carrier.py                       # free: .wbc/vision/carrier.pdf, the tag sheet the breadboard lies on
 .venv/bin/python scripts/read_board.py check                   # free, from Terminal.app: tags and the fitted hole grid (or --photo PATH)
 .venv/bin/python scripts/read_board.py read                    # PAID, $0.0025: the whole board read, as read_breadboard does it
@@ -92,6 +92,8 @@ echo "Zero response on SPI. Check my wiring against the firmware." | .venv/bin/p
   - Wire ends: Zhang-Suen thinning, the longest path along the center line, then each end followed out to the mask's tip, starting a wire width back because thinning forks toward a square end's corners (from the fork, a tip landed 0.9 mm to the side). `tip_inset_mm` (0 for now) moves it back toward the hole. On a 2.54 mm grid nearly every point is within 1.2 mm of some hole, so the 1.2 mm snap only flags ends between holes, and an end 1.3–2.5 mm off lands silently on a neighbor: the golden set's residuals have to show the ends land well under 1 mm.
   - Wires are numbered left to right, `wire:1` first. Flat jumpers only: loose leads stand about 15 mm up, which the camera sees displaced by up to 4 mm.
   - `bench.yaml` `modules` is empty until the demo board is wired (one breadboard or two, and a 30- or 38-pin DevKit, are open questions for Raahim). Without it the reader still traces wires but skips the `pins.h` check. `parts.yaml` has the DOIT 30-pin DevKit's pinout from memory, to check against the silkscreen.
+- **First live SAM calls (Oct 28, 13:49–13:55, $0.02 in all):** two reads asking for "jumper wire" came back empty, on loose leads and then on three flat wires. A 4-request check (`.wbc/logs/sam-diag-*.txt`, responses in `.wbc/vision/diag-20261028-135508/`) showed the reply is read correctly (a standard message with output_text, streamed or not) and SAM simply matches nothing for "jumper wire". "wire" found all three wires (scores 0.61–0.88, tight masks), and "breadboard" the board (0.85). So `reader.wire_phrase` is "wire". Each request takes 1.1–1.6 s, and the response's `usage.images_processed` is 1.
+  - The 13:48 photo had loose Dupont leads arcing over the board; they can't be read (see the flat-jumper note above). The 13:53 photo (`photo-20261028-135315.png`) has three flat-lying wires; the camera was about 9.5 in (24 cm) up, and the board looked 1.024x life size.
 - Not started: the golden-set scorer (20 labeled photos, ≥ 98% of wire ends on the right hole), web HUD, slip detector, motion skills, compliant hold.
 
 ## Next, in order

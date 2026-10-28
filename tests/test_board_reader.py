@@ -20,7 +20,7 @@ def board():
 
 def sam_for(bench, actual_board, wires=WIRES):
     masks, size = wire_masks(bench, actual_board, wires)
-    return FakeSam({"jumper wire": sam_reply(masks, *size)})
+    return FakeSam({bench["reader"]["wire_phrase"]: sam_reply(masks, *size)})
 
 
 def budget():
@@ -124,7 +124,7 @@ def view_of(b, wires_mm, s=5.5, thickness_mm=2.0, curve_mm=0.0):
                       max(1, int(round(thickness_mm * s))), cv2.LINE_8, 4)
         ys, xs = np.nonzero(full)
         box = (int(xs.min()), int(ys.min()), int(xs.max()) + 1, int(ys.max()) + 1)
-        instances.append(sam_client.Instance("jumper wire", str(i), box, full[box[1]:box[3], box[0]:box[2]] > 0))
+        instances.append(sam_client.Instance("wire", str(i), box, full[box[1]:box[3], box[0]:box[2]] > 0))
     return instances, np.full((size[1], size[0], 3), 200, np.uint8), area
 
 
@@ -153,7 +153,7 @@ def test_wires_that_touch_are_flagged():
     full = one.full_mask(view.shape) | other.full_mask(view.shape)
     ys, xs = np.nonzero(full)
     box = (int(xs.min()), int(ys.min()), int(xs.max()) + 1, int(ys.max()) + 1)
-    crossed = sam_client.Instance("jumper wire", "0", box, full[box[1]:box[3], box[0]:box[2]])
+    crossed = sam_client.Instance("wire", "0", box, full[box[1]:box[3], box[0]:box[2]])
     (wire,) = netlist.trace([crossed], view, area, 5.5, [b], {})
     assert any("two wires that touch" in p for p in wire.problems)
 
