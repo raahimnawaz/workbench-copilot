@@ -13,6 +13,15 @@ from time import sleep
 
 # EEPROM registers (kept through power cycles; writable only while LOCK is 0)
 ID = 5                # 1 byte. New servos all leave the factory as id 1.
+MIN_POSITION_LIMIT = 9    # 2 bytes. lerobot-calibrate writes each joint's recorded range here and at 11,
+MAX_POSITION_LIMIT = 11   # 2 bytes, so the servo won't drive past either end
+MAX_TORQUE_LIMIT = 16     # 2 bytes, per mille. TORQUE_LIMIT starts from this at power-up
+UNLOADING_CONDITION = 19  # 1 byte: the status bits (FLAGS) whose protection is switched on
+P_COEFFICIENT = 21        # 1 byte
+PROTECTION_CURRENT = 28   # 2 bytes
+PROTECTIVE_TORQUE = 34    # 1 byte, percent: the most it puts out once overload protection trips
+PROTECTION_TIME = 35      # 1 byte, 10 ms units: how long the output may stay above OVERLOAD_TORQUE before it trips
+OVERLOAD_TORQUE = 36      # 1 byte, percent
 LOCK = 55             # 1 byte, in RAM: 0 unlocks the EEPROM, 1 locks it again
 
 # RAM registers
@@ -24,9 +33,16 @@ FEEDBACK_LEN = 15
 
 PING, READ, WRITE = 0x01, 0x02, 0x03
 
+# Status bits every Feetech table names the same way. Bits 1 and 4 mean different things in different tables.
+FLAGS = {0: "voltage", 2: "overheat", 3: "current", 5: "overload"}
+
 
 class STSError(IOError):
     pass
+
+
+def flag_names(status: int) -> str:
+    return ", ".join(FLAGS.get(bit, f"bit {bit}") for bit in range(8) if status >> bit & 1) or "none"
 
 
 def checksum(body: bytes) -> int:
@@ -107,6 +123,9 @@ class Bus:
 
     def write_u16(self, servo_id: int, address: int, value: int) -> int:
         return self.write(servo_id, address, bytes([value & 0xFF, (value >> 8) & 0xFF]))
+
+    def read_u8(self, servo_id: int, address: int) -> int:
+        return self.read(servo_id, address, 1)[1][0]
 
     def read_u16(self, servo_id: int, address: int) -> int:
         _, data = self.read(servo_id, address, 2)

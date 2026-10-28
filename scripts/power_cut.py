@@ -36,6 +36,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from first_moves import (JOINTS, MAX_STRAY, NAMES, TICKS_PER_DEGREE, TORQUE_CAP, Tripped, choose,  # noqa: E402
                          cut_torque, parse_gains, power_on, release, wait_until_ready)
 from wbc.config import ROOT  # noqa: E402
+from wbc.motion.sts import flag_names  # noqa: E402
 
 GAINS = {"elbow_flex": 32}  # this arm's elbow, a weaker 1:191 servo, can't hold its forearm up at LeRobot's 16
 SAG = 0.3        # volts under the reading when the watch began that mean the supply is going
@@ -51,8 +52,6 @@ KEEP = 500       # readings kept from before the voltage started to fall
 # percent. Torque_Limit is the RAM copy of Max_Torque_Limit that a servo makes at power-up.
 STATE = ["Present_Voltage", "Torque_Enable", "Torque_Limit", "Max_Torque_Limit", "P_Coefficient",
          "Goal_Position", "Present_Position", "Present_Load", "Present_Temperature", "Status", "Lock"]
-# Status bits every Feetech table names the same way. Bits 1 and 4 mean different things in different tables.
-FLAGS = {0: "voltage", 2: "overheat", 3: "current", 5: "overload"}
 PORT_LOST = ("The arm's USB adapter went away too, so the strip seems to power the adapter or its USB hub as "
              "well. Only the servos' power supply should be on the strip: move the rest, then run this again.")
 
@@ -79,10 +78,6 @@ def read(bus, name: str, retries: int = 0) -> dict:
         raise
     except OSError as e:
         raise PortLost(str(e)) from e
-
-
-def flag_names(status: int) -> str:
-    return ", ".join(FLAGS.get(bit, f"bit {bit}") for bit in range(8) if status >> bit & 1) or "none"
 
 
 def table(state: dict) -> str:
