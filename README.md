@@ -16,8 +16,9 @@ Everything in this repository was written during the hackathon, starting Oct 26,
 | `wbc/motion/kinematics.py` | URDF chain loader, forward kinematics, damped least-squares IK, the (x, y, z, pitch, roll) grasp frame |
 | `wbc/motion/sts.py`, `wbc/motion/probe.py` | A small STS3215 servo client and the gripper feedback probe |
 | `scripts/set_servo_ids.py` | Gives each servo of an already-assembled arm its id, growing the chain from the base |
+| `scripts/first_moves.py` | The arm's first powered moves: torque on without a jump, then each joint a little, recording which way it turns |
 | `wbc/reflex/fsr_link.py`, `wbc/reflex/fsr_cal.py` | The force sensor link (500 Hz frames with a CRC), per-sensor calibration fit and creep analysis |
-| `config/`, `fixtures/`, `scripts/`, `tests/` | Model routing config, the recorded bench for `--sim`, the smoke test, gripper probe and force sensor tools, 84 tests |
+| `config/`, `fixtures/`, `scripts/`, `tests/` | Model routing config, the recorded bench for `--sim`, the smoke test, gripper probe and force sensor tools, 112 tests |
 | `firmware/dut_demo/` | The Act 1 demo board firmware, with the wiring bug planted on purpose |
 | `firmware/fsr_sampler/` | ESP32 firmware that samples the four jaw sensors at 500 Hz and streams them over USB |
 
@@ -83,6 +84,22 @@ python scripts/set_servo_ids.py --port /dev/cu.usbmodemXXXX
 
 Before changing an id, it checks that five full reads at id 1 come back clean, which only happens with one servo on the line. Power the servos off while moving cables. If it stops partway, run it again and it carries on. It only writes ids; torque stays off.
 
+## First powered moves
+
+After `lerobot-calibrate`, `scripts/first_moves.py` turns the motors on and moves each joint a little, one at a time, so you see every joint drive and say which way it turns. Install LeRobot first (`uv pip install -e '.[lerobot]'`).
+
+```bash
+python scripts/first_moves.py --port /dev/cu.usbmodemXXXX
+```
+
+- A servo drives to its goal register the moment torque comes on. After calibration and moving the arm by hand, that goal can be far from where the arm is, and LeRobot's `connect()` turns torque on without setting it. So the script runs LeRobot's `configure()` with its final torque-on held back, caps torque at 50% (`--torque`), sets each goal to the present position and reads it back. Then it turns the joints on one at a time from the base out, watching the arm for 0.3 s after each.
+- If a joint moves more than 3° on its own as its torque comes on, or strays more than 5° from where it should be during a move, every motor is cut at once. The cut is one broadcast write that servos don't answer, so a servo flagging overload can't refuse it, the way it makes LeRobot's own torque-off fail.
+- Every joint that gets torque has to start inside its calibrated range, and the script asks you to move in any that aren't. Only the joints in `--joints` get torque, so hold the rest of the arm when you test a few.
+- `configure()` sets every joint's P gain to 16, a value chosen for the follower's 1:345 servos. `--gain elbow_flex=32` raises one joint's gain after that, reads it back before any torque comes on, and leaves it on the servo until LeRobot's setup runs again. This arm's elbow is a leader-type 1:191 servo that couldn't lift its folded forearm at 16.
+- Each joint moves 10° toward the middle of its range over 2 s (`--degrees`, `--seconds`), holds while you say which way it went, then comes back. LeRobot's `max_relative_target` keeps every goal within 5° of where the joint is.
+- Every step waits for Enter. Ctrl-C stops the moves and the arm holds where it is. After that, or a normal finish, the motors go off only once you say you're holding the arm, because it drops when they do.
+- Each run writes `.wbc/logs/first-moves-<time>.json`: every reading while each joint came on and moved, what each joint was asked and did, and which way plus turns it.
+
 ## Gripper probe: what can servo feedback feel?
 
 `scripts/gripper_probe.py` reads the gripper servo's position, load and current about 200 times a second, so you can measure whether servo feedback alone can see a grip, a pull or a slip. Install the arm extra first (`uv pip install -e '.[arm]'`), close LeRobot, and turn the servo power on.
@@ -139,7 +156,7 @@ Muse Spark is the only model that talks to you and the only one that decides. Ev
 - In the URDF the gripper approaches along its z-axis. `config/robot.yaml` rotates the tool frame so the approach is x.
 - The point between the jaws moves ±8 mm sideways as the wrist rolls, so a 5-joint arm can't always face exactly along the target's bearing. `solve_task` lets yaw move up to 20° and reports the result in `IKResult.yaw`. Near a top-down grasp, a yaw change also turns the jaws, so the grasp skill should correct roll by it when jaw angle matters.
 - Poses behind the base need the arm folded back over itself, and random starts rarely find that solution. Pass `q0`, the current joint angles, when you need continuity.
-- LeRobot reports joints in its own calibrated units. Check every joint's sign against a ruler before trusting IK on the real arm.
+- LeRobot reports joints in degrees, with 0° at the middle of each joint's calibrated range. That isn't the calibration pose when a joint's range is lopsided: on Oct 27 the base's 0° was about 12° off forward. `scripts/first_moves.py` records which way plus turns each joint. Check both against a ruler before trusting IK on the real arm.
 
 ## Check on Day 1
 
