@@ -1,6 +1,6 @@
 """Day 1 smoke test: one small call to each hosted model, so you know the ids, key and formats work.
 
-Costs a few cents at most. Run from the repo root: python scripts/smoke_test.py
+Costs a few cents at most (SAM 3.1 adds $0.0025). Run from the repo root: python scripts/smoke_test.py
 """
 from __future__ import annotations
 
@@ -65,13 +65,28 @@ def main() -> int:
         text = Transcriber(models["ears"], config.api_key(), budget).transcribe(wav, 1.0)
         return f"1 s of silence gave {text!r}"
 
+    def segment():
+        import cv2
+        import numpy as np
+
+        from wbc.perception import sam_client  # needs the eyes extra
+
+        image = np.full((480, 640, 3), 255, np.uint8)  # three red and three blue squares on white
+        for i in range(3):
+            cv2.rectangle(image, (60 + 190 * i, 100), (160 + 190 * i, 200), (40, 40, 220), -1)
+            cv2.rectangle(image, (60 + 190 * i, 280), (160 + 190 * i, 380), (220, 60, 40), -1)
+        seg = sam_client.segment(client, models["eyes"], budget, image, "red square")
+        if seg.problems or not seg.instances:
+            raise RuntimeError(f"no red squares read: {seg.problems or seg.raw[:200]!r}")
+        return f"{len(seg.instances)} red squares found (3 drawn)"
+
     results = [
         step("model list", model_list),
         step("router tool call", router_tool_call),
         step("coder diff", coder_diff),
         step("voice transcribe", transcribe),
+        step("SAM 3.1 segment", segment),
     ]
-    print("SKIP  SAM 3.1: add once the request format is confirmed from Meta's SAM docs")
     print(f"spent so far: ${budget.spent:.4f}")
     return 0 if all(results) else 1
 
