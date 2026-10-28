@@ -11,7 +11,7 @@ Entry for the Meta Global AI Developer Hackathon (Indie track, Push the Frontier
 ## Commands (Python 3.12 via uv, which lives in `~/.local/bin`)
 ```bash
 uv venv --clear --python 3.12 && uv pip install -e '.[voice,dev,arm,firmware,eyes]'   # also after moving the folder: .venv stores absolute paths
-.venv/bin/python -m pytest -q                                   # 180 offline tests; CI runs them on every push
+.venv/bin/python -m pytest -q                                   # 205 offline tests; CI runs them on every push
 .venv/bin/python scripts/smoke_test.py                          # PAID, about $0.01: one call to each hosted model
 echo "Zero response on SPI. Check my wiring against the firmware." | .venv/bin/python -m wbc.agent --sim   # PAID, about $0.025
 echo "Zero response on SPI. Check my wiring against the firmware." | .venv/bin/python -m wbc.agent --sim --router-model muse-spark-1.1   # PAID, about $0.025: the same turn routed by Spark 1.1
@@ -25,6 +25,9 @@ echo "Zero response on SPI. Check my wiring against the firmware." | .venv/bin/p
 .venv/bin/python scripts/calibrate_fsr.py --port /dev/cu.usbserial-0001 watch   # free: also calibrate / creep --channel SD
 .venv/bin/python scripts/sam_probe.py cameras                  # free, from Terminal.app: then capture --camera N for a still in .wbc/vision/
 .venv/bin/python scripts/sam_probe.py segment .wbc/vision/photo-<time>.png --phrase "jumper wire"   # PAID, $0.0025 per phrase; replay <run>.json is free
+.venv/bin/python scripts/make_carrier.py                       # free: .wbc/vision/carrier.pdf, the tag sheet the breadboard lies on
+.venv/bin/python scripts/read_board.py check                   # free, from Terminal.app: tags and the fitted hole grid (or --photo PATH)
+.venv/bin/python scripts/read_board.py read                    # PAID, $0.0025: the whole board read, as read_breadboard does it
 ```
 - A `--sim` run applies Wonder's real patch to `firmware/dut_demo/include/pins.h` (`OLED_CS` 5 → 13). **Restore it afterwards** with `git checkout -- firmware/dut_demo/include/pins.h`. That bug is the Act 1 demo: the CS wire goes to GPIO 13 while `pins.h` says 5.
 - Tracked spend lives in `.wbc/spend.json` ($0.049 on Oct 27). The hard stop is $140 and the warning $100 (`budget` in `config/models.yaml`).
@@ -80,7 +83,14 @@ echo "Zero response on SPI. Check my wiring against the firmware." | .venv/bin/p
 - SAM 3.1 client (Oct 28, `wbc/perception/sam_client.py`): one noun phrase per request, phrases sent in parallel, `metadata` asking for one_bit masks and confidence. Masks come back box-local and are decoded with Meta's `meta-sam-parser` 0.1.0 (pinned, in the `eyes` extra; the tests write replies with its private one_bit encoder). Its decoder is pure Python, about 1.4 µs per pixel of box, and the parser decodes each mask once to check it, so a 230 × 230 px wire box costs about 0.15 s in all. Tested offline only; the first live call is still to come (`scripts/sam_probe.py segment`, or the smoke test's new SAM step).
   - The open SAM 3 runs at 1008 × 1008 px (transformers docs), so segmenting a crop of just the board should keep thin wires sharper than the whole 1920 × 1080 frame. `sam_probe.py segment --crop` compares the two.
   - Camera capture (`wbc/perception/camera.py`) needs camera permission, which this app's terminal doesn't have: run `sam_probe.py cameras` and `capture` from Terminal.app.
-- Not started: the breadboard netlist reader (tags, hole grid, wire ends, diff against pins.h), web HUD, slip detector, motion skills, compliant hold.
+- Board reader (Oct 28, `wbc/perception/`: `tags.py`, `breadboard.py`, `netlist.py`, `reader.py`), built and tested only on a synthetic bench photo (`tests/board_scene.py`). Outside `--sim`, `read_breadboard` now captures a frame and runs it, so the agent's prefetch pays $0.0025 per turn for it.
+  - The carrier: a Letter sheet with tag36h11 ids 10–13 at 20 mm, 20 mm tags rather than the blueprint's 9 mm, because a printed sheet has room and they read reliably at 0.22 mm/px. The tags sit around one full-size board's outline, about 220 × 112 mm in all, well inside the C920's view from 30 cm. It's all in `config/bench.yaml`; `make_carrier.py` prints from it, and a test checks the printed tags land within 0.06 mm of the config.
+  - SAM gets the top-down view at 5.5 px/mm (963 × 355 px), not the whole frame: the open SAM 3 works at 1008 px, and masks then come back in board mm.
+  - The hole grid fit (`breadboard.register`) shifts and turns each board within 1.2 mm and 1° of its outline to put the predicted holes on dark spots (a black-hat filter). It found a board placed 0.6 mm and 0.4° off to within 0.08 mm on the synthetic photo, in 0.07 s, while SAM's request is out. A board more than half a pitch (1.27 mm) off its outline reads a row out, so stick it down on the outline.
+  - Wire ends: Zhang-Suen thinning, the longest path along the center line, then each end followed to the mask's tip; `tip_inset_mm` (0 for now) moves it back toward the hole. On a 2.54 mm grid nearly every point is within 1.2 mm of some hole, so the 1.2 mm snap only flags ends between holes, and an end 1.3–2.5 mm off lands silently on a neighbor: the golden set's residuals have to show the ends land well under 1 mm.
+  - Wires are numbered left to right, `wire:1` first. Flat jumpers only: loose leads stand about 15 mm up, which the camera sees displaced by up to 4 mm.
+  - `bench.yaml` `modules` is empty until the demo board is wired (one breadboard or two, and a 30- or 38-pin DevKit, are open questions for Raahim). Without it the reader still traces wires but skips the `pins.h` check. `parts.yaml` has the DOIT 30-pin DevKit's pinout from memory, to check against the silkscreen, and rough rail positions to check on the `check` drawing.
+- Not started: the golden-set scorer (20 labeled photos, ≥ 98% of wire ends on the right hole), web HUD, slip detector, motion skills, compliant hold.
 
 ## Next, in order
 0. Force sensors are paused (see above). Before the jaw pads (Oct 29): get a kitchen scale, run the heavier press test to settle the flat spot above about 35 g, wire MD and MP, then calibrate all four in the pads.
@@ -91,7 +101,7 @@ echo "Zero response on SPI. Check my wiring against the firmware." | .venv/bin/p
    - Collision stops with a tighter threshold, because the part of the load that comes from the pose is removed.
    - Check a pose before moving: can the arm hold it at the hold mode's 45% torque limit? On 5 V the servos make less torque than their 7.4 V rating.
 4. Voice: `--hear` worked on the live mic (Oct 28). Next, a spoken Act 1 with `--voice --sim` from Terminal.app (about $0.04). The breadboard button is the other trigger, if the wake phrase misfires.
-5. Oct 28: mount the C920 about 30 cm over the breadboard, print the AprilTags, wire the demo board (pins below), flash it, and build the SAM 3.1 reader to ≥ 98% of wire endpoints on 20 photos. Touch test ≤ 3 mm.
+5. Oct 28: print the carrier (`make_carrier.py`), mount the C920 about 30 cm over it, run `read_board.py check` until the grid sits on the holes, then one paid `read`. Wire the demo board (pins below) with flat jumpers, fill in `bench.yaml` `modules`, flash it. Then the golden set: 20 photos with hand-labeled wire ends, ≥ 98% on the right hole (the scorer isn't built). Touch test ≤ 3 mm.
 6. Oct 29: web HUD; force-sensor pads and the ESP32 sampler; slip detector on recorded traces.
 7. Oct 30: Act 1 end to end, 10 runs under 60 s, then the backup video.
 8. Oct 31 – Nov 2: grip PI loop, slip catch and regrasp, compliant hold. ROS 2 nodes come only after Act 1 works (see `../ros2-gate`).

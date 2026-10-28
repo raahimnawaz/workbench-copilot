@@ -25,7 +25,8 @@ def build(sim: bool, backup: bool, router_model: str | None = None):
     budget = Budget.from_config(models, config.ROOT)
     hud = ConsoleHud()
     meta = config.meta_client(models)  # the coder always runs on the Meta Model API
-    toolbox = build_toolbox(Bench(config.ROOT, models, meta, budget, sim=sim))
+    toolbox = build_toolbox(Bench(config.ROOT, models, meta, budget, sim=sim, layout=config.load_yaml("bench.yaml"),
+                                  parts=config.load_yaml("parts.yaml")))
     max_steps = models["router"].get("max_steps", 12)
     prefetch = models["router"].get("prefetch")
     if backup:

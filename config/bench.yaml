@@ -1,0 +1,36 @@
+# This bench: the camera, the printed carrier the breadboard lies on, and where each part sits.
+# Positions are in mm on the carrier, from the paper's top-left corner, x to the right and y down.
+
+camera: {index: 0, width: 1920, height: 1080}
+
+carrier:                            # printed by scripts/make_carrier.py: print at 100% ("Actual size")
+  paper_mm: [279.4, 215.9]          # US Letter, landscape
+  tag_family: tag36h11
+  tag_size_mm: 20                   # the black square's edge
+  tags: {10: [40.0, 62.0], 11: [239.4, 62.0], 12: [239.4, 153.9], 13: [40.0, 153.9]}   # tag centers
+
+boards:
+  # Each breadboard's hole a1 on the carrier, the way its row numbers grow, and the way its letters run
+  # from a to j. This one is centered on the sheet with row 1 on the left and column a nearest you.
+  main: {a1_mm: [60.96, 121.92], rows_toward: [1, 0], letters_toward: [0, -1]}
+
+reader:
+  px_per_mm: 5.5                    # the top-down board view SAM sees; the open SAM 3 works at 1008 px
+  margin_mm: 5                      # around the boards' bodies
+  wire_phrase: jumper wire
+  snap_mm: 1.2                      # a wire end farther than this from every hole is flagged
+  tip_inset_mm: 0.0                 # from the end of a wire's mask back to its hole: calibrate on the golden set
+  register_mm: 1.2                  # how far a board may sit from its printed outline (under half a pitch)
+  register_deg: 1.0
+
+# Which hole each module's headers start in, and which way along the rows they run (+1 or -1).
+# Empty until the demo board is wired: without it the reader still traces every wire, but can't
+# check the wiring against pins.h.
+modules: {}
+#  esp32: {part: esp32_devkit_30, headers: {left: {start: b10, step: 1}, right: {start: other:a10, step: 1}}}
+#  oled: {part: ssd1306_spi_7, headers: {pins: {start: c40, step: 1}}}
+
+firmware:
+  file: firmware/dut_demo/include/pins.h
+  gpio_module: esp32                # its GPIOn pins are what the numbers in pins.h name
+  signals: {OLED_SCK: oled.D0, OLED_MOSI: oled.D1, OLED_CS: oled.CS, OLED_DC: oled.DC, OLED_RES: oled.RES}

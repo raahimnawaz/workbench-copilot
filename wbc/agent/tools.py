@@ -1,12 +1,14 @@
 """Tools the router can call. Each returns a dict with "ok"; failures come back as data, never as exceptions.
 
-Physical and camera tools are stubs until their sheet-10 day. With --sim, read_breadboard returns a
-recorded scene and point_at pretends to move, so the router and coder can be tested with no hardware.
+read_breadboard photographs the board and reads it with SAM 3.1 (wbc/perception). The arm's tools are stubs
+until their sheet-10 day. With --sim, read_breadboard returns a recorded scene and point_at pretends to move,
+so the router and coder can be tested with no hardware.
 """
 from __future__ import annotations
 
 import itertools
 import json
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
@@ -74,6 +76,8 @@ class Bench:
     budget: object
     sim: bool = False
     patches: dict = field(default_factory=dict)
+    layout: dict = field(default_factory=dict)  # bench.yaml: the camera, the carrier and where the parts sit
+    parts: dict = field(default_factory=dict)  # parts.yaml
 
 
 def _not_wired(tool: str, day: str) -> dict:
@@ -130,13 +134,24 @@ def build_toolbox(bench: Bench) -> Toolbox:
         return coder.propose_patch(bench.root, patch["diff"], patch["why"])
 
     @tb.register("read_breadboard", (
-        "Move the wrist camera over the breadboard, segment the wires with SAM 3.1, and return the netlist, "
-        "any mismatches against pins.h, and an annotated image."), {
+        "Photograph the breadboard with the overhead camera, segment its jumper wires with SAM 3.1, and return "
+        "each wire's two holes, the netlist, any mismatches against pins.h, and an annotated image."), {
         "type": "object", "properties": {}}, label="SAM")
     def read_breadboard() -> dict:
         if bench.sim:
             return json.loads((bench.root / "fixtures" / "breadboard_mismatch.json").read_text(encoding="utf-8"))
-        return _not_wired("read_breadboard", "D3")
+        if not bench.layout:
+            return _not_wired("read_breadboard", "D3")
+        from wbc.perception import camera, reader  # the eyes extra
+
+        cam = bench.layout["camera"]
+        t0 = time.monotonic()
+        frame = camera.capture(cam["index"], cam["width"], cam["height"])
+        captured = time.monotonic() - t0
+        result = reader.read_board(frame, bench.layout, bench.parts, bench.client, bench.models["eyes"],
+                                   bench.budget, bench.root, out_dir=bench.root / ".wbc" / "vision")
+        result["_timing"] = {"capture": captured, **result["_timing"]}
+        return result
 
     @tb.register("look", "Grab a camera frame, segment the things named in the question, and return masks and an image.", {
         "type": "object",

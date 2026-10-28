@@ -1,0 +1,23 @@
+# What the bench's parts look like: breadboard geometry and module pinouts.
+# Where each part sits on this bench lives in bench.yaml.
+
+breadboard:                         # full-size, 830 tie points
+  pitch_mm: 2.54
+  rows: 63
+  # Pitches from column a. The center channel between e and f is 3 pitches wide.
+  columns: {a: 0, b: 1, c: 2, d: 3, e: 4, f: 7, g: 8, h: 9, i: 10, j: 11}
+  strips: [abcde, fghij]            # in each row, the holes of one strip are connected
+  # Power rails run the board's length. Pitches from column a (negative is beyond a, past j is beyond j).
+  # Rough for a typical 830 board: check them on the reader's grid overlay (scripts/read_board.py check).
+  rails: {"a-": -3.2, "a+": -2.2, "j+": 13.2, "j-": 14.2}
+  body_mm: [165.1, 54.6]            # length along the rows, width across; the holes sit centered in it
+
+modules:
+  # DOIT ESP32 DevKit V1, 30 pins. Seen from above with the antenna away from you, each header from the
+  # antenna end. Check it against your board's silkscreen: 38-pin DevKitC boards differ.
+  esp32_devkit_30:
+    left: [EN, GPIO36, GPIO39, GPIO34, GPIO35, GPIO32, GPIO33, GPIO25, GPIO26, GPIO27, GPIO14, GPIO12, GPIO13, GND, VIN]
+    right: [GPIO23, GPIO22, GPIO1, GPIO3, GPIO21, GPIO19, GPIO18, GPIO5, GPIO17, GPIO16, GPIO4, GPIO2, GPIO15, GND, 3V3]
+  # 0.96" SSD1306 OLED, 7-pin SPI (the UMLIFE modules), left to right with the text upright.
+  ssd1306_spi_7:
+    pins: [GND, VCC, D0, D1, RES, DC, CS]
