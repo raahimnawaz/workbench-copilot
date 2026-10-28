@@ -11,9 +11,10 @@ Entry for the Meta Global AI Developer Hackathon (Indie track, Push the Frontier
 ## Commands (Python 3.12 via uv, which lives in `~/.local/bin`)
 ```bash
 uv venv --clear --python 3.12 && uv pip install -e '.[voice,dev,arm,firmware]'   # also after moving the folder: .venv stores absolute paths
-.venv/bin/python -m pytest -q                                   # 126 offline tests; CI runs them on every push
+.venv/bin/python -m pytest -q                                   # 158 offline tests; CI runs them on every push
 .venv/bin/python scripts/smoke_test.py                          # PAID, about $0.01: one call to each hosted model
 echo "Zero response on SPI. Check my wiring against the firmware." | .venv/bin/python -m wbc.agent --sim   # PAID, about $0.04
+.venv/bin/python -m wbc.agent --hear                           # PAID, about $0.0001 a sentence: prints what the mic hears, routes nothing
 .venv/bin/python scripts/gripper_probe.py --list                # free: find the servo bus port
 .venv/bin/python scripts/gripper_probe.py --port /dev/cu.usbmodem5B910297421 watch   # read only: the gripper's settings and jaw positions
 .venv/bin/python scripts/gripper_probe.py --port /dev/cu.usbmodem5B910297421 squeeze --closed 1278 --gain 32 --torque-limit 240   # torque on: waits for Enter, then closes on the object
@@ -69,6 +70,7 @@ echo "Zero response on SPI. Check my wiring against the firmware." | .venv/bin/p
   - Calibration is rough only. With 9 quarters (up to 51 g) the fits miss by up to 27% (SD) and 20% (SP), and SP doesn't register 11.3 g. Those fits are in the local `config/fsr_cal.yaml`, which isn't committed.
   - **Open problem:** on both sensors, 34 g and 51 g read about the same (about 1650 mV, sensor near 10 kΩ). Placement repeats within about 6% (51 g three times: 1634, 1727, 1658 mV), and a hard finger press reaches about 1 kΩ, so this flat spot is real. Either part of the load goes around the sensor as weight grows, or the sensor stops responding through a small puck above about 35 g. If it's the second, the gripper can't feel its 60–150 g grip, so **resolve this before building the jaw pads**. It needs heavier known weights: a cheap kitchen scale (press test at 50, 100, 200, 300 g while watching mV), or measured water.
   - Keep the 10 kΩ resistors. 47 kΩ or 100 kΩ would push grip-range readings to the top of the ADC. Revisit (possibly 4.7 kΩ) only after the heavier test.
+- Voice (Oct 28): no pedal. The trigger is a wake phrase, or a button on the breadboard for prototyping, so the helper (arm, code, readouts, questions) is there when your hands are full. The wake phrase is built; the button isn't. While voice is on, the Razer (`ears.input_device`) stays open and a loudness gate cuts it into utterances (30 ms frames, 12 dB over the room's noise floor, 0.8 s of quiet ends one). Every utterance is transcribed, and only those starting with "Copilot" go to the router; "Copilot." alone makes the next utterance the request for 8 s. A mic macOS hasn't allowed records exact zeros, and the agent says so after 2 s. Live on Oct 28, from Terminal.app: room noise -64 dBFS, so the gate sat at its -47 dBFS minimum, and "Copilot, check my wiring." came through as "check my wiring." (4.1 s of audio, $0.0002). A 1.4 s sound came back with no words and was ignored. This app's terminal records pure silence because Claude has no mic permission, so run voice from Terminal.app (or allow Claude under Privacy & Security → Microphone and restart the app). The wake phrase alone ("Copilot.", then the request) is untested live.
 - Not started: SAM 3.1 client and breadboard netlist reader, web HUD, slip detector, motion skills, compliant hold.
 
 ## Next, in order
@@ -79,7 +81,7 @@ echo "Zero response on SPI. Check my wiring against the firmware." | .venv/bin/p
    - Weigh a gripped object: measured minus predicted load at the shoulder and elbow. The regrasp force estimate in step 8 needs this.
    - Collision stops with a tighter threshold, because the part of the load that comes from the pose is removed.
    - Check a pose before moving: can the arm hold it at the hold mode's 45% torque limit? On 5 V the servos make less torque than their 7.4 V rating.
-4. Voice with the Razer mic (`--voice`). There's no foot pedal, so set `ears.pedal_key` to a key on the keyboard (for example `alt_r`).
+4. Voice: `--hear` worked on the live mic (Oct 28). Next, a spoken Act 1 with `--voice --sim` from Terminal.app (about $0.04). The breadboard button is the other trigger, if the wake phrase misfires.
 5. Oct 28: mount the C920 about 30 cm over the breadboard, print the AprilTags, wire the demo board (pins below), flash it, and build the SAM 3.1 reader to ≥ 98% of wire endpoints on 20 photos. Touch test ≤ 3 mm.
 6. Oct 29: web HUD; force-sensor pads and the ESP32 sampler; slip detector on recorded traces.
 7. Oct 30: Act 1 end to end, 10 runs under 60 s, then the backup video.

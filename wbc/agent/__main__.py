@@ -1,6 +1,6 @@
-"""Run the bench agent: python -m wbc.agent [--sim] [--voice] [--backup]
+"""Run the bench agent: python -m wbc.agent [--sim] [--voice] [--hear] [--backup]
 
-Typed lines and pedal transcripts go on one queue, and the router handles them one turn at a time.
+Typed lines and spoken requests go on one queue, and the router handles them one turn at a time.
 """
 from __future__ import annotations
 
@@ -41,7 +41,9 @@ def build(sim: bool, backup: bool):
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(prog="wbc", description=__doc__.splitlines()[0])
     ap.add_argument("--sim", action="store_true", help="use the recorded bench instead of cameras and arm")
-    ap.add_argument("--voice", action="store_true", help="listen on the foot pedal as well as typed input")
+    ap.add_argument("--voice", action="store_true", help='listen for "Copilot, ..." as well as typed input')
+    ap.add_argument("--hear", action="store_true",
+                    help="mic check: print what the mic hears and route nothing (implies --voice)")
     ap.add_argument("--backup", action="store_true", help="route with the local open-weights model")
     args = ap.parse_args(argv)
 
@@ -69,14 +71,19 @@ def main(argv=None) -> int:
         inbox.put(None)
 
     threading.Thread(target=typed, daemon=True).start()
-    if args.voice:
+    if args.voice or args.hear:
+        on_text = (lambda text: None) if args.hear else inbox.put  # listen_forever prints what it heard
         threading.Thread(target=ears.listen_forever, daemon=True,
-                         args=(inbox.put, models["ears"], config.api_key(), budget, hud)).start()
+                         args=(on_text, models["ears"], config.api_key(), budget, hud)).start()
+    if args.hear:
+        hud.note("mic check: nothing goes to the router. Ctrl-D quits.")
 
     while True:
         text = inbox.get()
         if text is None:
             return 0
+        if args.hear:
+            continue
         try:
             router.run_turn(text)
         except BudgetExceeded as e:

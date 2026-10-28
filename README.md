@@ -2,7 +2,7 @@
 
 [![tests](https://github.com/raahimnawaz/workbench-copilot/actions/workflows/tests.yml/badge.svg)](https://github.com/raahimnawaz/workbench-copilot/actions/workflows/tests.yml)
 
-An AI lab partner that lives in your code editor and on your workbench. You talk to it through a foot pedal. **Muse Spark** routes each request: **Muse Wonder** writes code, **SAM 3.1** reads the breadboard, **Muse Voice Transcribe** hears you, and an **SO-101** arm points, grasps and holds boards while you probe.
+An AI lab partner that lives in your code editor and on your workbench. You talk to it hands free: say "Copilot," and your request. **Muse Spark** routes each request: **Muse Wonder** writes code, **SAM 3.1** reads the breadboard, **Muse Voice Transcribe** hears you, and an **SO-101** arm points, grasps and holds boards while you probe.
 
 Built for the Meta Global AI Developer Hackathon (Indie track, Push the Frontier), Oct 26 – Nov 4, 2026.
 
@@ -19,7 +19,7 @@ Everything in this repository was written during the hackathon, starting Oct 26,
 | `scripts/first_moves.py` | The arm's first powered moves: torque on without a jump, then each joint a little, recording which way it turns |
 | `scripts/power_cut.py` | The power cut-off test: switching the servo supply off makes the arm let go, and it stays limp when the power returns |
 | `wbc/reflex/fsr_link.py`, `wbc/reflex/fsr_cal.py` | The force sensor link (500 Hz frames with a CRC), per-sensor calibration fit and creep analysis |
-| `config/`, `fixtures/`, `scripts/`, `tests/` | Model routing config, the recorded bench for `--sim`, the smoke test, gripper probe and force sensor tools, 126 tests |
+| `config/`, `fixtures/`, `scripts/`, `tests/` | Model routing config, the recorded bench for `--sim`, the smoke test, gripper probe and force sensor tools, 158 tests |
 | `firmware/dut_demo/` | The Act 1 demo board firmware, with the wiring bug planted on purpose |
 | `firmware/fsr_sampler/` | ESP32 firmware that samples the four jaw sensors at 500 Hz and streams them over USB |
 
@@ -29,7 +29,7 @@ Everything in this repository was written during the hackathon, starting Oct 26,
 | [LeRobot](https://github.com/huggingface/lerobot) | Apache-2.0 | Servo calibration and the Feetech bus (from Oct 27) |
 | Muse Spark, Muse Wonder, Muse Voice Transcribe, SAM 3.1 on the Meta Model API | Meta API terms | Routing, coding, speech, segmentation |
 | Muse Glimmer 30B weights | Apache-2.0 | The local backup router |
-| openai, numpy, PyYAML, httpx, sounddevice, pynput, pyserial, pytest | Apache-2.0, BSD-3, MIT, BSD-3, MIT, LGPL-3.0, BSD-3, MIT | Python dependencies |
+| openai, numpy, PyYAML, httpx, sounddevice, pyserial, pytest | Apache-2.0, BSD-3, MIT, BSD-3, MIT, BSD-3, MIT | Python dependencies |
 | Adafruit SSD1306 and Adafruit GFX | BSD | Demo board display driver |
 | [PlatformIO](https://platformio.org) and the [Arduino core for ESP32](https://github.com/espressif/arduino-esp32) | Apache-2.0, LGPL-2.1 | Building and flashing both firmware projects |
 
@@ -40,7 +40,7 @@ Everything in this repository was written during the hackathon, starting Oct 26,
 | Router loop on Muse Spark (Responses API) | Built and tested against a fake API. Not yet run against the live API. |
 | Backup router on Muse Glimmer (Chat Completions) | Built and tested against a fake API. |
 | `ask_coder` on Muse Wonder | Diff extraction, `git apply --check` and sandbox compile are tested. The live model call isn't yet. |
-| Voice front end | The request format was checked against the live API on Oct 26 and is tested against a fake server. Not yet tried with the pedal and a live mic. |
+| Voice front end | The request format was checked against the live API on Oct 26. The wake phrase and the loudness gate that cuts the mic into utterances are tested on synthetic audio, and on Oct 28 they worked on the live mic (the Razer, run from Terminal.app). |
 | Budget guard | Built and tested. Spend persists in `.wbc/spend.json`. |
 | FK/IK | Tested on the real SO-101 URDF. 200 of 200 bench poses round-trip to within 0.2 mm and 0.5°, at about 33 ms per solve. |
 | STS3215 client and gripper probe | Packet format, decoding, the squeeze ramp and torque release are tested against a fake servo. Not yet run on the arm. |
@@ -67,7 +67,7 @@ python -m wbc.agent --sim
 
 Then type `Zero response on SPI. Check my wiring against the firmware.` With `--sim`, `read_breadboard` returns the recorded Act 1 scene from `fixtures/` and `point_at` pretends to move. That exercises the real router and the real Wonder coder with no hardware attached.
 
-- `--voice` also listens on the foot pedal (`ears.pedal_key`, default F13). The first time, macOS asks you to allow Input Monitoring for your terminal. The Mac Studio has no built-in microphone, so plug one in.
+- `--voice` also listens on the bench mic (`ears.input_device`, the Razer Seiren Mini). Say "Copilot," and your request, or "Copilot." and then the request. Every utterance is transcribed, and only the ones addressed to the co-pilot go to the router. `--hear` is a mic check: it prints what it heard and routes nothing. The first time, macOS asks to let your terminal use the microphone.
 - `--backup` routes with Muse Glimmer on your own machine. Serve it with any OpenAI-compatible server that supports tool calls (llama.cpp's `llama-server`, LM Studio or Ollama), then set `backup.base_url` and `backup.model` in `config/models.yaml`. The 4-bit build fits easily in 64 GB.
 
 ## Servo ids on an assembled arm

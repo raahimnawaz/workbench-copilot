@@ -30,7 +30,9 @@ ears:
   model: muse-voice-transcribe-1.0
   url: https://api.meta.ai/v1/asr/transcribe  # checked against the live API on 2026-10-26
   sample_rate: 16000
-  pedal_key: f13                    # the key your foot pedal sends (any pynput key name)
+  input_device: Razer Seiren Mini   # the bench mic, matched by name (the C920 is the camera)
+  # Hands free: "Copilot, check my wiring." Every utterance is transcribed; only these go to the router.
+  wake_phrase: copilot
   # Acronyms only. In a test, these fixed "SBI" -> SPI and "Mosley" -> MOSI, while adding "pins.h"
   # and "chip select" made those phrases come out worse ("pinsh h", "chip chip select").
   keywords: [SPI, GPIO, MOSI, SCK, OLED, regrasp]
