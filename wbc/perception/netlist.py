@@ -121,7 +121,8 @@ def color_name(bgr) -> str:
         return "black"
     if sat < 50:
         return "white" if val > 170 else "gray"
-    for name, top in (("red", 15), ("orange", 40), ("yellow", 70), ("green", 165), ("blue", 255), ("purple", 330)):
+    for name, top in (("red", 15), ("orange", 40), ("yellow", 70), ("green", 165), ("teal", 200), ("blue", 255),
+                      ("purple", 330)):
         if hue < top:
             return name
     return "red"

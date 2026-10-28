@@ -160,7 +160,7 @@ def test_wires_that_touch_are_flagged():
 
 @pytest.mark.parametrize("bgr, name", [((0, 215, 255), "yellow"), ((200, 90, 30), "blue"), ((0, 140, 255), "orange"),
                                        ((60, 170, 40), "green"), ((235, 235, 235), "white"), ((30, 30, 30), "black"),
-                                       ((40, 40, 200), "red")])
+                                       ((40, 40, 200), "red"), ((72, 67, 37), "teal")])  # teal: Oct 28's real wire
 def test_color_names(bgr, name):
     assert netlist.color_name(bgr) == name
 
