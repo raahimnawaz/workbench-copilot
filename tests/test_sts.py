@@ -62,7 +62,7 @@ def gripper(position=2000):
     """A fake servo set up like this arm's gripper after lerobot-calibrate and LeRobot's configure()."""
     servo = FakeServo()
     servo.set_u16(56, position)
-    servo.set_u16(sts.MIN_POSITION_LIMIT, 1331)
+    servo.set_u16(sts.MIN_POSITION_LIMIT, 1278)
     servo.set_u16(sts.MAX_POSITION_LIMIT, 2827)
     servo.set_u16(sts.TORQUE_LIMIT, 500)
     servo.set_u16(sts.MAX_TORQUE_LIMIT, 500)
@@ -149,7 +149,7 @@ def test_watch_never_writes():
 def test_read_settings_reads_without_writing():
     servo = gripper()
     s = probe.read_settings(bus_for(servo), 6)
-    assert (s["min_position"], s["max_position"], s["max_torque_limit"], s["overload_torque"]) == (1331, 2827, 500, 25)
+    assert (s["min_position"], s["max_position"], s["max_torque_limit"], s["overload_torque"]) == (1278, 2827, 500, 25)
     assert s["torque_on"] == 0 and s["protection"] >> probe.OVERLOAD & 1
     assert servo.writes == []
     text = " ".join(probe.describe_settings(s))
@@ -195,7 +195,9 @@ def test_squeeze_releases_torque_when_the_run_crashes():
     (2000, {"closed": 1200}),                           # past the closed end of the limits
     (2000, {"closed": 1700, "torque_limit": 250}),      # where overload protection starts
     (2000, {"closed": 1700, "torque_limit": 900}),      # over the stored maximum
-    (1320, {"closed": 1331}),                           # jaws resting past their limit: torque-on would snap
+    (2000, {"closed": 1700, "gain": 100}),              # a gain out of range
+    (1270, {"closed": 1278}),                           # jaws resting past their limit: torque-on would snap
+    (1290, {"closed": 1278}),                           # jaws already closed, with nothing between them
 ])
 def test_squeeze_refuses_unsafe_settings_before_writing_anything(position, kwargs):
     servo = gripper(position=position)
@@ -207,9 +209,29 @@ def test_squeeze_refuses_unsafe_settings_before_writing_anything(position, kwarg
 def test_a_cap_over_25_percent_is_allowed_when_overload_protection_is_off():
     s = probe.read_settings(bus_for(gripper()), 6)
     s["protection"] = 0b001100
-    probe.check_squeeze(s, 2000, 1700, 400)
+    probe.check_squeeze(s, 1700, 400)
     with pytest.raises(ValueError):
-        probe.check_squeeze(s, 2000, 1700, 501)  # still not over the stored maximum
+        probe.check_squeeze(s, 1700, 501)  # still not over the stored maximum
+
+
+def test_a_squeeze_gain_goes_on_before_torque_and_comes_off_after():
+    servo, clock = gripper(), FakeClock()
+    probe.run_probe(bus_for(servo), 6, "squeeze", closed=1700, gain=32, hz=100, seconds=0.5,
+                    clock=clock, sleep=clock.sleep)
+    writes = [(addr, payload[0]) for addr, payload in servo.writes]
+    on = writes.index((sts.TORQUE_ENABLE, 1))
+    assert writes[:3] == [(sts.LOCK, 0), (sts.P_COEFFICIENT, 32), (sts.LOCK, 1)] and on > 3
+    assert writes[-3:] == [(sts.LOCK, 0), (sts.P_COEFFICIENT, 16), (sts.LOCK, 1)]
+    assert servo.regs[sts.P_COEFFICIENT] == 16 and servo.regs[sts.LOCK] == 1
+
+
+def test_a_gain_that_does_not_take_keeps_torque_off():
+    servo, clock = gripper(), FakeClock()
+    servo.ignore = {sts.P_COEFFICIENT}
+    with pytest.raises(sts.STSError, match="gain reads 16, not 32"):
+        probe.run_probe(bus_for(servo), 6, "squeeze", closed=1700, gain=32, hz=100, seconds=0.5,
+                        clock=clock, sleep=clock.sleep)
+    assert (sts.TORQUE_ENABLE, b"\x01") not in servo.writes
 
 
 def test_torque_stays_off_if_the_hold_here_goal_does_not_take():

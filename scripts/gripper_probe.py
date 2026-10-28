@@ -2,13 +2,12 @@
 
 1. Find the port, with the arm's servo power on:
        python scripts/gripper_probe.py --list
-2. watch: read only. Move the jaws by hand (torque off). Type a label and press Enter to mark where they are,
-   for example "touching" with the jaws just closed, "open" with them fully open, and the name of each object
-   you close them on.
+2. watch: read only. Move the jaws by hand (torque off) and press Enter to mark where they are, for example
+   closed, fully open, and closed on each object. A typed label is optional; the live line hides what you type.
        python scripts/gripper_probe.py --port /dev/cu.usbmodem5B910297421 watch
-3. squeeze: put an object between the jaws. The gripper closes slowly toward --closed with a capped
-   torque, then holds. Wait 2 s, then pull, twist or push the object. Type a label (e.g. "pull") and
-   press Enter as you start each action. Ctrl-C ends the run and releases the gripper.
+3. squeeze: it waits while you open the jaws around an object, then on Enter closes slowly toward --closed
+   with a capped torque, and holds. Let go, wait 2 s, then pull, twist or push the object, pressing Enter as
+   you start each action. To stop, hold the object and press Ctrl-C: the gripper lets go.
        python scripts/gripper_probe.py --port /dev/cu.usbmodem5B910297421 squeeze --closed 1278
 
 Both start by printing the gripper's own settings: its position limits from lerobot-calibrate, its torque cap,
@@ -59,6 +58,10 @@ def main(argv=None) -> int:
                     help=f"per mille of max drive, at most {probe.TORQUE_CEILING} and under where the servo's "
                          "overload protection starts (default 200)")
     sq.add_argument("--speed", type=float, default=300, help="closing speed in ticks/s (default 300)")
+    sq.add_argument("--gain", type=int,
+                    help=f"P gain for this squeeze, {probe.GAIN_RANGE[0]}-{probe.GAIN_RANGE[1]}, put back afterwards. "
+                         "The push grows with the gain times how far the goal is past the object: at LeRobot's 16, "
+                         "a board 37 ticks from closed got only 14%%, so 32 lets the torque limit set the squeeze")
     args = ap.parse_args(argv)
 
     if args.list:
@@ -83,16 +86,25 @@ def main(argv=None) -> int:
             print("  " + line)
         if args.mode == "squeeze":
             try:
-                probe.check_squeeze(settings, bus.read_feedback(args.id).position, args.closed, args.torque_limit)
+                probe.check_squeeze(settings, args.closed, args.torque_limit, args.gain)
             except ValueError as e:
                 print(f"Not squeezing: {e}.")
                 return 1
+            while True:  # wait for the object, however long that takes
+                if input("\nOpen the jaws around the object and hold it there, fingers clear of the jaw faces. "
+                         "Press Enter to close (q = quit): ").strip().lower().startswith("q"):
+                    return 1
+                try:
+                    probe.check_jaws(settings, bus.read_feedback(args.id).position, args.closed)
+                    break
+                except ValueError as e:
+                    print(f"Not yet: {e}.")
 
         labels = queue.Queue()
 
         def read_labels() -> None:
-            for line in sys.stdin:
-                labels.put(line.strip() or "mark")
+            for n, line in enumerate(sys.stdin, 1):
+                labels.put(line.strip() or f"mark {n}")
 
         threading.Thread(target=read_labels, daemon=True).start()
 
@@ -117,22 +129,24 @@ def main(argv=None) -> int:
                       f"  current {row['current']:+5d}  {row['temperature']} °C{flagged}   ", end="", flush=True)
 
         if args.mode == "squeeze":
-            print(f"\nClosing toward {args.closed} with torque limit {args.torque_limit}. "
-                  "Hold still 2 s, then type a label and press Enter as you start each action. Ctrl-C to stop.")
+            at_gain = f" at P gain {args.gain}" if args.gain is not None else ""
+            print(f"Closing toward {args.closed} with torque limit {args.torque_limit}{at_gain}. Once it holds, let go "
+                  "and keep your hands off for 2 s. Then press Enter as you start each action. To stop, hold the "
+                  "object and press Ctrl-C: the gripper lets go.")
         else:
-            print("\nWatching (read only). Type a label and press Enter to mark where the jaws are. Ctrl-C to stop.")
+            print("\nWatching (read only). Press Enter to mark where the jaws are. Ctrl-C to stop.")
 
         started = True
         probe.run_probe(
             bus, args.id, args.mode,
             closed=getattr(args, "closed", None), torque_limit=getattr(args, "torque_limit", 200),
             speed=getattr(args, "speed", 300), hz=args.hz, seconds=args.seconds, settings=settings,
-            rows=rows, marks=marks, poll_marks=poll_marks, on_sample=show)
+            gain=getattr(args, "gain", None), rows=rows, marks=marks, poll_marks=poll_marks, on_sample=show)
     except sts.STSError as e:
         print(f"\nStopped: {e}")
     except ValueError as e:  # the jaws moved past a limit between the check above and the squeeze's own
         print(f"\nNot squeezing: {e}.")
-    except KeyboardInterrupt:
+    except (KeyboardInterrupt, EOFError):
         print("\nStopped.")
     finally:
         if args.mode == "squeeze" and started:

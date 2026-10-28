@@ -22,6 +22,8 @@ from . import sts
 FIELDS = ["t", "position", "speed", "load", "current", "voltage", "temperature", "moving", "error", "goal", "mark"]
 TORQUE_CEILING = 600  # per mille of max drive. The probe refuses more, so a wrong --closed can't crush anything.
 MISSES = 5    # replies in a row that may go missing before a run stops. A single one is skipped.
+CLOSED_ALREADY = 30  # ticks: jaws this near the closed goal have nothing between them (the board sat 70 away)
+GAIN_RANGE = (8, 64)  # P gains a squeeze accepts. LeRobot's configure() sets 16: about 3.9 per mille of drive per tick
 OVERLOAD = 5  # the overload bit, in a reply's status flags and in the servo's UNLOADING_CONDITION
 # Read before every run, as (address, bytes)
 SETTINGS = {
@@ -70,15 +72,26 @@ def percent_open(position: float, settings: dict) -> float:
     return 100 * (position - low) / (high - low) if high > low else float("nan")
 
 
-def check_squeeze(settings: dict, position: int, closed: int, torque_limit: int) -> None:
-    """Raise ValueError if a squeeze from `position` could jump, aim past a limit, push too hard, or trip the
-    servo's overload protection."""
+def check_jaws(settings: dict, position: int, closed: int) -> None:
+    """Raise ValueError if the jaws, at `position`, aren't ready for a squeeze toward `closed`: past a limit,
+    where torque coming on would snap them to it, or already closed, with nothing between them."""
     low, high = settings["min_position"], settings["max_position"]
-    if not low <= closed <= high:
-        raise ValueError(f"closed={closed} is outside the servo's position limits, {low} to {high}")
     if not low <= position <= high:
         raise ValueError(f"the jaws are at {position}, past the end of their limits ({low} to {high}), so torque "
                          "coming on would snap them to the limit. Move them in a little first")
+    if abs(position - closed) < CLOSED_ALREADY:
+        raise ValueError(f"the jaws are at {position}, already about closed, so there's nothing between them to "
+                         "squeeze. Open them around the object first")
+
+
+def check_squeeze(settings: dict, closed: int, torque_limit: int, gain: int | None = None) -> None:
+    """Raise ValueError if a squeeze toward `closed` would aim past a limit, push too hard, or trip the servo's
+    overload protection."""
+    low, high = settings["min_position"], settings["max_position"]
+    if not low <= closed <= high:
+        raise ValueError(f"closed={closed} is outside the servo's position limits, {low} to {high}")
+    if gain is not None and not GAIN_RANGE[0] <= gain <= GAIN_RANGE[1]:
+        raise ValueError(f"the gain must be {GAIN_RANGE[0]}-{GAIN_RANGE[1]}")
     ceiling = min(TORQUE_CEILING, settings["max_torque_limit"])
     if not 0 < torque_limit <= ceiling:
         raise ValueError(f"the torque limit must be 1-{ceiling}")
@@ -87,6 +100,27 @@ def check_squeeze(settings: dict, position: int, closed: int, torque_limit: int)
         raise ValueError(f"a torque limit of {torque_limit} isn't under {trip}, where the servo's overload "
                          f"protection starts: a squeeze that hard trips it after "
                          f"{settings['protection_time'] / 100:.2f} s and changes the grip mid-measurement")
+
+
+def set_gain(bus, servo_id: int, gain: int, tries: int = 25) -> None:
+    """Write the servo's P gain, an EEPROM register: unlock, write, read back, lock. Raises STSError if it didn't
+    take."""
+    bus.write_u8(servo_id, sts.LOCK, 0)
+    try:
+        bus.write_u8(servo_id, sts.P_COEFFICIENT, gain)
+    except sts.STSError:
+        pass  # saving to EEPROM can hold up the reply; the read-back is the check
+    for _ in range(tries):
+        try:
+            got = bus.read_u8(servo_id, sts.P_COEFFICIENT)
+            bus.write_u8(servo_id, sts.LOCK, 1)
+            break
+        except sts.STSError:
+            time.sleep(0.02)
+    else:
+        raise sts.STSError(f"servo {servo_id} stopped answering after its gain was written")
+    if got != gain:
+        raise sts.STSError(f"servo {servo_id}'s gain reads {got}, not {gain}")
 
 
 def release(bus, servo_id: int, tries: int = 3) -> bool:
@@ -103,11 +137,15 @@ def release(bus, servo_id: int, tries: int = 3) -> bool:
 
 def run_probe(bus, servo_id: int, mode: str = "watch", closed: int | None = None, torque_limit: int = 200,
               speed: float = 300.0, hz: float = 200.0, seconds: float | None = None, settings: dict | None = None,
-              rows: list | None = None, marks: list | None = None,
+              gain: int | None = None, rows: list | None = None, marks: list | None = None,
               poll_marks=lambda: [], clock=time.monotonic, sleep=time.sleep, on_sample=None) -> tuple:
     """Sample until Ctrl-C or `seconds`. Returns (rows, marks), where marks are (t, label). Pass your own `rows`
     and `marks` lists to keep what was logged if the run raises. A squeeze reads `settings` from the servo
-    unless given them, and refuses to start (ValueError) if check_squeeze does."""
+    unless given them, and refuses to start (ValueError) if check_squeeze or check_jaws does. With `gain`, it
+    runs at that P gain and puts the servo's own back afterwards.
+
+    The servo's load is its own drive, P times how far the jaw is from its goal, so it changes only when the
+    jaw moves: a pull along the jaw faces that leaves the gap alone doesn't show up at all."""
     if mode not in ("watch", "squeeze"):
         raise ValueError(f"unknown mode {mode!r}")
     if mode == "squeeze" and closed is None:
@@ -115,14 +153,18 @@ def run_probe(bus, servo_id: int, mode: str = "watch", closed: int | None = None
     rows = [] if rows is None else rows
     marks = [] if marks is None else marks
 
-    goal, restore_limit = None, None
+    goal, restore_limit, restore_gain = None, None, None
     t0 = clock()
     try:
         if mode == "squeeze":
             settings = settings or read_settings(bus, servo_id)
+            check_squeeze(settings, closed, torque_limit, gain)
             position = bus.read_feedback(servo_id).position
-            check_squeeze(settings, position, closed, torque_limit)
+            check_jaws(settings, position, closed)
             restore_limit, goal = settings["torque_limit"], float(position)
+            if gain is not None and gain != settings["p_gain"]:
+                restore_gain = settings["p_gain"]
+                set_gain(bus, servo_id, gain)
             bus.write_u16(servo_id, sts.GOAL_POSITION, position)  # hold where it is, so torque-on doesn't jump
             bus.write_u16(servo_id, sts.TORQUE_LIMIT, torque_limit)
             if bus.read_u16(servo_id, sts.GOAL_POSITION) != position or \
@@ -174,6 +216,11 @@ def run_probe(bus, servo_id: int, mode: str = "watch", closed: int | None = None
                 bus.write_u16(servo_id, sts.TORQUE_LIMIT, restore_limit)
             except sts.STSError:
                 pass  # it's in RAM, so a power cycle restores it anyway
+            if restore_gain is not None:
+                try:
+                    set_gain(bus, servo_id, restore_gain)
+                except sts.STSError:
+                    pass  # LeRobot's configure() sets every gain back to 16 on its next connect anyway
     return rows, marks
 
 
