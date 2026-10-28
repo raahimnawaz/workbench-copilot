@@ -11,11 +11,12 @@ Entry for the Meta Global AI Developer Hackathon (Indie track, Push the Frontier
 ## Commands (Python 3.12 via uv, which lives in `~/.local/bin`)
 ```bash
 uv venv --clear --python 3.12 && uv pip install -e '.[voice,dev,arm,firmware]'   # also after moving the folder: .venv stores absolute paths
-.venv/bin/python -m pytest -q                                   # 115 offline tests; CI runs them on every push
+.venv/bin/python -m pytest -q                                   # 126 offline tests; CI runs them on every push
 .venv/bin/python scripts/smoke_test.py                          # PAID, about $0.01: one call to each hosted model
 echo "Zero response on SPI. Check my wiring against the firmware." | .venv/bin/python -m wbc.agent --sim   # PAID, about $0.04
 .venv/bin/python scripts/gripper_probe.py --list                # free: find the servo bus port
 .venv/bin/python scripts/first_moves.py --port /dev/cu.usbmodem5B910297421   # the arm's first powered moves (needs the lerobot extra)
+.venv/bin/python scripts/power_cut.py --port /dev/cu.usbmodem5B910297421 idle   # the power cut-off test: idle first, then hold
 .venv/bin/pio run -d firmware/fsr_sampler -t upload --upload-port /dev/cu.usbserial-0001   # flash the force sensor sampler
 .venv/bin/python scripts/calibrate_fsr.py --port /dev/cu.usbserial-0001 watch   # free: also calibrate / creep --channel SD
 ```

@@ -17,8 +17,9 @@ Everything in this repository was written during the hackathon, starting Oct 26,
 | `wbc/motion/sts.py`, `wbc/motion/probe.py` | A small STS3215 servo client and the gripper feedback probe |
 | `scripts/set_servo_ids.py` | Gives each servo of an already-assembled arm its id, growing the chain from the base |
 | `scripts/first_moves.py` | The arm's first powered moves: torque on without a jump, then each joint a little, recording which way it turns |
+| `scripts/power_cut.py` | The power cut-off test: switching the servo supply off makes the arm let go, and it stays limp when the power returns |
 | `wbc/reflex/fsr_link.py`, `wbc/reflex/fsr_cal.py` | The force sensor link (500 Hz frames with a CRC), per-sensor calibration fit and creep analysis |
-| `config/`, `fixtures/`, `scripts/`, `tests/` | Model routing config, the recorded bench for `--sim`, the smoke test, gripper probe and force sensor tools, 112 tests |
+| `config/`, `fixtures/`, `scripts/`, `tests/` | Model routing config, the recorded bench for `--sim`, the smoke test, gripper probe and force sensor tools, 126 tests |
 | `firmware/dut_demo/` | The Act 1 demo board firmware, with the wiring bug planted on purpose |
 | `firmware/fsr_sampler/` | ESP32 firmware that samples the four jaw sensors at 500 Hz and streams them over USB |
 
@@ -99,6 +100,22 @@ python scripts/first_moves.py --port /dev/cu.usbmodemXXXX
 - Each joint moves 10° toward the middle of its range over 2 s (`--degrees`, `--seconds`), holds while you say which way it went, then comes back. LeRobot's `max_relative_target` keeps every goal within 5° of where the joint is.
 - Every step waits for Enter. Ctrl-C stops the moves and the arm holds where it is. After that, or a normal finish, the motors go off only once you say you're holding the arm, because it drops when they do.
 - Each run writes `.wbc/logs/first-moves-<time>.json`: every reading while each joint came on and moved, what each joint was asked and did, and which way plus turns it.
+
+## Power cut-off test
+
+The servos' power supply runs through a switched power strip, which is the arm's emergency stop. `scripts/power_cut.py` checks that switching it off makes the arm let go, and that the arm stays limp when the power comes back. Only the servo supply should be plugged into that strip.
+
+```bash
+python scripts/power_cut.py --port /dev/cu.usbmodemXXXX idle
+python scripts/power_cut.py --port /dev/cu.usbmodemXXXX hold
+```
+
+- `idle` comes first. The motors stay off and nothing is written to the servos. You switch the strip off, and the script records how the supply voltage falls until the servos stop answering. You switch it back on, and it checks what they came back with: torque off on all six, and which settings the cut reset.
+- `hold` turns the motors on at 50% torque the way `first_moves.py` does, with the elbow at P = 32, and holds a pose you set once you've let go and it has settled. With a hand under the elbow, you switch the strip off, and it records when the arm let go. If a joint moves more than 5° while the voltage is still normal, every motor is cut at once. If the servos still answer 2 s after the voltage starts to fall, the script cuts them itself.
+- Both wait as long as you take, so you can step away. Ctrl-C stops either one, and in `hold` the motors go off only once you say you're holding the arm.
+- The supply keeps its output up for a moment after the switch, which the servos can't report, so `hold` asks whether the arm let go at once.
+- If the USB adapter disappears along with the servos, the strip powers the adapter or its hub too, and the script says so.
+- Each run writes `.wbc/logs/power-cut-<step>-<time>.json`: the servo registers before and after, and every reading around the cut.
 
 ## Gripper probe: what can servo feedback feel?
 
