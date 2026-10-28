@@ -203,7 +203,9 @@ def listen_forever(on_text, cfg: dict, api_key: str, budget, hud, mic=None, tran
         if not checked and listened >= 2.0:
             checked = True
             if gate.floor == 0:  # a mic macOS hasn't allowed records exact zeros
-                hud.note("the mic is sending pure silence. Let this terminal use the microphone in System Settings → "
-                         "Privacy & Security → Microphone, then restart the terminal.")
+                hud.note("the mic is sending pure silence: macOS hasn't let the app this terminal runs in (Claude, "
+                         "Terminal, ...) use the microphone. Switch it on in System Settings → Privacy & Security → "
+                         "Microphone, then quit and reopen that app. If the app isn't listed there, run this from "
+                         "Terminal.app, which asks for the mic on its first run.")
             else:
                 hud.note(f"room noise {dbfs(gate.floor):.0f} dBFS; speech counts above {dbfs(gate.threshold()):.0f} dBFS")
