@@ -39,11 +39,10 @@ modules:
   # in columns b and j, so only column a is left free beside a header. The header with the LED's pin
   # (D23 to 3V3) is the b side: D23 beside a15, 3V3 beside a1.
   esp32: {part: esp32_devkit_30, headers: {left: {start: j15, step: -1}, right: {start: b15, step: -1}}}
-  # The Act 1 LED (Oct 28): anode in e25, cathode in e26, clear of the DevKit's antenna. Its jumper runs along
-  # column a from a5 (GPIO 4, the planted bug: pins.h says 5) to a25. A 330 ohm resistor goes from a26 to the
-  # a- rail, and a short jumper from a2 (GND) to the same rail. Flat wires leaving column a lie over each other
-  # once there are two heading the same way, so one signal wire is what this layout allows.
-  led: {part: led_5mm, headers: {legs: {start: e25, step: 1}}}
+  # The Act 1 LED (Oct 28, as wired): its jumper runs along column a from a5 (GPIO 4, the planted bug: pins.h
+  # says 5) to a26, a resistor goes from b26 to b42, the LED's anode is in row 42 and its cathode in row 43,
+  # and a jumper takes row 43 to a rail. SAM reads the long-legged resistor as a wire, which joins the nets.
+  led: {part: led_5mm, headers: {legs: {start: e42, step: 1}}}
 
 firmware:
   file: firmware/dut_demo/include/pins.h
