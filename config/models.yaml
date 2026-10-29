@@ -17,6 +17,7 @@ router:
   prefetch:
     - {tool: read_breadboard}
     - {tool: read_file, args: {path: firmware/dut_demo/include/pins.h}}
+    - {tool: read_sensor}               # the demo board's force sensor, live, while the board is read
 
 coder:
   model: muse-wonder-1.0
@@ -41,9 +42,9 @@ ears:
   # Hands free: "Copilot, check my wiring." Every utterance is transcribed; only these go to the router.
   wake_phrase: copilot
   # Acronyms only. In a test, hints fixed "SBI" -> SPI and "Mosley" -> MOSI, while adding "pins.h"
-  # and "chip select" made those phrases come out worse ("pinsh h", "chip chip select"). LED is untested
-  # as a hint; OLED is out, so it can't turn "LED" into "OLED".
-  keywords: [GPIO, LED, regrasp]
+  # and "chip select" made those phrases come out worse ("pinsh h", "chip chip select"). ADC is untested
+  # as a hint.
+  keywords: [GPIO, ADC, regrasp]
 
 backup:                             # open-weights router served on your own machine
   model: muse-glimmer-30b           # the name your local server registers

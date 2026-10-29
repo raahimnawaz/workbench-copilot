@@ -13,7 +13,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
 
-from . import coder
+from . import coder, dut
 
 MAX_READ = 64_000
 
@@ -78,6 +78,8 @@ class Bench:
     patches: dict = field(default_factory=dict)
     layout: dict = field(default_factory=dict)  # bench.yaml: the camera, the carrier and where the parts sit
     parts: dict = field(default_factory=dict)  # parts.yaml
+    say: Callable = print  # tells the user something mid-turn, such as "press the sensor now"
+    flashed_gpio: int | None = None  # --sim only: the SENSOR_PIN of the last firmware "flashed"
 
 
 def _not_wired(tool: str, day: str) -> dict:
@@ -172,5 +174,35 @@ def build_toolbox(bench: Bench) -> Toolbox:
         if bench.sim:
             return {"ok": True, "sim": True, "target": target, "hover_mm": hover_mm, "tip_error_mm": 0.0}
         return _not_wired("point_at", "D5")
+
+    @tb.register("read_sensor", (
+        "Read the demo board's force sensor live over serial for a few seconds. Returns the readings in "
+        "millivolts (min, max, mean and a short trace), whether they answer a press, and which GPIO the "
+        "firmware on the board reads. Pass `prompt` to ask the user to press first."), {
+        "type": "object",
+        "properties": {"seconds": {"type": "number", "minimum": 0.5, "maximum": 10, "default": 2},
+                       "prompt": {"type": "string", "description": "Said to the user before reading, e.g. "
+                                                                   "'Press the sensor now.'"}}}, label="board")
+    def read_sensor(seconds: float = 2.0, prompt: str = "") -> dict:
+        if prompt:
+            bench.say(prompt)
+            time.sleep(0 if bench.sim else 1.0)  # time to reach the sensor
+        if bench.sim:
+            return dut.sim_read(bench.flashed_gpio)
+        fw = bench.layout.get("firmware", {})
+        return dut.read(dut.find_port(fw), seconds, fw.get("baud", 115200))
+
+    @tb.register("build_and_flash", (
+        "Build the demo board's firmware as it is in the working tree, staged patches included, and upload it. "
+        "Only after the user says go."), {"type": "object", "properties": {}}, label="PlatformIO")
+    def build_and_flash() -> dict:
+        if bench.sim:
+            bench.flashed_gpio = dut.firmware_gpio(bench.root)
+            return {"ok": True, "sim": True, "seconds": 0.0, "firmware_gpio": bench.flashed_gpio}
+        fw = bench.layout.get("firmware", {})
+        result = dut.flash(bench.root, fw["upload_cmd"], dut.find_port(fw))
+        if result.get("ok"):
+            result["firmware_gpio"] = dut.firmware_gpio(bench.root)
+        return result
 
     return tb

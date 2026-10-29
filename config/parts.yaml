@@ -19,7 +19,11 @@ modules:
   esp32_devkit_30:
     left: [EN, GPIO36, GPIO39, GPIO34, GPIO35, GPIO32, GPIO33, GPIO25, GPIO26, GPIO27, GPIO14, GPIO12, GPIO13, GND, VIN]
     right: [GPIO23, GPIO22, GPIO1, GPIO3, GPIO21, GPIO19, GPIO18, GPIO5, GPIO17, GPIO16, GPIO4, GPIO2, GPIO15, GND, 3V3]
-  # A 5 mm LED. Its legs go in two neighboring rows, the anode (A, the longer leg) first.
+  # Usdrwam TFS-100 thin-film force sensor: two pins 2.54 mm apart, in two neighboring rows. It isn't polarized,
+  # so OUT is just the pin wired to the divider and the GPIO.
+  tfs100:
+    legs: [OUT, VCC]
+  # A 5 mm LED, Act 1's board until Oct 29. Its legs go in two neighboring rows, the anode (A, the longer leg) first.
   led_5mm:
     legs: [A, K]
   # 0.96" SSD1306 OLED, 7-pin SPI (the UMLIFE modules), left to right with the text upright. Shelved on Oct 28:
