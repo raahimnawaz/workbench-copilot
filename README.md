@@ -35,7 +35,6 @@ Everything in this repository was written during the hackathon, starting Oct 26,
 | [AprilTag](https://april.eecs.umich.edu/software/apriltag)'s tag36h11 family, as built into OpenCV's ArUco module | BSD-2-Clause | The carrier's tags |
 | Muse Glimmer 30B weights | Apache-2.0 | The local backup router |
 | openai, numpy, PyYAML, httpx, sounddevice, pyserial, pytest, OpenCV, Pillow | Apache-2.0, BSD-3, MIT, BSD-3, MIT, BSD-3, MIT, Apache-2.0, MIT-CMU | Python dependencies |
-| Adafruit SSD1306 and Adafruit GFX | BSD | Demo board display driver |
 | [PlatformIO](https://platformio.org) and the [Arduino core for ESP32](https://github.com/espressif/arduino-esp32) | Apache-2.0, LGPL-2.1 | Building and flashing both firmware projects |
 
 ## Status, Oct 26 (Day 1)
@@ -52,7 +51,7 @@ Everything in this repository was written during the hackathon, starting Oct 26,
 | STS3215 client and gripper probe | Packet format, decoding, the squeeze ramp and torque release are tested against a fake servo. Not yet run on the arm. |
 | Force sensor sampler and tools (Oct 27) | The firmware runs on the ESP32: 500.0 Hz, no dropped frames and no CRC errors. On a real sensor, creep measured +6.8% over 3 s and +28% over 60 s under 51 g. Calibration is rough so far (coins up to 51 g, errors up to 27%), and readings at 34 g and 51 g came out about the same. That's an open question to settle with heavier weights before the jaw pads. |
 | SAM 3.1 client (Oct 28) | Built to Meta's documented request and reply format and tested offline on replies written with Meta's own mask encoder. Called live since Oct 28: "wire" finds each flat wire (scores 0.61–0.88) and "breadboard" the board, in 1.1–1.6 s a request, while "jumper wire" finds nothing. |
-| Board reader (Oct 28) | Built and tested on a synthetic bench photo: the carrier's tags, the top-down view, the hole grid fit, wire tracing, the netlist and the check against `pins.h`. On the first real photo (Oct 28) it found all three wires, and with a 1 mm tip inset all six ends land on their true holes, though with a thin margin. `bench.yaml` doesn't place the modules until the demo board is wired. |
+| Board reader (Oct 28) | Built and tested on a synthetic bench photo: the carrier's tags, the top-down view, the hole grid fit, wire tracing, the netlist and the check against `pins.h`. On the first real photo (Oct 28) it found all three wires, and with a 1 mm tip inset all six ends land on their true holes, though with a thin margin. On the wired LED board (Oct 28 evening) it traced the LED's jumper from a5 and reported it on GPIO 4 while `pins.h` says 5: the planted bug, found on the real bench. |
 | Motion layer, slip detector, web HUD | Not started (blueprint sheet 10). Their tools return a clear "not wired yet" error, or use the recorded bench with `--sim`. |
 
 ## Setup (Apple Silicon)
@@ -73,7 +72,7 @@ The smoke test makes one small call to each hosted model and reports which model
 python -m wbc.agent --sim
 ```
 
-Then type `Zero response on SPI. Check my wiring against the firmware.` With `--sim`, `read_breadboard` returns the recorded Act 1 scene from `fixtures/` and `point_at` pretends to move. That exercises the real router and the real Wonder coder with no hardware attached.
+Then type `My LED won't blink. Check my wiring against the firmware.` With `--sim`, `read_breadboard` returns the recorded Act 1 scene from `fixtures/` and `point_at` pretends to move. That exercises the real router and the real Wonder coder with no hardware attached.
 
 - `--voice` also listens on the bench mic (`ears.input_device`, the Razer Seiren Mini). Say "Copilot," and your request, or "Copilot." and then the request. Every utterance is transcribed, and only the ones addressed to the co-pilot go to the router. `--hear` is a mic check: it prints what it heard and routes nothing. The first time, macOS asks to let your terminal use the microphone.
 - `--backup` routes with Muse Glimmer on your own machine. Serve it with any OpenAI-compatible server that supports tool calls (llama.cpp's `llama-server`, LM Studio or Ollama), then set `backup.base_url` and `backup.model` in `config/models.yaml`. The 4-bit build fits easily in 64 GB.
@@ -193,7 +192,9 @@ python scripts/sam_probe.py replay .wbc/vision/sam-<time>.json   # free: parse a
 2. **Top-down view.** Code cuts out the board area at 5.5 px/mm, about 970 × 360 px. That's under the 1008 px SAM works at, so thin wires keep their detail, and SAM's masks come back in board millimeters.
 3. **SAM 3.1 and the hole grid.** SAM segments `wire` in the view. Meanwhile code finds where the board really lies: its holes are small dark squares, and it shifts and turns the grid, by up to 1.2 mm and 1°, until the predicted holes sit on the darkest spots. That's under half a pitch, because a grid a whole pitch off fits just as well. It scales the grid too: the board's top stands about 10 mm above the sheet the tags are printed on, so from 30 cm the camera sees it about 2% larger than life, enough to put the end rows a millimeter off. Only the right scale lines up all 63 rows.
 4. **Wires.** Each mask is thinned to its center line and followed out to both tips. A flat jumper's legs go into its holes at its tips, so each tip snaps to the nearest hole within 1.2 mm, and a tip farther from every hole is flagged. A mask that branches is flagged as two wires that may touch.
-5. **Netlist and `pins.h`.** Each row's a–e and f–j strips and each rail is a node, wires join nodes, and the ESP32's and display's pins sit in holes given in `config/bench.yaml`. Plain code then compares each display pin's GPIO with `pins.h` and reports the mismatch, its wire and hole, and the line to fix.
+5. **Netlist and `pins.h`.** Each row's a–e and f–j strips and each rail is a node, wires join nodes, and the ESP32's and the LED's pins sit in holes given in `config/bench.yaml`. Plain code then follows each `pins.h` signal from its part's pin to the GPIO its net reaches, and reports any mismatch, its wire and hole, and the line to fix.
+
+**The Act 1 board** is an ESP32 DevKit blinking one LED. The DevKit straddles the center channel, which leaves only column a free beside its pins, and two flat wires heading the same way along one column lie on top of each other, where the camera can't see the lower one. So the demo uses one signal wire: a jumper from a5 (GPIO 4) to a26, a resistor from row 26 to row 42, and the LED in rows 42–43, while `pins.h` says the LED is on GPIO 5. The 7-wire SPI display that was planned first is shelved.
 
 It reads flat pre-cut jumpers. Loose jumper leads stand about 15 mm off the board, and from a camera 30 cm up their tips look up to 4 mm away from where they go in, more than a hole.
 
@@ -203,8 +204,8 @@ python scripts/read_board.py check      # free: the tags, and the fitted hole gr
 python scripts/read_board.py read       # $0.0025: the whole read, drawn in .wbc/vision/board-<time>.png
 ```
 
-- Both take a still from the camera in `bench.yaml` and keep it as `.wbc/vision/photo-<time>.png`, or read one with `--photo`. Run them from Terminal.app.
-- `config/bench.yaml` holds the camera, the carrier's tags, each board's place on the sheet, where each module's headers start, and which display pin each `pins.h` signal drives. `config/parts.yaml` holds the breadboard's geometry and the module pinouts. Change those and print the carrier again; never edit the sheet.
+- Both take a still from the camera in `bench.yaml` and keep it as `.wbc/vision/photo-<time>.png`, or read one with `--photo`. Run them from Terminal.app. The C920 refocuses every time it's opened, so the capture waits 1.5 s for exposure, then keeps the sharpest of the next 1.5 s of frames (the variance of the Laplacian).
+- `config/bench.yaml` holds the camera, the carrier's tags, each board's place on the sheet, where each module's headers start, and which part pin each `pins.h` signal drives. `config/parts.yaml` holds the breadboard's geometry and the module pinouts. Change those and print the carrier again; never edit the sheet.
 - `reader.tip_inset_mm` moves each wire end back from the tip of its mask, for jumpers whose masks stop short of their holes or run past them. Set it from the golden photos' residuals.
 - Each read saves the drawing, the top-down view and the result, with SAM's whole reply, as `.wbc/vision/board-<time>.*`.
 
