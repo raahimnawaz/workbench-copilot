@@ -1,0 +1,19 @@
+# The golden set: photos of the bench with each wire's two true holes, labeled by hand at the bench.
+# scripts/golden_set.py replays each photo's saved SAM reply (free) and counts the wire ends that land
+# on their true hole. The gate: 20 photos, with at least 98% of ends right.
+#
+# photo: in .wbc/vision/ (local only; .wbc is not committed)
+# read:  the saved board-<time>.json from `read_board.py read --photo` on that photo, holding SAM's reply
+# wires: each wire's two holes, in either order. A rail is named for its side: a+, a-, j+, j-.
+gate:
+  photos: 20
+  ends_right: 0.98
+
+photos:
+  - photo: photo-20261028-135315.png
+    read: board-20261028-164150.json
+    note: three hand-cut wires, labeled by Raahim on Oct 28 (16:55, confirmed 17:10)
+    wires:
+      - [j3, j33]     # orange
+      - [d28, a-]     # teal
+      - [j61, a+]     # red
