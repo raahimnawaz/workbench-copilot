@@ -1,6 +1,6 @@
 """A synthetic bench photo for the board reader's tests.
 
-The printed carrier with its four tags, a breadboard with its holes, and the Act 1 LED board's flat wires, seen by a slightly tilted camera at about the C920's scale (0.22 mm per pixel), with
+The printed carrier with its four tags, a breadboard with its holes, and the Act 1 force sensor board's flat wires, seen by a slightly tilted camera at about the C920's scale (0.22 mm per pixel), with
 blur and noise. The breadboard can sit off its configured spot, as a real one always does a little.
 """
 import copy
@@ -15,12 +15,13 @@ PARTS = load_yaml("parts.yaml")
 S = 10  # px per mm of the rendered carrier; pixel i covers mm [i, i + 1) / S
 WIRE_MM = 2.0
 
-# The Act 1 board as wired on Oct 28: (end, end, BGR color). An end is a hole such as "a5", or a rail and a row
-# such as ("a-", 43). The LED's jumper leaves GPIO 4's strip (a5) while pins.h says 5.
+# The Act 1 board: (end, end, BGR color). An end is a hole such as "a5", or a rail and a row such as ("a-", 30).
+# The force sensor's jumper leaves GPIO 4's strip (a5) while pins.h says 15.
 WIRES = [
-    ("a5", "a26", (0, 140, 255)),       # the LED's jumper, from GPIO4 (b5): the planted bug
-    ("b26", "b42", (235, 235, 235)),    # the resistor, which SAM reads as a wire
-    ("c43", ("a-", 43), (30, 30, 30)),  # the LED's cathode to the ground rail
+    ("a5", "a26", (0, 140, 255)),       # the sensor's jumper, from GPIO4 (b5): the planted bug
+    ("b26", "b30", (235, 235, 235)),    # the 10 kOhm resistor, which SAM reads as a wire
+    ("a27", ("a+", 27), (40, 40, 200)),  # the sensor's other pin to the 3.3 V rail
+    ("a30", ("a-", 30), (30, 30, 30)),  # the resistor's far end to the ground rail
 ]
 
 
@@ -34,7 +35,7 @@ def wire_ends(wires=WIRES) -> set:
 
 
 def bench_config() -> dict:
-    bench = copy.deepcopy(load_yaml("bench.yaml"))  # the DevKit and the LED where bench.yaml places them
+    bench = copy.deepcopy(load_yaml("bench.yaml"))  # the DevKit and the sensor where bench.yaml places them
     bench["reader"]["tip_inset_mm"] = 0.0  # these wires end right on their holes, unlike the real bench's
     return bench
 
