@@ -5,12 +5,12 @@
   "netlist": [
     {"signal": "OLED_SCK",  "wire": "wire:3", "display_pin": "D0",  "esp32_gpio": 18},
     {"signal": "OLED_MOSI", "wire": "wire:4", "display_pin": "D1",  "esp32_gpio": 23},
-    {"signal": "OLED_CS",   "wire": "wire:7", "display_pin": "CS",  "esp32_gpio": 13},
+    {"signal": "OLED_CS",   "wire": "wire:7", "display_pin": "CS",  "esp32_gpio": 4},
     {"signal": "OLED_DC",   "wire": "wire:5", "display_pin": "DC",  "esp32_gpio": 16},
     {"signal": "OLED_RES",  "wire": "wire:6", "display_pin": "RES", "esp32_gpio": 17}
   ],
   "mismatches": [
-    {"signal": "OLED_CS", "pins_h": 5, "wired_to": 13, "wire": "wire:7", "row": "row:41",
+    {"signal": "OLED_CS", "pins_h": 5, "wired_to": 4, "wire": "wire:7", "row": "row:41",
      "file": "firmware/dut_demo/include/pins.h", "line": 8}
   ],
   "endpoint_residual_mm": {"mean": 0.3, "max": 0.6}
