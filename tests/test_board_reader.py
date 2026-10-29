@@ -256,7 +256,8 @@ def test_read_breadboard_tool_photographs_and_reads_the_board(tmp_path, monkeypa
     tb = build_toolbox(Bench(tmp_path, load_yaml("models.yaml"), sam_for(bench, actual), budget(), layout=bench,
                              parts=PARTS))
     result = tb.dispatch("read_breadboard", {})
-    assert asked == [(0, 1920, 1080)]
+    cam = bench["camera"]  # the board camera bench.yaml names, whichever number macOS gave it
+    assert asked == [(cam["index"], cam["width"], cam["height"])]
     assert result["ok"] and result["mismatches"][0]["wired_to"] == 4 and "capture" in result["_timing"]
     assert any((tmp_path / ".wbc" / "vision").glob("board-*.png"))
 

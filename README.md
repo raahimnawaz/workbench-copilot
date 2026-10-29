@@ -16,9 +16,13 @@ Everything in this repository was written during the hackathon, starting Oct 26,
 | `wbc/motion/kinematics.py` | URDF chain loader, forward kinematics, damped least-squares IK, the (x, y, z, pitch, roll) grasp frame |
 | `wbc/motion/sts.py`, `wbc/motion/probe.py` | A small STS3215 servo client and the gripper feedback probe |
 | `wbc/motion/joints.py`, `wbc/motion/trajectory.py` | The joint map from raw servo ticks to the URDF's joint angles, with signs checked by hand on the arm, and quintic joint moves timed under joint and tip speed caps |
+| `wbc/motion/arm.py` | The arm driver, the one owner of the servo bus: it powers the arm on without a jump and moves all five joints together in URDF angles, refusing before anything moves and cutting every motor when a joint strays; it re-aims joints that stop short of their goals, and opens, closes and grips with the gripper |
 | `scripts/set_servo_ids.py` | Gives each servo of an already-assembled arm its id, growing the chain from the base |
 | `scripts/first_moves.py` | The arm's first powered moves: torque on without a jump, then each joint a little, recording which way it turns |
 | `scripts/power_cut.py` | The power cut-off test: switching the servo supply off makes the arm let go, and it stays limp when the power returns |
+| `scripts/check_joint_map.py` | A read-only check of the joint map with the motors off: which way each joint's URDF angle goes as you turn it by hand |
+| `wbc/motion/carrier.py`, `scripts/register_arm.py` | Registering the arm to the carrier from points touched by hand with the motors off, the touch test, and the pose and two moves that point the gripper at a breadboard hole |
+| `wbc/perception/desk.py`, `scripts/desk_camera.py` | The desk camera: tags touched by the arm map a second camera's view of the desk into the arm's frame, and `locate` finds a named thing there with SAM 3.1, giving its middle, size and heading, corrected for its height |
 | `wbc/reflex/fsr_link.py`, `wbc/reflex/fsr_cal.py` | The force sensor link (500 Hz frames with a CRC), per-sensor calibration fit and creep analysis |
 | `wbc/perception/` | The SAM 3.1 client (one noun phrase per request, sent in parallel; masks decoded and drawn), camera capture, and the board reader: the carrier's tags, the top-down board view, the hole grid fit, wire tracing, the netlist and its check against `pins.h` |
 | `scripts/sam_probe.py`, `scripts/read_board.py`, `scripts/make_carrier.py` | What SAM 3.1 finds in a still; the board reader on a still; the printable carrier sheet |
@@ -47,13 +51,15 @@ Everything in this repository was written during the hackathon, starting Oct 26,
 | Voice front end | The request format was checked against the live API on Oct 26. The wake phrase and the loudness gate that cuts the mic into utterances are tested on synthetic audio, and on Oct 28 they worked on the live mic (the Razer, run from Terminal.app). |
 | Budget guard | Built and tested. Spend persists in `.wbc/spend.json`. |
 | FK/IK | Tested on the real SO-101 URDF. 200 of 200 bench poses round-trip to within 0.2 mm and 0.5°, at about 33 ms per solve. |
-| Joint map (Oct 28) | Checked by hand on the real arm with the motors off. Raw rising turns all five joints the URDF's positive way, and the arm's L pose reads within 2° of the URDF's zero on the lift, elbow and wrist flex. 46 offline tests cover the map and the timed moves, and run those five moves through FK so a sign can't flip back unnoticed. The arm driver that will move by it isn't built yet. |
+| Joint map (Oct 28) | Checked by hand on the real arm with the motors off. Raw rising turns all five joints the URDF's positive way, and the arm's L pose reads within 2° of the URDF's zero on the lift, elbow and wrist flex. 46 offline tests cover the map and the timed moves, and run those five moves through FK so a sign can't flip back unnoticed. |
+| Arm driver and joint map check (Oct 29) | Built and tested offline: the driver against a fake LeRobot follower (power-on order, every refusal, the cuts on a jump, a stray, a sag under a floor or a bus failure, Ctrl-C, a cut or close from another thread or a signal handler, the stop latch, the cut's read-back), the check against fake servos with the Oct 28 hand-test numbers. The driver's first powered run (Oct 29, small moves from the rest pose) was clean; its re-aim and gripper control are tested offline only. |
 | STS3215 client and gripper probe | Run on the arm: `set_servo_ids.py` gave the six servos ids 1–6 (Oct 27), and the gripper probe logged position, load and current while a board in the jaws was pulled, pushed and twisted (Oct 28). |
 | Force sensor sampler and tools (Oct 27) | The firmware runs on the ESP32: 500.0 Hz, no dropped frames and no CRC errors. On a real sensor, creep measured +6.8% over 3 s and +28% over 60 s under 51 g. Calibration is rough so far (coins up to 51 g, errors up to 27%), and readings at 34 g and 51 g came out about the same. That's an open question to settle with heavier weights before the jaw pads. Deferred to the end of the build on Oct 29. |
 | SAM 3.1 client (Oct 28) | Built to Meta's documented request and reply format and tested offline on replies written with Meta's own mask encoder. Called live since Oct 28: "wire" finds each flat wire (scores 0.61–0.88) and "breadboard" the board, in 1.1–1.6 s a request, while "jumper wire" finds nothing. |
 | Board reader (Oct 28) | Built and tested on a synthetic bench photo: the carrier's tags, the top-down view, the hole grid fit, wire tracing, the netlist and the check against `pins.h`. On the first real photo (Oct 28) it found all three wires, and with a 1 mm tip inset all six ends land on their true holes, though with a thin margin. On the wired LED board (Oct 28 evening) it traced the LED's jumper from a5 and reported it on GPIO 4 while `pins.h` says 5: the planted bug, found on the real bench. |
 | Act 1 demo board (Oct 28–29) | On Oct 28, an LED: the reader traced its jumper on the real board and reported GPIO 4 against `pins.h`'s 5. On Oct 29 it became a force sensor circuit: the firmware prints a reading every 20 ms and the pin it reads, `read_sensor` reads a few seconds of them live, and `build_and_flash` uploads the fixed firmware, so the co-pilot can check its own fix under your finger. Built and tested offline; the sensor isn't wired yet. The camera keeps the sharpest frame from 1.5–3 s after opening. |
-| Arm driver, pointing, probe hold, web HUD, spoken replies | Not started; next in the Oct 29 plan. The tools return a clear "not wired yet" error, or use the recorded bench with `--sim`. |
+| Desk camera and `locate` (Oct 29) | Built and tested offline on a synthetic camera: the table maps through the touched tags within 0.01 mm, a badly touched tag is named, and an upright cup's middle lands within 3 mm given its height. Also tested on tags rendered into a frame and found by the real detector. Not yet run on the real desk camera, and not yet a router tool. |
+| Pointing, probe hold, web HUD, spoken replies | Not started; next in the Oct 29 plan. The tools return a clear "not wired yet" error, or use the recorded bench with `--sim`. |
 
 **The plan as of Oct 29** ([blueprint](https://claude.ai/artifact/1f5AMxFTVycA2C25DkqWwm)): Act 1 becomes debugging a force sensor circuit on the carrier board, where the co-pilot reads live samples, finds the wire on the wrong GPIO, fixes `pins.h`, points at the wire with the arm, and checks the reading itself after you flash. Act 2 is the arm holding your multimeter's ground probe on the rail. Act 3, a stretch, is a skill the co-pilot writes for itself. Replies are spoken. The force-sensing jaw pads and the slip catch move to the end.
 
@@ -128,6 +134,48 @@ python scripts/power_cut.py --port /dev/cu.usbmodemXXXX hold
 - Each run writes `.wbc/logs/power-cut-<step>-<time>.json`: the servo registers before and after, and every reading around the cut.
 
 What it found on this arm (Oct 27–28): the strip cuts only the servo supply. Once the supply voltage starts to fall, the servos stop answering within about 10 ms, with or without torque on, before a loaded joint has moved even a degree. A loaded elbow let go at the click and fell onto its stop. The servos come back limp, with every goal at 0 and the torque cap back at each servo's stored maximum, so code that turns torque on after a cut has to set its cap again. Folded poses near upright hold themselves up by gear friction, so only a joint carrying weight drops.
+
+## Joint map and arm driver
+
+`wbc/motion/joints.py` turns each servo's raw position into the URDF's joint angle: q = sign · (raw − 2047) · 2π / 4096. lerobot-calibrate's Part 1 makes every joint read 2047 in the L pose (base facing forward, upper arm straight up, forearm and gripper level and pointing forward), which is the URDF's zero. Every sign is +1. That was checked by hand on Oct 28 with the motors off, each joint turned in a pose where the move reads clearly: raw rises as the base turns clockwise seen from above, the upper arm tips forward, the elbow folds, the gripper tips down, and the wrist rolls counterclockwise looking from the wrist toward the jaw tips. The answers `first_moves.py` recorded on Oct 27 had three of those backwards, because they were read from the folded rest pose. `scripts/check_joint_map.py` repeats the hand test, so run it again after a recalibration or a servo swap:
+
+```bash
+python scripts/check_joint_map.py --port /dev/cu.usbmodemXXXX once    # each joint raw, in LeRobot's degrees and the URDF's, and the tool point
+python scripts/check_joint_map.py --port /dev/cu.usbmodemXXXX watch   # the URDF angles and the gripper's opening, live
+python scripts/check_joint_map.py --port /dev/cu.usbmodemXXXX check   # the guided test: five moves and the L pose
+```
+
+- It only reads, through `wbc/motion/sts.py` and never LeRobot, and it won't run with a motor on. The calibrated ranges come from the limits lerobot-calibrate wrote into the servos, so it needs no calibration file; `--calibration PATH` compares one with them.
+- `check` waits for Enter at each step and passes a move when it turned its joint's URDF angle the way the URDF says that move goes. A move under 5° is asked for again. The L pose passes when the shoulder lift, elbow and wrist flex read within 8° of zero (they read within 2° on Oct 28). The check passes only when every move and the L pose were checked and right; q, Ctrl-C or a servo going silent still prints the summary. It writes `.wbc/logs/joint-map-check-<time>.json`.
+- It refuses a servo other than the wrist roll whose limits are the whole turn, 0–4095, as a new servo comes from the factory: run lerobot-calibrate first.
+
+`wbc/motion/arm.py` is the driver, and the only code that should talk to the servo bus while the agent runs. `Arm.open()` connects LeRobot's bus and nothing more: never `robot.connect()`, which can recalibrate the arm and always ends by turning torque on. `power_on()` brings the joints up the way `first_moves.py` does, and `move_to(q)` moves all five together to URDF angles q. Writing a joint's goal turns its torque on, so each goal goes in only as that joint's turn comes, and a write whose reply flags the input voltage, a reading glitch on these servos, goes again, up to 3 times.
+
+- Refused before anything is written. `power_on()` refuses a joint past an end of its calibrated range, or the wrist roll past the URDF's limits, which protect its cable (it says which way to turn the gripper back), and a servo at 65 °C (a warning from 55 °C); heat is checked only there. `move_to()` refuses a start past those ends, a target within 2° of the end of a joint's range, and a path that takes the tool point under 10 mm, or the elbow and wrist axes under 30 mm, above the table. A move that starts under a floor has to climb back over it without going lower on the way, or only turn the base, so small moves can't walk the arm down.
+- Moves are quintic and peak at 30°/s on any joint and 80 mm/s at the tool point, and no goal goes more than 5° from where its joint is. Torque is capped at 50% on the arm joints and 24% on the gripper, under its 25% overload start, and the elbow's P of 32 goes back on after LeRobot's setup at every power-on.
+- Every motor is cut at once if a joint jumps 3° as its torque comes on, strays 5° from its goal during a move, goes 5 mm under a floor, or the bus fails. The floors hold for the plan, not the arm: joints within the 5° stray can put the tool point 17–41 mm under the plan, so they aren't a clearance guarantee.
+- `cut()` works from any thread or a signal handler, and a move or power-on running elsewhere stops at its next tick. Every cut is read back, servo by servo, and when it can't be confirmed the message says to switch the strip off. A cut latches, whether from `cut()`, `close()` or a trip: `power_on()` refuses until `clear_stop()`, so a power-on queued behind a stop can't turn the motors back on. Call it once someone has checked the arm.
+- Ctrl-C reaches only Python's main thread: a move there holds the arm where it is, and one on another thread stops with `cut()`. Ctrl-C while LeRobot awaits a reply leaves scservo_sdk's port marked busy, which would fail every later request, the cut included, so the driver clears it, and drops the late reply, before it talks to the bus again.
+- Each move first checks that every powered joint still has its torque on at its cap. After a power cut the servos come back limp and uncapped, so the move is refused until `power_on()` runs again. If one servo resets on its own, the move is refused and the rest keep holding: hold the arm, `cut()` and `clear_stop()`, then power on again.
+- After a move's path, `move_to()` re-aims. Each joint stops short of its goal by its load over its P gain (gravity and gearbox friction) and stays there, so it moves each goal past its target by the shortfall, ramped under the same speed caps with every check a move has, until every joint is within 0.2°, for up to 3 rounds. A goal never goes more than 4° past its target or past its joint's range, and a round that would aim the arm under a floor isn't run. `move_to(q, aim=False)` skips it.
+- `grip()` closes the gripper on what's between its jaws and keeps squeezing, under its 24% cap, and says whether they stopped on something. `release(opening)` opens them to a share of their range, at up to 60°/s, which the capped jaw can follow. If something's in the way it stops them where they are, says so, and returns once they've come to rest. `jaw()` reads them. While it grips, jaws closing further because what they held slipped out don't trip a move, and `hold()` keeps the squeeze. Ctrl-C during a grip stops the jaws without squeezing, in case it's a finger.
+- `close()` cuts, then, once the cut reads back, puts each servo's torque cap back and locks every servo's EEPROM again (LeRobot's setup leaves it unlocked), and disconnects without LeRobot's torque-off. Keep to one `Arm` per port, and close it before another program uses the port (`check_joint_map.py`, `first_moves.py`): LeRobot opens the port without locking it, so their packets would interleave.
+- LeRobot keeps its calibration file per macOS account. From another account, pass the calibrating account's folder: `Arm.open(port, load_yaml("robot.yaml"), ROOT, calibration_dir="/Users/<account>/.cache/huggingface/lerobot/calibration/robots/so_follower")`.
+
+Its first powered run (Oct 29, small moves from the rest pose) was clean, and showed every joint holding 1–4° short of its goal, which the re-aim makes up. On Oct 27 the elbow lagged its goal by up to 3° at about 8°/s, so a fast elbow move under load may trip the 5° stray cut. If it does, lower `MAX_JOINT_SPEED` or `MAX_TIP_SPEED` before raising `MAX_STRAY`.
+
+### Pointing at a hole
+
+To point at a hole, the arm has to know where the carrier lies. `scripts/register_arm.py touch`, with the motors off, asks you to put the tool point (the closed jaws' tips) on the sheet's four tag centers, or any tags and holes you name, and fits the turn about the vertical and the shift from carrier mm to the arm's frame (`wbc/motion/carrier.py`). The table is level, so four numbers are enough, and the fit measures the base's heading rather than trusting "facing forward" by eye. It saves `.wbc/registration.json` when the points sit within 2 mm rms and 3 mm worst. `verify` is the touch test without power: touch holes, and it says how far the tool point is from each across the sheet and in height, passing at a mean of 3 mm or less.
+
+```bash
+python scripts/register_arm.py --port /dev/cu.usbmodemXXXX touch               # tag10 tag11 tag12 tag13
+python scripts/register_arm.py --port /dev/cu.usbmodemXXXX verify a1 j63 a5    # the touch test, motors off
+python scripts/register_arm.py --port /dev/cu.usbmodemXXXX watch               # the hole under the tool point, live
+python scripts/register_arm.py --port /dev/cu.usbmodemXXXX plan a5             # what point_at would do, moving nothing
+```
+
+`carrier.point_at(arm, registration, point_mm(bench, parts, "a5"))` points the gripper at a hole from 30 mm back along its own line: as steep as the arm can, straight down where it can reach that way, and up to 50° from it where it can't. It moves to 60 mm further back on that line first, then in. It only calls `move_to()`, so every refusal and cut stays in force, and it never powers the arm on or clears a stop. Like the driver, it's tested offline only.
 
 ## Gripper probe: what can servo feedback feel?
 
@@ -211,6 +259,24 @@ python scripts/read_board.py read       # $0.0025: the whole read, drawn in .wbc
 - `config/bench.yaml` holds the camera, the carrier's tags, each board's place on the sheet, where each module's headers start, and which part pin each `pins.h` signal drives. `config/parts.yaml` holds the breadboard's geometry and the module pinouts. Change those and print the carrier again; never edit the sheet.
 - `reader.tip_inset_mm` moves each wire end back from the tip of its mask, for jumpers whose masks stop short of their holes or run past them. Set it from the golden photos' residuals.
 - Each read saves the drawing, the top-down view and the result, with SAM's whole reply, as `.wbc/vision/board-<time>.*`.
+
+## Finding things on the desk
+
+A second C920 looks straight down at the desk from about 71 cm, centered about 20 cm in front of the arm's base, and sees the arm's whole reach: about 97 × 55 cm at 0.5 mm per pixel. The board camera keeps its own job over the breadboard. `wbc/perception/desk.py` turns what the desk camera sees into the arm's frame, so the co-pilot can find "the cup" or "the screwdriver" and know where it is.
+
+1. **Tags, touched once.** Six AprilTags (tag36h11, ids 20–25, 50 mm) lie flat around the arm's reach. With the motors off, you put the gripper's tips on each tag's center, and forward kinematics records where it is in the arm's frame. Every photo is then mapped through the tags it shows, so a bumped camera changes nothing. A moved tag needs touching again.
+2. **Top-down view and SAM 3.1.** Code cuts out the table around the arm at 1 px/mm and asks SAM for the thing by name, one request per phrase.
+3. **Height.** One camera can't see height, and something standing up looks further from the point under the camera than it is. The tags also place the camera itself, so given a thing's height, its outline's near edge (its base, on the table) and far edge (its top) put its middle back where it is. A cup's middle lands within 3 mm with its height given. Without it, the cup reads 15 mm off from straight above.
+
+```bash
+python scripts/desk_camera.py tags                                    # .wbc/vision/desk-tags.pdf: print at 100%, check the 100 mm bar
+python scripts/desk_camera.py --port /dev/cu.usbmodemXXXX touch       # motors off: touch each tag's center with the gripper's tips
+python scripts/desk_camera.py check                                   # free: how well the tags agree, and where the camera is
+python scripts/desk_camera.py locate cup --height 95                  # $0.0025: where the cup is in the arm's frame
+```
+
+- Run `check` and `locate` from Terminal.app, for the camera. They find the desk camera by its tags, so macOS renumbering cameras doesn't matter, and keep each photo in `.wbc/vision/`. `locate --replay PATH` reads a saved reply again for free.
+- `config/desk.yaml` holds the camera, the tags, the area SAM sees and the focal length used to place the camera.
 
 ## How the router works
 

@@ -1,13 +1,15 @@
 # This bench: the camera, the printed carrier the breadboard lies on, and where each part sits.
 # Positions are in mm on the carrier, from the paper's top-left corner, x to the right and y down.
 
-camera: {index: 0, width: 1920, height: 1080}
+camera: {index: 1, width: 1920, height: 1080}  # index 1 since Oct 29: index 0 is the desk camera (config/desk.yaml)
 
 carrier:                            # printed by scripts/make_carrier.py: print at 100% ("Actual size")
   paper_mm: [279.4, 215.9]          # US Letter, landscape
   tag_family: tag36h11
   tag_size_mm: 20                   # the black square's edge
   tags: {10: [40.0, 62.0], 11: [239.4, 62.0], 12: [239.4, 153.9], 13: [40.0, 153.9]}   # tag centers
+  board_top_mm: 10                  # how far the breadboards' tops stand above the sheet (about 10 mm, Oct 28): pointing
+                                    # and the arm's touch test aim at holes there. register_arm.py verify measures it
 
 boards:
   # Each breadboard's hole a1 on the carrier, the way its row numbers grow, and the way its letters run

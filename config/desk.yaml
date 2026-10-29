@@ -1,0 +1,12 @@
+# The desk camera: a second webcam looking down at the desk, seeing the arm's whole reach, so locate can say where
+# things are in the arm's frame. scripts/desk_camera.py prints the tags, registers them to the arm by touch, checks the
+# fit and runs locate; wbc/perception/desk.py has the geometry.
+camera: {index: 0, width: 1920, height: 1080}  # tried first (index 0 since Oct 29, 28 in up); else whichever shows the tags
+focal_px: 1400       # the C920's focal length at 1920 px wide (published calibrations give 1390-1430), scaled to the width
+tags:
+  family: tag36h11
+  size_mm: 50        # the black square's side, as printed
+  ids: [20, 21, 22, 23, 24, 25]  # not the carrier's 10-13
+min_tags: 4          # touched tags a frame has to show to be mapped; with 5 or more each one is checked against the rest
+region_mm: [-100, -450, 480, 450]  # x0, y0, x1, y1 in the arm's frame: the part of the table locate shows SAM
+px_per_mm: 1.0       # that top-down view's scale: 900 x 580 px, under SAM's 1008

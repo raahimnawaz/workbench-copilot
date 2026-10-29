@@ -111,7 +111,7 @@ class JointMap:
                 raise ValueError(f"the calibration has no range for the {name}")
             if not low < high:
                 raise ValueError(f"the {name}'s calibrated range runs from {low} to {high}, and its minimum has to "
-                                 "be below its maximum")
+                                 "be below its maximum. Run lerobot-calibrate again")
             servos[m] = Servo(m, servo_id, int(sign), int(low), int(high))
         if chain is None:
             return cls(servos)
@@ -175,6 +175,19 @@ class JointMap:
             if not s.range_min <= raw[m] <= s.range_max:
                 past[m] = max(s.range_min - raw[m], raw[m] - s.range_max) * 360 / TICKS_PER_TURN
         return past
+
+    def past_limits(self, raw: dict) -> dict:
+        """Every joint in `raw` past where moves may take it, as {joint: degrees past}: past an end of its calibrated
+        range, as outside() says, or for a joint with no stop, past its limits(), the URDF's, which keep its cable from
+        winding up. Such a joint's reading wraps at ±180°, so a whole turn by hand doesn't show."""
+        past = self.outside(raw)
+        for m in JOINTS:
+            if m in raw and self.servos[m].full_turn:
+                lo, hi = self.limits(m)
+                q = self.angle(m, raw[m])
+                if not lo <= q <= hi:
+                    past[m] = math.degrees(max(lo - q, q - hi))
+        return {m: past[m] for m in JOINTS if m in past}
 
 
 def load_calibration(path) -> dict:
