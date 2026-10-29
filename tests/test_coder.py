@@ -13,13 +13,12 @@ FIX = """Here's the fix.
 ```diff
 --- firmware/dut_demo/include/pins.h
 +++ firmware/dut_demo/include/pins.h
-@@ -7,3 +7,3 @@
- #define OLED_MOSI 23   // D1 on the display
--#define OLED_CS   5    // chip select
-+#define OLED_CS   13   // chip select
- #define OLED_DC   16   // data/command
+@@ -6,2 +6,2 @@
+-#define LED_PIN  5     // the LED's anode, through its jumper
++#define LED_PIN  4     // the LED's anode, through its jumper
+ #define BLINK_MS 250   // the LED is on this long, then off this long
 ```
-WHY: The CS jumper lands on GPIO 13, so pins.h has to match the wire.
+WHY: The LED's jumper lands on GPIO 4, so pins.h has to match the wire.
 """
 
 
@@ -48,13 +47,13 @@ def wonder_says(text):
 def test_split_diff_adds_prefixes_and_reads_why():
     diff, why = coder.split_diff(FIX)
     assert diff.startswith("--- a/firmware/") and "\n+++ b/firmware/" in diff
-    assert why.startswith("The CS jumper")
+    assert why.startswith("The LED's jumper")
 
 
 def test_split_diff_without_a_fence():
     text = FIX.replace("```diff\n", "").replace("```\n", "")
     diff, why = coder.split_diff(text)
-    assert "+#define OLED_CS   13" in diff and "WHY" not in diff and why
+    assert "+#define LED_PIN  4 " in diff and "WHY" not in diff and why
 
 
 def test_split_diff_with_nothing_to_find():
@@ -65,18 +64,18 @@ def test_ask_coder_returns_a_checked_diff(tmp_path):
     root = project(tmp_path)
     client = wonder_says(FIX)
     b = budget()
-    out = coder.ask_coder(client, cfg(), b, root, "Fix CS", [PINS], {"OLED_CS": "GPIO 13"})
+    out = coder.ask_coder(client, cfg(), b, root, "Fix the LED pin", [PINS], {"LED_PIN": "GPIO 4"})
     assert out["ok"] and out["compiled"] is False and "skipped" in out["log"]
-    assert "#define OLED_CS   5 " in (root / PINS).read_text(), "ask_coder must not touch the working tree"
+    assert "#define LED_PIN  5 " in (root / PINS).read_text(), "ask_coder must not touch the working tree"
     sent = client.responses.requests[0]
-    assert sent["model"] == "wonder" and "GPIO 13" in sent["input"] and "=== firmware/dut_demo/include/pins.h" in sent["input"]
+    assert sent["model"] == "wonder" and "GPIO 4" in sent["input"] and "=== firmware/dut_demo/include/pins.h" in sent["input"]
     assert b.spent > 0
 
 
 def test_ask_coder_rejects_a_diff_that_does_not_apply(tmp_path):
     root = project(tmp_path)
-    out = coder.ask_coder(wonder_says(FIX.replace("OLED_CS   5 ", "OLED_CS   7 ")), cfg(), budget(), root,
-                          "Fix CS", [PINS])
+    out = coder.ask_coder(wonder_says(FIX.replace("LED_PIN  5 ", "LED_PIN  7 ")), cfg(), budget(), root,
+                          "Fix the LED pin", [PINS])
     assert out["ok"] is False and out["error"] == "diff does not apply"
 
 
@@ -93,11 +92,11 @@ def test_ask_coder_reports_an_unavailable_coder(tmp_path):
 
 def test_compile_runs_on_the_patched_sandbox_and_leaves_it_clean(tmp_path):
     root = project(tmp_path)
-    check = "grep -q 'OLED_CS   13' firmware/dut_demo/include/pins.h"
-    out = coder.ask_coder(wonder_says(FIX), cfg(compile_cmd=check), budget(), root, "Fix CS", [PINS])
+    check = "grep -q 'LED_PIN  4 ' firmware/dut_demo/include/pins.h"
+    out = coder.ask_coder(wonder_says(FIX), cfg(compile_cmd=check), budget(), root, "Fix the LED pin", [PINS])
     assert out["ok"] and out["compiled"] is True
     # A second run proves the sandbox was reverted: the same diff still applies there.
-    again = coder.ask_coder(wonder_says(FIX), cfg(compile_cmd=check), budget(), root, "Fix CS", [PINS])
+    again = coder.ask_coder(wonder_says(FIX), cfg(compile_cmd=check), budget(), root, "Fix the LED pin", [PINS])
     assert again["ok"] and again["compiled"] is True
 
 
@@ -107,7 +106,7 @@ def test_compile_failure_is_reported(tmp_path):
 
 
 def test_ask_coder_times_wonder_and_the_compile(tmp_path):
-    out = coder.ask_coder(wonder_says(FIX), cfg(compile_cmd="true"), budget(), project(tmp_path), "Fix CS", [PINS])
+    out = coder.ask_coder(wonder_says(FIX), cfg(compile_cmd="true"), budget(), project(tmp_path), "Fix the LED pin", [PINS])
     assert out["ok"] and set(out["_timing"]) == {"wonder", "compile"}
 
 
@@ -122,9 +121,9 @@ def test_auto_stage_puts_a_checked_patch_in_the_working_tree(tmp_path):
     """Oct 28: the router spent a whole round (11.2 s) just calling propose_patch."""
     root = project(tmp_path)
     tb = build_toolbox(Bench(root, {"coder": cfg(auto_stage=True)}, wonder_says(FIX), budget()))
-    out = tb.dispatch("ask_coder", {"task": "Fix CS", "files": [PINS]})
-    assert out["ok"] and out["staged"]["ok"] and out["staged"]["line"] == 8
-    assert "#define OLED_CS   13" in (root / PINS).read_text()
+    out = tb.dispatch("ask_coder", {"task": "Fix the LED pin", "files": [PINS]})
+    assert out["ok"] and out["staged"]["ok"] and out["staged"]["line"] == 6
+    assert "#define LED_PIN  4 " in (root / PINS).read_text()
     again = tb.dispatch("propose_patch", {"patch_id": out["patch_id"]})
     assert again["ok"] and again["already_staged"]
 
@@ -132,16 +131,16 @@ def test_auto_stage_puts_a_checked_patch_in_the_working_tree(tmp_path):
 def test_without_auto_stage_the_tree_waits_for_propose_patch(tmp_path):
     root = project(tmp_path)
     tb = build_toolbox(Bench(root, {"coder": cfg()}, wonder_says(FIX), budget()))
-    out = tb.dispatch("ask_coder", {"task": "Fix CS", "files": [PINS]})
-    assert out["ok"] and "staged" not in out and "#define OLED_CS   5 " in (root / PINS).read_text()
+    out = tb.dispatch("ask_coder", {"task": "Fix the LED pin", "files": [PINS]})
+    assert out["ok"] and "staged" not in out and "#define LED_PIN  5 " in (root / PINS).read_text()
     assert tb.dispatch("propose_patch", {"patch_id": out["patch_id"]})["ok"]
-    assert "#define OLED_CS   13" in (root / PINS).read_text()
+    assert "#define LED_PIN  4 " in (root / PINS).read_text()
 
 
 def test_propose_patch_applies_to_the_working_tree(tmp_path):
     root = project(tmp_path)
     diff, why = coder.split_diff(FIX)
     out = coder.propose_patch(root, diff, why)
-    assert out["ok"] and out["files"] == [PINS] and out["line"] == 8
-    assert "#define OLED_CS   13" in (root / PINS).read_text()
+    assert out["ok"] and out["files"] == [PINS] and out["line"] == 6
+    assert "#define LED_PIN  4 " in (root / PINS).read_text()
     assert coder.propose_patch(root, diff, why)["ok"] is False, "a second apply must fail cleanly"

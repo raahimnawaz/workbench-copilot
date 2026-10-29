@@ -40,9 +40,10 @@ ears:
   input_device: Razer Seiren Mini   # the bench mic, matched by name (the C920 is the camera)
   # Hands free: "Copilot, check my wiring." Every utterance is transcribed; only these go to the router.
   wake_phrase: copilot
-  # Acronyms only. In a test, these fixed "SBI" -> SPI and "Mosley" -> MOSI, while adding "pins.h"
-  # and "chip select" made those phrases come out worse ("pinsh h", "chip chip select").
-  keywords: [SPI, GPIO, MOSI, SCK, OLED, regrasp]
+  # Acronyms only. In a test, hints fixed "SBI" -> SPI and "Mosley" -> MOSI, while adding "pins.h"
+  # and "chip select" made those phrases come out worse ("pinsh h", "chip chip select"). LED is untested
+  # as a hint; OLED is out, so it can't turn "LED" into "OLED".
+  keywords: [GPIO, LED, regrasp]
 
 backup:                             # open-weights router served on your own machine
   model: muse-glimmer-30b           # the name your local server registers
