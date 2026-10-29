@@ -31,18 +31,18 @@ def wire_reply():
 def test_parse_reads_boxes_masks_and_scores():
     m0, m1 = band(30, 60), band(20, 25)
     text = sam_reply([((10, 40, 70, 70), m0, 0.96), ((100, 5, 125, 25), m1, 0.5)], 200, 120)
-    instances, problems = sam_client.parse(text, "jumper wire")
+    instances, problems = sam_client.parse(text, "wire")
     assert problems == []
     assert [i.box for i in instances] == [(10, 40, 70, 70), (100, 5, 125, 25)]
     assert np.array_equal(instances[0].mask, m0.astype(bool)) and np.array_equal(instances[1].mask, m1.astype(bool))
-    assert instances[0].score == pytest.approx(0.96) and instances[0].phrase == "jumper wire"
+    assert instances[0].score == pytest.approx(0.96) and instances[0].phrase == "wire"
     assert instances[0].area == m0.sum()
     full = instances[0].full_mask((120, 200))
     assert full.sum() == m0.sum() and full[40:70, 10:70].sum() == m0.sum()
 
 
 def test_no_match_is_an_empty_result():
-    assert sam_client.parse("", "jumper wire") == ([], [])
+    assert sam_client.parse("", "wire") == ([], [])
 
 
 def test_a_mask_that_fails_to_decode_is_reported_and_the_rest_kept():
@@ -65,11 +65,11 @@ def test_a_mask_smaller_than_its_box_is_scaled_to_the_box():
 
 
 def test_segment_sends_one_phrase_with_the_photo_and_charges_one_image():
-    client, b = FakeSam({"jumper wire": wire_reply()}), budget()
-    seg = sam_client.segment(client, EYES, b, photo(), "jumper wire")
+    client, b = FakeSam({"wire": wire_reply()}), budget()
+    seg = sam_client.segment(client, EYES, b, photo(), "wire")
     (req,) = client.requests
     text_part, image_part = req["input"][0]["content"]
-    assert req["model"] == "sam-3.1" and text_part == {"type": "input_text", "text": "jumper wire"}
+    assert req["model"] == "sam-3.1" and text_part == {"type": "input_text", "text": "wire"}
     assert image_part["type"] == "input_image" and image_part["image_url"].startswith("data:image/jpeg;base64,")
     assert req["metadata"] == {"mask_encoding": "one_bit", "include_confidence": "true"}
     assert len(seg.instances) == 1 and seg.raw.startswith("<0f>") and seg.problems == []
@@ -77,25 +77,25 @@ def test_segment_sends_one_phrase_with_the_photo_and_charges_one_image():
 
 
 def test_segment_stops_at_the_budget_before_any_request():
-    client = FakeSam({"jumper wire": wire_reply()})
+    client = FakeSam({"wire": wire_reply()})
     with pytest.raises(BudgetExceeded):
-        sam_client.segment(client, EYES, budget(limit=0), photo(), "jumper wire")
+        sam_client.segment(client, EYES, budget(limit=0), photo(), "wire")
     assert client.requests == []
 
 
 def test_a_failed_request_raises_and_costs_nothing():
     b = budget()
     with pytest.raises(RuntimeError, match="boom"):
-        sam_client.segment(FakeSam({"jumper wire": RuntimeError("boom")}), EYES, b, photo(), "jumper wire")
+        sam_client.segment(FakeSam({"wire": RuntimeError("boom")}), EYES, b, photo(), "wire")
     assert b.spent == 0
 
 
 def test_segment_many_sends_each_phrase_once_with_the_same_photo():
-    client, b = FakeSam({"jumper wire": wire_reply(), "microcontroller board": ""}), budget()
+    client, b = FakeSam({"wire": wire_reply(), "microcontroller board": ""}), budget()
     results = sam_client.segment_many(client, EYES, b, photo(),
-                                      ["jumper wire", "microcontroller board", "jumper wire"])
-    assert sorted(results) == ["jumper wire", "microcontroller board"]
-    assert len(results["jumper wire"].instances) == 1 and results["microcontroller board"].instances == []
+                                      ["wire", "microcontroller board", "wire"])
+    assert sorted(results) == ["microcontroller board", "wire"]
+    assert len(results["wire"].instances) == 1 and results["microcontroller board"].instances == []
     assert len(client.requests) == 2
     assert len({r["input"][0]["content"][1]["image_url"] for r in client.requests}) == 1
     assert b.spent == pytest.approx(0.005)
@@ -133,19 +133,19 @@ def test_probe_segments_a_crop_saves_the_run_and_replays_it_free(tmp_path, monke
     probe = load_probe()
     path = tmp_path / "photo.png"
     cv2.imwrite(str(path), np.vstack([photo(), photo()]))  # the wire sits in the top half, which is cropped out
-    client, b = FakeSam({"jumper wire": wire_reply()}), budget()
+    client, b = FakeSam({"wire": wire_reply()}), budget()
     monkeypatch.setattr(probe, "OUT", tmp_path / "vision")
     monkeypatch.setattr(probe.config, "meta_client", lambda models: client)
     monkeypatch.setattr(probe.Budget, "from_config", classmethod(lambda cls, models, root: b))
 
-    assert probe.main(["segment", str(path), "--phrase", "jumper wire", "--crop", "0,0,200,120"]) == 0
+    assert probe.main(["segment", str(path), "--phrase", "wire", "--crop", "0,0,200,120"]) == 0
     out = capsys.readouterr().out
-    assert "1 request(s) to sam-3.1 on a 200x120 image, about $0.0025" in out and '"jumper wire": 1 match ' in out
+    assert "1 request(s) to sam-3.1 on a 200x120 image, about $0.0025" in out and '"wire": 1 match ' in out
     (run,) = (tmp_path / "vision").glob("sam-*.json")
     assert run.with_suffix(".png").exists() and len(client.requests) == 1
     assert b.spent == pytest.approx(0.0025)
 
     assert probe.main(["replay", str(run)]) == 0
-    assert '"jumper wire": 1 match ' in capsys.readouterr().out
+    assert '"wire": 1 match ' in capsys.readouterr().out
     assert run.with_name(run.stem + "-replay.png").exists()
     assert len(client.requests) == 1 and b.spent == pytest.approx(0.0025)  # replaying costs nothing

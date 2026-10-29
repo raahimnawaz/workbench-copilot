@@ -19,9 +19,9 @@ Everything in this repository was written during the hackathon, starting Oct 26,
 | `scripts/first_moves.py` | The arm's first powered moves: torque on without a jump, then each joint a little, recording which way it turns |
 | `scripts/power_cut.py` | The power cut-off test: switching the servo supply off makes the arm let go, and it stays limp when the power returns |
 | `wbc/reflex/fsr_link.py`, `wbc/reflex/fsr_cal.py` | The force sensor link (500 Hz frames with a CRC), per-sensor calibration fit and creep analysis |
-| `wbc/perception/` | The SAM 3.1 client (one noun phrase per request, sent in parallel; masks decoded and drawn) and camera capture |
-| `scripts/sam_probe.py` | Grabs a still from the bench camera and shows what SAM 3.1 finds in it |
-| `config/`, `fixtures/`, `scripts/`, `tests/` | Model routing config, the recorded bench for `--sim`, the smoke test, gripper probe and force sensor tools, 180 tests |
+| `wbc/perception/` | The SAM 3.1 client (one noun phrase per request, sent in parallel; masks decoded and drawn), camera capture, and the board reader: the carrier's tags, the top-down board view, the hole grid fit, wire tracing, the netlist and its check against `pins.h` |
+| `scripts/sam_probe.py`, `scripts/read_board.py`, `scripts/make_carrier.py` | What SAM 3.1 finds in a still; the board reader on a still; the printable carrier sheet |
+| `config/`, `fixtures/`, `scripts/`, `tests/` | Model routing config, the recorded bench for `--sim`, the smoke test, gripper probe and force sensor tools, 207 tests |
 | `firmware/dut_demo/` | The Act 1 demo board firmware, with the wiring bug planted on purpose |
 | `firmware/fsr_sampler/` | ESP32 firmware that samples the four jaw sensors at 500 Hz and streams them over USB |
 
@@ -31,8 +31,9 @@ Everything in this repository was written during the hackathon, starting Oct 26,
 | [LeRobot](https://github.com/huggingface/lerobot) | Apache-2.0 | Servo calibration and the Feetech bus (from Oct 27) |
 | Muse Spark, Muse Wonder, Muse Voice Transcribe, SAM 3.1 on the Meta Model API | Meta API terms | Routing, coding, speech, segmentation |
 | [meta-sam-parser](https://pypi.org/project/meta-sam-parser/) 0.1, from Meta | SAM License | Reading SAM 3.1's replies: the token grammar and the mask codec (installed from PyPI, not vendored) |
+| [AprilTag](https://april.eecs.umich.edu/software/apriltag)'s tag36h11 family, as built into OpenCV's ArUco module | BSD-2-Clause | The carrier's tags |
 | Muse Glimmer 30B weights | Apache-2.0 | The local backup router |
-| openai, numpy, PyYAML, httpx, sounddevice, pyserial, pytest, OpenCV | Apache-2.0, BSD-3, MIT, BSD-3, MIT, BSD-3, MIT, Apache-2.0 | Python dependencies |
+| openai, numpy, PyYAML, httpx, sounddevice, pyserial, pytest, OpenCV, Pillow | Apache-2.0, BSD-3, MIT, BSD-3, MIT, BSD-3, MIT, Apache-2.0, MIT-CMU | Python dependencies |
 | Adafruit SSD1306 and Adafruit GFX | BSD | Demo board display driver |
 | [PlatformIO](https://platformio.org) and the [Arduino core for ESP32](https://github.com/espressif/arduino-esp32) | Apache-2.0, LGPL-2.1 | Building and flashing both firmware projects |
 
@@ -49,7 +50,8 @@ Everything in this repository was written during the hackathon, starting Oct 26,
 | STS3215 client and gripper probe | Packet format, decoding, the squeeze ramp and torque release are tested against a fake servo. Not yet run on the arm. |
 | Force sensor sampler and tools (Oct 27) | The firmware runs on the ESP32: 500.0 Hz, no dropped frames and no CRC errors. On a real sensor, creep measured +6.8% over 3 s and +28% over 60 s under 51 g. Calibration is rough so far (coins up to 51 g, errors up to 27%), and readings at 34 g and 51 g came out about the same. That's an open question to settle with heavier weights before the jaw pads. |
 | SAM 3.1 client (Oct 28) | Built to Meta's documented request and reply format and tested offline on replies written with Meta's own mask encoder. Not yet called live. |
-| Board reader, motion layer, slip detector, web HUD | Not started (blueprint sheet 10). Their tools return a clear "not wired yet" error, or use the recorded bench with `--sim`. |
+| Board reader (Oct 28) | Built and tested on a synthetic bench photo: the carrier's tags, the top-down view, the hole grid fit, wire tracing, the netlist and the check against `pins.h`. Not yet run on a real photo, and `bench.yaml` doesn't place the modules until the demo board is wired. |
+| Motion layer, slip detector, web HUD | Not started (blueprint sheet 10). Their tools return a clear "not wired yet" error, or use the recorded bench with `--sim`. |
 
 ## Setup (Apple Silicon)
 
@@ -172,14 +174,37 @@ SAM 3.1 on the Meta Model API takes one short noun phrase and one image per requ
 uv pip install -e '.[eyes]'
 python scripts/sam_probe.py cameras                  # free: which cameras macOS and OpenCV see
 python scripts/sam_probe.py capture --camera 0       # free: a 1920x1080 still in .wbc/vision/
-python scripts/sam_probe.py segment .wbc/vision/photo-<time>.png --phrase "jumper wire"   # $0.0025 per phrase
+python scripts/sam_probe.py segment .wbc/vision/photo-<time>.png --phrase "wire"   # $0.0025 per phrase
 python scripts/sam_probe.py replay .wbc/vision/sam-<time>.json   # free: parse and draw a saved reply again
 ```
 
-- Name the thing, not an instruction: `"jumper wire"`, not `"find the wires"`. A list or an "and" doesn't segment two things, so pass `--phrase` once per thing.
+- Name the thing, not an instruction: `"wire"`, not `"find the wires"`, and use the plainest word. On the bench, `"jumper wire"` matched nothing at all, where `"wire"` found every wire. A list or an "and" doesn't segment two things, so pass `--phrase` once per thing.
 - No match is a normal, empty result, not an error.
 - `segment` draws every mask over the photo in `.wbc/vision/sam-<time>.png`, lists each match's box, area and confidence, and keeps SAM's whole reply in the run's `.json`, so `replay` can parse it again without paying.
 - `--crop X,Y,W,H` sends only part of the photo. The open SAM 3 model works on 1008 × 1008 pixel images, so a crop of just the breadboard may show thin wires at more detail than the whole 1920 × 1080 frame.
+
+## Reading the breadboard
+
+`read_breadboard` turns one photo into each jumper's two holes, the netlist, and every place it disagrees with `pins.h`:
+
+1. **Tags.** The breadboard lies on a printed carrier sheet with four AprilTags (tag36h11, ids 10–13, 20 mm). Their corners map the photo onto the sheet in millimeters, so a bumped camera or a refocus doesn't move the hole grid, and there's no camera calibration to keep.
+2. **Top-down view.** Code cuts out the board area at 5.5 px/mm, about 970 × 360 px. That's under the 1008 px SAM works at, so thin wires keep their detail, and SAM's masks come back in board millimeters.
+3. **SAM 3.1 and the hole grid.** SAM segments `wire` in the view. Meanwhile code finds where the board really lies: its holes are small dark squares, and it shifts and turns the grid, by up to 1.2 mm and 1°, until the predicted holes sit on the darkest spots. That's under half a pitch, because a grid a whole pitch off fits just as well. It scales the grid too: the board's top stands about 10 mm above the sheet the tags are printed on, so from 30 cm the camera sees it about 2% larger than life, enough to put the end rows a millimeter off. Only the right scale lines up all 63 rows.
+4. **Wires.** Each mask is thinned to its center line and followed out to both tips. A flat jumper's legs go into its holes at its tips, so each tip snaps to the nearest hole within 1.2 mm, and a tip farther from every hole is flagged. A mask that branches is flagged as two wires that may touch.
+5. **Netlist and `pins.h`.** Each row's a–e and f–j strips and each rail is a node, wires join nodes, and the ESP32's and display's pins sit in holes given in `config/bench.yaml`. Plain code then compares each display pin's GPIO with `pins.h` and reports the mismatch, its wire and hole, and the line to fix.
+
+It reads flat pre-cut jumpers. Loose jumper leads stand about 15 mm off the board, and from a camera 30 cm up their tips look up to 4 mm away from where they go in, more than a hole.
+
+```bash
+python scripts/make_carrier.py          # .wbc/vision/carrier.pdf: print at 100%, check the 100 mm bar
+python scripts/read_board.py check      # free: the tags, and the fitted hole grid drawn over the board
+python scripts/read_board.py read       # $0.0025: the whole read, drawn in .wbc/vision/board-<time>.png
+```
+
+- Both take a still from the camera in `bench.yaml` and keep it as `.wbc/vision/photo-<time>.png`, or read one with `--photo`. Run them from Terminal.app.
+- `config/bench.yaml` holds the camera, the carrier's tags, each board's place on the sheet, where each module's headers start, and which display pin each `pins.h` signal drives. `config/parts.yaml` holds the breadboard's geometry and the module pinouts. Change those and print the carrier again; never edit the sheet.
+- `reader.tip_inset_mm` moves each wire end back from the tip of its mask, for jumpers whose masks stop short of their holes or run past them. Set it from the golden photos' residuals.
+- Each read saves the drawing, the top-down view and the result, with SAM's whole reply, as `.wbc/vision/board-<time>.*`.
 
 ## How the router works
 

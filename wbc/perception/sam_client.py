@@ -3,8 +3,9 @@
 From Meta's docs (dev.meta.ai/docs/sam, read Oct 28):
 - One concept per request. A list or an "and" doesn't make two, so several phrases go out as parallel
   requests, each billed as one image ($2.50 per 1,000).
-- Name the thing ("jumper wire"). Commands and questions often find nothing, and no match is a normal,
-  empty reply, not an error.
+- Name the thing. Commands and questions often find nothing, and no match is a normal, empty reply, not
+  an error. Use the plainest word: on the bench (Oct 28) "jumper wire" matched nothing at all, where
+  "wire" found all three wires.
 - The reply is one line of special tokens: an object id, a box and a mask per match. Each mask covers only
   its own box. Masks come back in the compact one_bit encoding and are decoded with Meta's meta-sam-parser,
   which is pure Python: about 1.4 µs per pixel of box, so a long diagonal wire takes about 0.15 s.

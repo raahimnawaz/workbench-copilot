@@ -19,8 +19,8 @@ dependencies = [
 [project.optional-dependencies]
 voice = ["sounddevice>=0.4"]
 arm = ["pyserial>=3.5"]
-# the camera and SAM 3.1; meta-sam-parser is pinned because the tests build replies with its encoder
-eyes = ["meta-sam-parser>=0.1,<0.2", "opencv-python-headless>=4.8"]
+# the camera, SAM 3.1 and the board reader; meta-sam-parser is pinned because the tests write replies with its encoder
+eyes = ["meta-sam-parser>=0.1,<0.2", "opencv-python-headless>=4.8", "pillow>=10"]
 firmware = ["platformio>=6.1"]   # builds and flashes the ESP32 firmware; also turns on ask_coder's compile check
 lerobot = ["lerobot[feetech]>=0.6"]   # arm calibration and moves; brings PyTorch, so CI leaves it out
 dev = ["pytest>=8"]

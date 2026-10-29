@@ -9,7 +9,7 @@ Run from Terminal.app: macOS only lets a terminal it has asked about use the cam
        python scripts/sam_probe.py capture --camera 0
 3. Segment it (PAID, $0.0025 per phrase: one request per phrase). Each phrase is one short noun phrase.
    --crop X,Y,W,H sends only that part of the photo, to compare against the whole frame.
-       python scripts/sam_probe.py segment .wbc/vision/photo-<time>.png --phrase "jumper wire"
+       python scripts/sam_probe.py segment .wbc/vision/photo-<time>.png --phrase "wire"
 4. Draw a saved run again (free): every reply is kept in its .json, so it parses again without paying.
        python scripts/sam_probe.py replay .wbc/vision/sam-<time>.json
 
@@ -154,7 +154,7 @@ def main(argv=None) -> int:
     c.add_argument("--height", type=int, default=1080)
     s = sub.add_parser("segment", help="PAID: segment a photo, one request per phrase")
     s.add_argument("photo")
-    s.add_argument("--phrase", action="append", required=True, help='a short noun phrase, e.g. "jumper wire"')
+    s.add_argument("--phrase", action="append", required=True, help='a short noun phrase, e.g. "wire"')
     s.add_argument("--crop", metavar="X,Y,W,H", help="send only this part of the photo, in pixels")
     r = sub.add_parser("replay", help="parse and draw a saved run again (free)")
     r.add_argument("run", help=".wbc/vision/sam-<time>.json")
