@@ -19,6 +19,10 @@ modules:
   esp32_devkit_30:
     left: [EN, GPIO36, GPIO39, GPIO34, GPIO35, GPIO32, GPIO33, GPIO25, GPIO26, GPIO27, GPIO14, GPIO12, GPIO13, GND, VIN]
     right: [GPIO23, GPIO22, GPIO1, GPIO3, GPIO21, GPIO19, GPIO18, GPIO5, GPIO17, GPIO16, GPIO4, GPIO2, GPIO15, GND, 3V3]
-  # 0.96" SSD1306 OLED, 7-pin SPI (the UMLIFE modules), left to right with the text upright.
+  # A 5 mm LED. Its legs go in two neighboring rows, the anode (A, the longer leg) first.
+  led_5mm:
+    legs: [A, K]
+  # 0.96" SSD1306 OLED, 7-pin SPI (the UMLIFE modules), left to right with the text upright. Shelved on Oct 28:
+  # beside the DevKit only column a is free, and its seven flat wires can't all leave it without stacking.
   ssd1306_spi_7:
     pins: [GND, VCC, D0, D1, RES, DC, CS]

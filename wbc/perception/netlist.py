@@ -228,7 +228,7 @@ def _row(hole: str) -> str | None:
 
 
 def check(wires: list, pins: dict, firmware: dict, defines: dict, file: str) -> tuple:
-    """(netlist rows, mismatches): each signal's display pin, the GPIO its net reaches, and pins.h's number."""
+    """(netlist rows, mismatches): each signal's part pin, the GPIO its net reaches, and pins.h's number."""
     nets = Nets()
     traced = [w for w in wires if len(w.ends) == 2 and all(e.snapped for e in w.ends)]
     for w in traced:
@@ -243,7 +243,7 @@ def check(wires: list, pins: dict, firmware: dict, defines: dict, file: str) -> 
         gpios = sorted(int(p[len(gpio_prefix):]) for p in gpio_nodes)
         wire = next((w for w in traced if nets.find(w.ends[0].node) == net), None)
         wired_to = gpios[0] if len(gpios) == 1 else gpios or None
-        rows.append({"signal": signal, "wire": wire.id if wire else None, "display_pin": pin.split(".", 1)[1],
+        rows.append({"signal": signal, "wire": wire.id if wire else None, "pin": pin,
                      "esp32_gpio": wired_to})
         value, line = defines[signal]
         if gpios == [value]:
