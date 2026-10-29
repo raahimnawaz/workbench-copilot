@@ -36,15 +36,22 @@ reader:
 # DevKit and the display are placed.
 modules:
   # The demo board's DevKit (Oct 28): antenna end at row 15, USB end at row 1. Its pin rows are 1.0" apart,
-  # in columns b and j, so only column a is left free beside a header. The header with the LED's pin
+  # in columns b and j, so only column a is left free beside a header. The header with the sensor's pin
   # (D23 to 3V3) is the b side: D23 beside a15, 3V3 beside a1.
   esp32: {part: esp32_devkit_30, headers: {left: {start: j15, step: -1}, right: {start: b15, step: -1}}}
-  # The Act 1 LED (Oct 28, as wired): its jumper runs along column a from a5 (GPIO 4, the planted bug: pins.h
-  # says 5) to a26, a resistor goes from b26 to b42, the LED's anode is in row 42 and its cathode in row 43,
-  # and a jumper takes row 43 to a rail. SAM reads the long-legged resistor as a wire, which joins the nets.
-  led: {part: led_5mm, headers: {legs: {start: e42, step: 1}}}
+  # The Act 1 force sensor (Oct 29, to be wired): its two pins straight in the board, OUT in d26 and VCC in d27.
+  # The jumper from a5 (GPIO 4, the planted bug: pins.h says 15) runs along column a to a26. A 10 kOhm resistor
+  # goes from b26 to b30, a short jumper from a30 to the a- (ground) rail, and another from a27 to the a+ rail,
+  # which the jumper from a1 (3V3) feeds. One signal wire, because only column a is free beside the DevKit.
+  fsr: {part: tfs100, headers: {legs: {start: d26, step: 1}}}
 
 firmware:
   file: firmware/dut_demo/include/pins.h
   gpio_module: esp32                # its GPIOn pins are what the numbers in pins.h name
-  signals: {LED_PIN: led.A}
+  signals: {SENSOR_PIN: fsr.OUT}
+  # The demo board's USB serial port, for read_sensor and build_and_flash. "auto" picks the one USB serial
+  # port that isn't the arm's; set a path when more than one ESP32 is plugged in.
+  port: auto
+  skip_ports: [/dev/cu.usbmodem5B910297421]
+  baud: 115200
+  upload_cmd: pio run -d firmware/dut_demo -t upload --upload-port {port}

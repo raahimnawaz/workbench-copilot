@@ -44,11 +44,11 @@ def test_parallel_tool_round_then_reply():
     router, api, hud = make_router([
         response("r1", [function_call("c1", "ask_coder", "{}"),
                         function_call("c2", "point_at", '{"target": "row:5"}')]),
-        response("r2", text="The LED is on GPIO 4. Patch staged."),
+        response("r2", text="The sensor is on GPIO 4. Patch staged."),
     ], slow_toolbox(log))
 
     t0 = time.monotonic()
-    assert router.run_turn("check my wiring") == "The LED is on GPIO 4. Patch staged."
+    assert router.run_turn("check my wiring") == "The sensor is on GPIO 4. Patch staged."
     assert time.monotonic() - t0 < 0.55, "tool calls should run in parallel"
     assert sorted(log) == ["coder", "row:5"]
 
@@ -136,12 +136,12 @@ def facts_toolbox(log, board=None):
     @tb.register("read_breadboard", "", {"type": "object", "properties": {}}, label="SAM")
     def read_breadboard():
         log.append("board")
-        return dict(board or {"ok": True, "mismatches": [{"signal": "LED_PIN"}]})
+        return dict(board or {"ok": True, "mismatches": [{"signal": "SENSOR_PIN"}]})
 
     @tb.register("read_file", "", {"type": "object", "properties": {"path": {"type": "string"}}})
     def read_file(path):
         log.append(path)
-        return {"ok": True, "path": path, "text": "#define LED_PIN 5"}
+        return {"ok": True, "path": path, "text": "#define SENSOR_PIN 15"}
 
     return tb
 
@@ -149,11 +149,11 @@ def facts_toolbox(log, board=None):
 def test_bench_facts_go_out_with_the_first_call():
     """Act 1 on Oct 28 spent its first router round (4.4 s) only asking for the board read and pins.h."""
     log = []
-    router, api, hud = make_router([response("r1", text="The LED is on 4.")], facts_toolbox(log), prefetch=PREFETCH)
+    router, api, hud = make_router([response("r1", text="The sensor is on 4.")], facts_toolbox(log), prefetch=PREFETCH)
     router.run_turn("check my wiring")
     assert sorted(log) == ["board", "pins.h"] and len(api.requests) == 1
     first = api.requests[0]["input"][0]["content"]
-    assert first.startswith("check my wiring") and "LED_PIN" in first and "#define LED_PIN 5" in first
+    assert first.startswith("check my wiring") and "SENSOR_PIN" in first and "#define SENSOR_PIN 15" in first
     assert ("call", "SAM", "read_breadboard") in hud.events
 
 
@@ -165,10 +165,10 @@ def test_facts_the_conversation_has_are_not_sent_again():
     router.run_turn("two")
     second = api.requests[1]["input"][0]["content"]
     assert second.count("unchanged since you last saw it") == 2 and "mismatches" not in second
-    board["mismatches"] = [{"signal": "LED_PIN"}]
+    board["mismatches"] = [{"signal": "SENSOR_PIN"}]
     router.run_turn("three")
     third = api.requests[2]["input"][0]["content"]
-    assert "LED_PIN" in third and third.count("unchanged") == 1  # only pins.h stayed the same
+    assert "SENSOR_PIN" in third and third.count("unchanged") == 1  # only pins.h stayed the same
 
 
 def test_a_broken_chain_gets_every_fact_again():
@@ -206,7 +206,7 @@ def test_chat_router_gets_the_same_bench_facts():
     router = ChatRouter(FakeChatClient([chat_response(content="ok")]), "glimmer", facts_toolbox([]),
                         Budget(10, PRICES), SilentHud(), "system", prefetch=PREFETCH)
     router.run_turn("check my wiring")
-    assert "#define LED_PIN 5" in router.messages[1]["content"]
+    assert "#define SENSOR_PIN 15" in router.messages[1]["content"]
 
 
 def test_chat_router_message_order():
@@ -239,7 +239,7 @@ def test_sim_bench_tools():
     models = load_yaml("models.yaml")
     tb = build_toolbox(Bench(ROOT, models, client=None, budget=Budget(10, {}), sim=True))
     scene = tb.dispatch("read_breadboard", {})
-    assert scene["ok"] and scene["mismatches"][0]["signal"] == "LED_PIN"
+    assert scene["ok"] and scene["mismatches"][0]["signal"] == "SENSOR_PIN"
     assert tb.dispatch("point_at", {"target": "row:5"})["sim"] is True
     assert "call ask_coder first" in tb.dispatch("propose_patch", {"patch_id": "p9"})["error"]
     assert set(tb.names()) >= {"read_file", "ask_coder", "propose_patch", "read_breadboard", "look", "point_at"}
@@ -248,7 +248,7 @@ def test_sim_bench_tools():
 def test_read_file_refuses_paths_outside_the_repo():
     tb = build_toolbox(Bench(ROOT, load_yaml("models.yaml"), None, Budget(10, {})))
     assert tb.dispatch("read_file", {"path": "../../etc/passwd"})["ok"] is False
-    assert "LED_PIN" in tb.dispatch("read_file", {"path": "firmware/dut_demo/include/pins.h"})["text"]
+    assert "SENSOR_PIN" in tb.dispatch("read_file", {"path": "firmware/dut_demo/include/pins.h"})["text"]
 
 
 def test_schemas_in_both_formats():

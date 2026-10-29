@@ -169,14 +169,14 @@ def test_color_names(bgr, name):
 
 def test_pins_h_defines():
     defines = netlist.read_defines(ROOT / "firmware/dut_demo/include/pins.h")
-    assert defines["LED_PIN"] == (5, 6) and defines["BLINK_MS"] == (250, 7)
+    assert defines["SENSOR_PIN"] == (15, 6) and defines["SAMPLE_MS"] == (20, 7)
 
 
 def test_module_pins_follow_their_headers():
     pins = netlist.module_pins(bench_config()["modules"], PARTS, [board()])
     assert pins["esp32.GPIO23"] == "15a-e" and pins["esp32.GPIO5"] == "8a-e" and pins["esp32.GPIO4"] == "5a-e"
     assert pins["esp32.3V3"] == "1a-e" and pins["esp32.EN"] == "15f-j" and pins["esp32.VIN"] == "1f-j"
-    assert pins["led.A"] == "42a-e" and pins["led.K"] == "43a-e"
+    assert pins["esp32.GPIO15"] == "3a-e" and pins["fsr.OUT"] == "26a-e" and pins["fsr.VCC"] == "27a-e"
 
 
 def _wire(wid, a, z):
@@ -192,28 +192,28 @@ def test_check_follows_each_signal_to_the_gpio_its_net_reaches():
     def check(*wires):
         return netlist.check(list(wires), pins, bench["firmware"], defines, "pins.h")
 
-    rows, misses = check(_wire("wire:1", "8a-e", "42a-e"))  # to GPIO5, as pins.h says
-    assert misses == [] and rows == [{"signal": "LED_PIN", "wire": "wire:1", "pin": "led.A", "esp32_gpio": 5}]
-    _, (miss,) = check(_wire("wire:1", "5a-e", "42a-e"), _wire("wire:2", "4a-e", "42a-e"))  # GPIO4 and GPIO2
+    rows, misses = check(_wire("wire:1", "3a-e", "26a-e"))  # to GPIO15, as pins.h says
+    assert misses == [] and rows == [{"signal": "SENSOR_PIN", "wire": "wire:1", "pin": "fsr.OUT", "esp32_gpio": 15}]
+    _, (miss,) = check(_wire("wire:1", "5a-e", "26a-e"), _wire("wire:2", "4a-e", "26a-e"))  # GPIO4 and GPIO2
     assert miss["wired_to"] == [2, 4] and miss["problem"] == "wired to several GPIOs"
     _, (miss,) = check()
-    assert miss == {"signal": "LED_PIN", "pins_h": 5, "wired_to": None, "wire": None, "file": "pins.h",
+    assert miss == {"signal": "SENSOR_PIN", "pins_h": 15, "wired_to": None, "wire": None, "file": "pins.h",
                     "line": 6, "problem": "not wired to any GPIO"}
 
 
 # --- the whole read ---
 
-def test_reader_finds_the_planted_led_bug(tmp_path):
+def test_reader_finds_the_planted_sensor_bug(tmp_path):
     frame, actual, bench = photo(shift_mm=(0.6, -0.5), turn_deg=0.4)
     client, b = sam_for(bench, actual), budget()
     result = reader.read_board(frame, bench, PARTS, client, EYES, b, ROOT, out_dir=tmp_path)
     assert result["ok"] and result["problems"] == []
     assert {tuple(sorted(w["ends"])) for w in result["wires"]} == wire_ends()
-    assert {w["color"] for w in result["wires"]} == {"orange", "white", "black"}
+    assert {w["color"] for w in result["wires"]} == {"orange", "white", "red", "black"}
     assert [r["esp32_gpio"] for r in result["netlist"]] == [4]
     (miss,) = result["mismatches"]
     assert {k: miss[k] for k in ("signal", "pins_h", "wired_to", "hole", "row", "file", "line")} == {
-        "signal": "LED_PIN", "pins_h": 5, "wired_to": 4, "hole": "a5", "row": "row:5",
+        "signal": "SENSOR_PIN", "pins_h": 15, "wired_to": 4, "hole": "a5", "row": "row:5",
         "file": "firmware/dut_demo/include/pins.h", "line": 6}
     assert result["endpoint_residual_mm"]["max"] < 0.6
     assert len(client.requests) == 1 and b.spent == pytest.approx(0.0025)
@@ -237,9 +237,9 @@ def test_a_wire_end_between_holes_is_flagged_and_left_out_of_the_nets():
     (wire,) = netlist.trace(instances, view, area, 5.5, [b], {"snap_mm": 1.2, "tip_inset_mm": 1.0})
     assert [e.snapped for e in wire.ends] == [True, False] and wire.ends[1].residual_mm > 1.2
     assert any("mm from the nearest hole" in p for p in wire.problems)
-    rows, _ = netlist.check([wire], {"led.A": "12a-e", "esp32.GPIO5": "20a-e"},
-                            {"gpio_module": "esp32", "signals": {"LED_PIN": "led.A"}}, {"LED_PIN": (5, 6)}, "pins.h")
-    assert rows == [{"signal": "LED_PIN", "wire": None, "pin": "led.A", "esp32_gpio": None}]
+    rows, _ = netlist.check([wire], {"fsr.OUT": "12a-e", "esp32.GPIO15": "20a-e"},
+                            {"gpio_module": "esp32", "signals": {"SENSOR_PIN": "fsr.OUT"}}, {"SENSOR_PIN": (15, 6)}, "pins.h")
+    assert rows == [{"signal": "SENSOR_PIN", "wire": None, "pin": "fsr.OUT", "esp32_gpio": None}]
 
 
 def test_read_breadboard_tool_photographs_and_reads_the_board(tmp_path, monkeypatch):
@@ -306,5 +306,5 @@ def test_read_board_script_checks_and_reads_a_saved_photo(tmp_path, monkeypatch,
 
     assert script.main(["read", "--photo", str(path)]) == 0
     out = capsys.readouterr().out
-    assert "MISMATCH LED_PIN: wired to a different GPIO, wired to 4, pins.h line 6 says 5 (at a5)" in out
+    assert "MISMATCH SENSOR_PIN: wired to a different GPIO, wired to 4, pins.h line 6 says 15 (at a5)" in out
     assert len(client.requests) == 1 and b.spent == pytest.approx(0.0025)
