@@ -90,7 +90,7 @@ def cmd_read(args, bench: dict, parts: dict) -> int:
         print(f"  {w['id']:<8} {w['color']:<7} {' to '.join(e or '?' for e in w['ends']):<14} "
               f"off by {', '.join(f'{r:.2f}' for r in w['residual_mm'])} mm")
     for row in result["netlist"]:
-        print(f"  {row['signal']:<10} display {row['display_pin']:<4} -> GPIO {row['esp32_gpio']}  ({row['wire']})")
+        print(f"  {row['signal']:<10} {row['pin']:<8} -> GPIO {row['esp32_gpio']}  ({row['wire']})")
     for m in result["mismatches"]:
         print(f"  MISMATCH {m['signal']}: {m['problem']}, wired to {m['wired_to']}, pins.h line {m['line']} says "
               f"{m['pins_h']}" + (f" (at {m['hole']})" if m.get("hole") else ""))

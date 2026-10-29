@@ -1,17 +1,27 @@
 {
-  "ok": true,
-  "sim": true,
-  "note": "Recorded scene for --sim runs: the Act 1 board with CS miswired.",
-  "netlist": [
-    {"signal": "OLED_SCK",  "wire": "wire:3", "display_pin": "D0",  "esp32_gpio": 18},
-    {"signal": "OLED_MOSI", "wire": "wire:4", "display_pin": "D1",  "esp32_gpio": 23},
-    {"signal": "OLED_CS",   "wire": "wire:7", "display_pin": "CS",  "esp32_gpio": 4},
-    {"signal": "OLED_DC",   "wire": "wire:5", "display_pin": "DC",  "esp32_gpio": 16},
-    {"signal": "OLED_RES",  "wire": "wire:6", "display_pin": "RES", "esp32_gpio": 17}
-  ],
-  "mismatches": [
-    {"signal": "OLED_CS", "pins_h": 5, "wired_to": 4, "wire": "wire:7", "row": "row:41",
-     "file": "firmware/dut_demo/include/pins.h", "line": 8}
-  ],
-  "endpoint_residual_mm": {"mean": 0.3, "max": 0.6}
+ "ok": true,
+ "sim": true,
+ "note": "Recorded scene for --sim runs: the Act 1 board, with the LED's jumper on GPIO 4 while pins.h says 5.",
+ "wires": [
+  {"id": "wire:1", "color": "black", "ends": ["a2", "a-"], "residual_mm": [0.2, 0.1]},
+  {"id": "wire:2", "color": "orange", "ends": ["a5", "a25"], "residual_mm": [0.3, 0.4]}
+ ],
+ "netlist": [
+  {"signal": "LED_PIN", "wire": "wire:2", "pin": "led.A", "esp32_gpio": 4}
+ ],
+ "mismatches": [
+  {
+   "signal": "LED_PIN",
+   "pins_h": 5,
+   "wired_to": 4,
+   "wire": "wire:2",
+   "file": "firmware/dut_demo/include/pins.h",
+   "line": 6,
+   "problem": "wired to a different GPIO",
+   "hole": "a5",
+   "row": "row:5"
+  }
+ ],
+ "endpoint_residual_mm": {"mean": 0.25, "max": 0.4},
+ "problems": []
 }

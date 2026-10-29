@@ -36,12 +36,16 @@ reader:
 # DevKit and the display are placed.
 modules:
   # The demo board's DevKit (Oct 28): antenna end at row 15, USB end at row 1. Its pin rows are 1.0" apart,
-  # in columns b and j, so only column a is left free beside a header. The header with every pins.h pin
+  # in columns b and j, so only column a is left free beside a header. The header with the LED's pin
   # (D23 to 3V3) is the b side: D23 beside a15, 3V3 beside a1.
   esp32: {part: esp32_devkit_30, headers: {left: {start: j15, step: -1}, right: {start: b15, step: -1}}}
-  # The display goes in once it arrives, like  oled: {part: ssd1306_spi_7, headers: {pins: {start: c40, step: 1}}}
+  # The Act 1 LED (Oct 28): anode in e25, cathode in e26, clear of the DevKit's antenna. Its jumper runs along
+  # column a from a5 (GPIO 4, the planted bug: pins.h says 5) to a25. A 330 ohm resistor goes from a26 to the
+  # a- rail, and a short jumper from a2 (GND) to the same rail. Flat wires leaving column a lie over each other
+  # once there are two heading the same way, so one signal wire is what this layout allows.
+  led: {part: led_5mm, headers: {legs: {start: e25, step: 1}}}
 
 firmware:
   file: firmware/dut_demo/include/pins.h
   gpio_module: esp32                # its GPIOn pins are what the numbers in pins.h name
-  signals: {OLED_SCK: oled.D0, OLED_MOSI: oled.D1, OLED_CS: oled.CS, OLED_DC: oled.DC, OLED_RES: oled.RES}
+  signals: {LED_PIN: led.A}

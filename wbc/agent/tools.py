@@ -165,7 +165,7 @@ def build_toolbox(bench: Bench) -> Toolbox:
         "Hover the lit stylus over a breadboard hole, row or wire id from read_breadboard. Returns the tip "
         "error measured by the wrist camera."), {
         "type": "object",
-        "properties": {"target": {"type": "string", "description": "e.g. 'c41', 'row:41', 'wire:7'"},
+        "properties": {"target": {"type": "string", "description": "e.g. 'a5', 'row:5', 'wire:2'"},
                        "hover_mm": {"type": "number", "minimum": 4, "maximum": 30, "default": 8}},
         "required": ["target"]}, label="arm")
     def point_at(target: str, hover_mm: float = 8) -> dict:
