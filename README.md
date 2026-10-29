@@ -15,13 +15,14 @@ Everything in this repository was written during the hackathon, starting Oct 26,
 | `wbc/agent/` | Router loop, tool registry, `ask_coder`, voice front end, budget guard, console HUD |
 | `wbc/motion/kinematics.py` | URDF chain loader, forward kinematics, damped least-squares IK, the (x, y, z, pitch, roll) grasp frame |
 | `wbc/motion/sts.py`, `wbc/motion/probe.py` | A small STS3215 servo client and the gripper feedback probe |
+| `wbc/motion/joints.py`, `wbc/motion/trajectory.py` | The joint map from raw servo ticks to the URDF's joint angles, with signs checked by hand on the arm, and quintic joint moves timed under joint and tip speed caps |
 | `scripts/set_servo_ids.py` | Gives each servo of an already-assembled arm its id, growing the chain from the base |
 | `scripts/first_moves.py` | The arm's first powered moves: torque on without a jump, then each joint a little, recording which way it turns |
 | `scripts/power_cut.py` | The power cut-off test: switching the servo supply off makes the arm let go, and it stays limp when the power returns |
 | `wbc/reflex/fsr_link.py`, `wbc/reflex/fsr_cal.py` | The force sensor link (500 Hz frames with a CRC), per-sensor calibration fit and creep analysis |
 | `wbc/perception/` | The SAM 3.1 client (one noun phrase per request, sent in parallel; masks decoded and drawn), camera capture, and the board reader: the carrier's tags, the top-down board view, the hole grid fit, wire tracing, the netlist and its check against `pins.h` |
 | `scripts/sam_probe.py`, `scripts/read_board.py`, `scripts/make_carrier.py` | What SAM 3.1 finds in a still; the board reader on a still; the printable carrier sheet |
-| `config/`, `fixtures/`, `scripts/`, `tests/` | Model routing config, the recorded bench for `--sim`, the smoke test, gripper probe and force sensor tools, 207 tests |
+| `config/`, `fixtures/`, `scripts/`, `tests/` | Model routing config, the recorded bench for `--sim`, the smoke test, gripper probe and force sensor tools, 254 tests |
 | `firmware/dut_demo/` | The Act 1 demo board firmware, with the wiring bug planted on purpose |
 | `firmware/fsr_sampler/` | ESP32 firmware that samples the four jaw sensors at 500 Hz and streams them over USB |
 
@@ -47,6 +48,7 @@ Everything in this repository was written during the hackathon, starting Oct 26,
 | Voice front end | The request format was checked against the live API on Oct 26. The wake phrase and the loudness gate that cuts the mic into utterances are tested on synthetic audio, and on Oct 28 they worked on the live mic (the Razer, run from Terminal.app). |
 | Budget guard | Built and tested. Spend persists in `.wbc/spend.json`. |
 | FK/IK | Tested on the real SO-101 URDF. 200 of 200 bench poses round-trip to within 0.2 mm and 0.5°, at about 33 ms per solve. |
+| Joint map (Oct 28) | Checked by hand on the real arm with the motors off. Raw rising turns all five joints the URDF's positive way, and the arm's L pose reads within 2° of the URDF's zero on the lift, elbow and wrist flex. 46 offline tests cover the map and the timed moves, and run those five moves through FK so a sign can't flip back unnoticed. The arm driver that will move by it isn't built yet. |
 | STS3215 client and gripper probe | Packet format, decoding, the squeeze ramp and torque release are tested against a fake servo. Not yet run on the arm. |
 | Force sensor sampler and tools (Oct 27) | The firmware runs on the ESP32: 500.0 Hz, no dropped frames and no CRC errors. On a real sensor, creep measured +6.8% over 3 s and +28% over 60 s under 51 g. Calibration is rough so far (coins up to 51 g, errors up to 27%), and readings at 34 g and 51 g came out about the same. That's an open question to settle with heavier weights before the jaw pads. |
 | SAM 3.1 client (Oct 28) | Built to Meta's documented request and reply format and tested offline on replies written with Meta's own mask encoder. Not yet called live. |

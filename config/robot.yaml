@@ -10,5 +10,24 @@ tool:
   xyz: [0, 0, 0]
   rpy: [0, -1.5708, 0]
 
-# LeRobot reports joint positions in its own calibrated units. The bus layer (D2) maps them to these
-# URDF radians. Check every sign against a ruler before trusting IK on the real arm.
+# Servo ids, and the signs wbc/motion/joints.py maps raw ticks with: q = sign * (raw - 2047) * 2 pi / 4096 radians.
+# The URDF's zero is lerobot-calibrate's Part 1 L pose (base facing forward, upper arm straight up, forearm and
+# gripper level pointing forward), where every joint reads raw 2047. Sign 1 means raw rising turns the joint the
+# URDF's positive way. Checked by hand on Oct 28 with the motors off, each joint turned in a pose where the move
+# reads clearly: raw rises as the base turns clockwise seen from above, the shoulder lift tips forward, the elbow
+# folds, the wrist flex tips the gripper down, and the wrist roll turns counterclockwise looking from the wrist
+# toward the jaw tips, which is each joint's URDF plus. scripts/check_joint_map.py re-checks it. The gripper isn't
+# in the IK chain, so it has no sign.
+servos:
+  shoulder_pan: {id: 1, sign: 1}
+  shoulder_lift: {id: 2, sign: 1}
+  elbow_flex: {id: 3, sign: 1}
+  wrist_flex: {id: 4, sign: 1}
+  wrist_roll: {id: 5, sign: 1}
+  gripper: {id: 6}
+
+# P gains written over the 16 that LeRobot's configure() gives every joint, each time after it runs. The elbow is a
+# weaker 1:191 servo: at 16 it couldn't lift its folded forearm (Oct 27, 18:09), and at 32 it opened from the fold
+# and held within 0.1° (18:25).
+gains:
+  elbow_flex: 32
