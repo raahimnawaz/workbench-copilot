@@ -32,11 +32,14 @@ reader:
   register_scale: [0.97, 1.06]
 
 # Which hole each module's headers start in, and which way along the rows they run (+1 or -1).
-# Empty until the demo board is wired: without it the reader still traces every wire, but can't
-# check the wiring against pins.h.
-modules: {}
-#  esp32: {part: esp32_devkit_30, headers: {left: {start: b10, step: 1}, right: {start: other:a10, step: 1}}}
-#  oled: {part: ssd1306_spi_7, headers: {pins: {start: c40, step: 1}}}
+# The reader traces every wire either way, but checks the wiring against pins.h only once both the
+# DevKit and the display are placed.
+modules:
+  # The demo board's DevKit (Oct 28): antenna end at row 15, USB end at row 1. Its pin rows are 1.0" apart,
+  # in columns b and j, so only column a is left free beside a header. The header with every pins.h pin
+  # (D23 to 3V3) is the b side: D23 beside a15, 3V3 beside a1.
+  esp32: {part: esp32_devkit_30, headers: {left: {start: j15, step: -1}, right: {start: b15, step: -1}}}
+  # The display goes in once it arrives, like  oled: {part: ssd1306_spi_7, headers: {pins: {start: c40, step: 1}}}
 
 firmware:
   file: firmware/dut_demo/include/pins.h
