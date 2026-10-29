@@ -29,6 +29,7 @@ WIRES = [
 
 def bench_config() -> dict:
     bench = copy.deepcopy(load_yaml("bench.yaml"))
+    bench["reader"]["tip_inset_mm"] = 0.0  # these wires end right on their holes, unlike the real bench's
     bench["modules"] = {
         "esp32": {"part": "esp32_devkit_30",
                   "headers": {"left": {"start": "b10", "step": 1}, "right": {"start": "j10", "step": 1}}},

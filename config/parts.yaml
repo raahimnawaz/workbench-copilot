@@ -10,7 +10,7 @@ breadboard:                         # full-size, 830 tie points
   # Power rails run the board's length: pitches from column a (negative is beyond a, past 11 is beyond j).
   # Measured on Raahim's board from a check photo (Oct 28): each side has a - row and a + row, marked by the
   # blue and red stripes beside them. The reader's check drawing shows them as thin blue and red lines.
-  rails: {"a-": -3.93, "a+": -2.85, "j-": 13.74, "j+": 14.8}
+  rails: {"a-": -2.74, "a+": -3.80, "j+": 13.85, "j-": 14.93}
   body_mm: [165.1, 54.6]            # length along the rows, width across; the holes sit centered in it
 
 modules:
