@@ -11,7 +11,7 @@ Entry for the Meta Global AI Developer Hackathon (Indie track, Push the Frontier
 ## Commands (Python 3.12 via uv, which lives in `~/.local/bin`)
 ```bash
 uv venv --clear --python 3.12 && uv pip install -e '.[voice,dev,arm,firmware,eyes]'   # also after moving the folder: .venv stores absolute paths
-.venv/bin/python -m pytest -q                                   # 254 offline tests; CI runs them on every push
+.venv/bin/python -m pytest -q                                   # 260 offline tests; CI runs them on every push
 .venv/bin/python scripts/smoke_test.py                          # PAID, about $0.01: one call to each hosted model
 echo "Zero response on SPI. Check my wiring against the firmware." | .venv/bin/python -m wbc.agent --sim   # PAID, about $0.025
 echo "Zero response on SPI. Check my wiring against the firmware." | .venv/bin/python -m wbc.agent --sim --router-model muse-spark-1.1   # PAID, about $0.025: the same turn routed by Spark 1.1
@@ -28,6 +28,7 @@ echo "Zero response on SPI. Check my wiring against the firmware." | .venv/bin/p
 .venv/bin/python scripts/make_carrier.py                       # free: .wbc/vision/carrier.pdf, the tag sheet the breadboard lies on
 .venv/bin/python scripts/read_board.py check                   # free, from Terminal.app: tags and the fitted hole grid (or --photo PATH)
 .venv/bin/python scripts/read_board.py read                    # PAID, $0.0025: the whole board read, as read_breadboard does it
+.venv/bin/python scripts/golden_set.py --inset -0.8 -1.0       # free: score the reader on config/golden.yaml's labeled photos
 ```
 - A `--sim` run applies Wonder's real patch to `firmware/dut_demo/include/pins.h` (`OLED_CS` 5 → 4). **Restore it afterwards** with `git checkout -- firmware/dut_demo/include/pins.h`. That bug is the Act 1 demo: the CS wire goes to GPIO 4 while `pins.h` says 5.
 - Tracked spend lives in `.wbc/spend.json` ($0.049 on Oct 27). The hard stop is $140 and the warning $100 (`budget` in `config/models.yaml`).
@@ -106,7 +107,8 @@ echo "Zero response on SPI. Check my wiring against the firmware." | .venv/bin/p
 - **First live SAM calls (Oct 28, 13:49–13:55, $0.02 in all):** two reads asking for "jumper wire" came back empty, on loose leads and then on three flat wires. A 4-request check (`.wbc/logs/sam-diag-*.txt`, responses in `.wbc/vision/diag-20261028-135508/`) showed the reply is read correctly (a standard message with output_text, streamed or not) and SAM simply matches nothing for "jumper wire". "wire" found all three wires (scores 0.61–0.88, tight masks), and "breadboard" the board (0.85). So `reader.wire_phrase` is "wire". Each request takes 1.1–1.6 s, and the response's `usage.images_processed` is 1.
   - The 13:48 photo had loose Dupont leads arcing over the board; they can't be read (see the flat-jumper note above). The 13:53 photo (`photo-20261028-135315.png`) has three flat-lying wires; the camera was about 9.5 in (24 cm) up, and the board looked 1.024x life size.
 - **First full read with "wire" (Oct 28, 16:41, `.wbc/vision/board-20261028-164150.*`, $0.0025):** all three wires found. SAM's masks cover each wire's insulation, and the bare legs that go into the holes are often outside the mask, about 1 mm past its tip, and sometimes hooked sideways (orange at j3). Against Raahim's true holes, replayed offline from the saved reply: with no inset, 4 of 6 ends landed on the right hole; at `tip_inset_mm` −0.8 or −1.0, 6 of 6; at −1.3, 5 of 6 (red's top end slips from j61 to j62). It's set to −1.0, which flags only j3, the right hole but 1.98 mm off because of its hook. The margin is thin: at −1.0 red's top end is 1.19 mm from j61, against the 1.2 mm flag. The bare legs on hand-cut wire vary, so pre-cut flat jumpers (insulation up to the bend) should read with more room; recheck the inset on the golden set. Hole darkness doesn't show which hole holds a leg (empty holes range 70–123). The synthetic tests keep an inset of 0, since their wires end on the holes.
-- Not started: the golden-set scorer (20 labeled photos, ≥ 98% of wire ends on the right hole), web HUD, slip detector, motion skills, compliant hold.
+- Golden-set scorer (Oct 28, `scripts/golden_set.py`, `wbc/perception/golden.py`): labels in `config/golden.yaml` (each wire's two holes, either order), photos and saved reads in `.wbc/vision/`. It replays each saved SAM reply through the current reader, free, and counts ends on their exact hole; a missed wire counts both ends wrong. `--inset` sweeps `tip_inset_mm`. On the first photo: 4/6 at 0, 6/6 at −0.8 and −1.0, 5/6 at −1.3, matching the hand replay. To add a photo: `read_board.py read`, then label its wires with the photo and the saved `board-<time>.json`.
+- Not started: web HUD, slip detector, motion skills, compliant hold.
 
 ## Next, in order
 0. Force sensors are paused (see above). Before the jaw pads (Oct 29): get a kitchen scale, run the heavier press test to settle the flat spot above about 35 g, wire MD and MP, then calibrate all four in the pads.
