@@ -22,7 +22,7 @@ Everything in this repository was written during the hackathon, starting Oct 26,
 | `wbc/reflex/fsr_link.py`, `wbc/reflex/fsr_cal.py` | The force sensor link (500 Hz frames with a CRC), per-sensor calibration fit and creep analysis |
 | `wbc/perception/` | The SAM 3.1 client (one noun phrase per request, sent in parallel; masks decoded and drawn), camera capture, and the board reader: the carrier's tags, the top-down board view, the hole grid fit, wire tracing, the netlist and its check against `pins.h` |
 | `scripts/sam_probe.py`, `scripts/read_board.py`, `scripts/make_carrier.py` | What SAM 3.1 finds in a still; the board reader on a still; the printable carrier sheet |
-| `config/`, `fixtures/`, `scripts/`, `tests/` | Model routing config, the recorded bench for `--sim`, the smoke test, gripper probe and force sensor tools, 254 tests |
+| `config/`, `fixtures/`, `scripts/`, `tests/` | Model routing config, the recorded bench for `--sim`, the smoke test, gripper probe and force sensor tools, 262 tests |
 | `firmware/dut_demo/` | The Act 1 demo board firmware, with the wiring bug planted on purpose |
 | `firmware/fsr_sampler/` | ESP32 firmware that samples the four jaw sensors at 500 Hz and streams them over USB |
 
@@ -37,7 +37,7 @@ Everything in this repository was written during the hackathon, starting Oct 26,
 | openai, numpy, PyYAML, httpx, sounddevice, pyserial, pytest, OpenCV, Pillow | Apache-2.0, BSD-3, MIT, BSD-3, MIT, BSD-3, MIT, Apache-2.0, MIT-CMU | Python dependencies |
 | [PlatformIO](https://platformio.org) and the [Arduino core for ESP32](https://github.com/espressif/arduino-esp32) | Apache-2.0, LGPL-2.1 | Building and flashing both firmware projects |
 
-## Status, Oct 26 (Day 1)
+## Status, Oct 29 (Day 4)
 
 | Piece | State |
 |---|---|
@@ -48,11 +48,14 @@ Everything in this repository was written during the hackathon, starting Oct 26,
 | Budget guard | Built and tested. Spend persists in `.wbc/spend.json`. |
 | FK/IK | Tested on the real SO-101 URDF. 200 of 200 bench poses round-trip to within 0.2 mm and 0.5°, at about 33 ms per solve. |
 | Joint map (Oct 28) | Checked by hand on the real arm with the motors off. Raw rising turns all five joints the URDF's positive way, and the arm's L pose reads within 2° of the URDF's zero on the lift, elbow and wrist flex. 46 offline tests cover the map and the timed moves, and run those five moves through FK so a sign can't flip back unnoticed. The arm driver that will move by it isn't built yet. |
-| STS3215 client and gripper probe | Packet format, decoding, the squeeze ramp and torque release are tested against a fake servo. Not yet run on the arm. |
-| Force sensor sampler and tools (Oct 27) | The firmware runs on the ESP32: 500.0 Hz, no dropped frames and no CRC errors. On a real sensor, creep measured +6.8% over 3 s and +28% over 60 s under 51 g. Calibration is rough so far (coins up to 51 g, errors up to 27%), and readings at 34 g and 51 g came out about the same. That's an open question to settle with heavier weights before the jaw pads. |
+| STS3215 client and gripper probe | Run on the arm: `set_servo_ids.py` gave the six servos ids 1–6 (Oct 27), and the gripper probe logged position, load and current while a board in the jaws was pulled, pushed and twisted (Oct 28). |
+| Force sensor sampler and tools (Oct 27) | The firmware runs on the ESP32: 500.0 Hz, no dropped frames and no CRC errors. On a real sensor, creep measured +6.8% over 3 s and +28% over 60 s under 51 g. Calibration is rough so far (coins up to 51 g, errors up to 27%), and readings at 34 g and 51 g came out about the same. That's an open question to settle with heavier weights before the jaw pads. Deferred to the end of the build on Oct 29. |
 | SAM 3.1 client (Oct 28) | Built to Meta's documented request and reply format and tested offline on replies written with Meta's own mask encoder. Called live since Oct 28: "wire" finds each flat wire (scores 0.61–0.88) and "breadboard" the board, in 1.1–1.6 s a request, while "jumper wire" finds nothing. |
 | Board reader (Oct 28) | Built and tested on a synthetic bench photo: the carrier's tags, the top-down view, the hole grid fit, wire tracing, the netlist and the check against `pins.h`. On the first real photo (Oct 28) it found all three wires, and with a 1 mm tip inset all six ends land on their true holes, though with a thin margin. On the wired LED board (Oct 28 evening) it traced the LED's jumper from a5 and reported it on GPIO 4 while `pins.h` says 5: the planted bug, found on the real bench. |
-| Motion layer, slip detector, web HUD | Not started (blueprint sheet 10). Their tools return a clear "not wired yet" error, or use the recorded bench with `--sim`. |
+| Act 1 demo board (Oct 28) | An ESP32 DevKit blinking an LED, with its jumper on GPIO 4 while `pins.h` says 5. On the real board the reader traced the jumper and reported the mismatch. The camera keeps the sharpest frame from 1.5–3 s after opening. |
+| Arm driver, pointing, probe hold, web HUD, spoken replies | Not started; next in the Oct 29 plan. The tools return a clear "not wired yet" error, or use the recorded bench with `--sim`. |
+
+**The plan as of Oct 29** ([blueprint](https://claude.ai/artifact/1f5AMxFTVycA2C25DkqWwm)): Act 1 becomes debugging a force sensor circuit on the carrier board, where the co-pilot reads live samples, finds the wire on the wrong GPIO, fixes `pins.h`, points at the wire with the arm, and checks the reading itself after you flash. Act 2 is the arm holding your multimeter's ground probe on the rail. Act 3, a stretch, is a skill the co-pilot writes for itself. Replies are spoken. The force-sensing jaw pads and the slip catch move to the end.
 
 ## Setup (Apple Silicon)
 
