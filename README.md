@@ -19,7 +19,9 @@ Everything in this repository was written during the hackathon, starting Oct 26,
 | `scripts/first_moves.py` | The arm's first powered moves: torque on without a jump, then each joint a little, recording which way it turns |
 | `scripts/power_cut.py` | The power cut-off test: switching the servo supply off makes the arm let go, and it stays limp when the power returns |
 | `wbc/reflex/fsr_link.py`, `wbc/reflex/fsr_cal.py` | The force sensor link (500 Hz frames with a CRC), per-sensor calibration fit and creep analysis |
-| `config/`, `fixtures/`, `scripts/`, `tests/` | Model routing config, the recorded bench for `--sim`, the smoke test, gripper probe and force sensor tools, 168 tests |
+| `wbc/perception/` | The SAM 3.1 client (one noun phrase per request, sent in parallel; masks decoded and drawn) and camera capture |
+| `scripts/sam_probe.py` | Grabs a still from the bench camera and shows what SAM 3.1 finds in it |
+| `config/`, `fixtures/`, `scripts/`, `tests/` | Model routing config, the recorded bench for `--sim`, the smoke test, gripper probe and force sensor tools, 180 tests |
 | `firmware/dut_demo/` | The Act 1 demo board firmware, with the wiring bug planted on purpose |
 | `firmware/fsr_sampler/` | ESP32 firmware that samples the four jaw sensors at 500 Hz and streams them over USB |
 
@@ -28,8 +30,9 @@ Everything in this repository was written during the hackathon, starting Oct 26,
 | `hardware/so101_new_calib.urdf`, from [TheRobotStudio/SO-ARM100](https://github.com/TheRobotStudio/SO-ARM100) | Apache-2.0 | The arm's kinematic chain (unchanged copy) |
 | [LeRobot](https://github.com/huggingface/lerobot) | Apache-2.0 | Servo calibration and the Feetech bus (from Oct 27) |
 | Muse Spark, Muse Wonder, Muse Voice Transcribe, SAM 3.1 on the Meta Model API | Meta API terms | Routing, coding, speech, segmentation |
+| [meta-sam-parser](https://pypi.org/project/meta-sam-parser/) 0.1, from Meta | SAM License | Reading SAM 3.1's replies: the token grammar and the mask codec (installed from PyPI, not vendored) |
 | Muse Glimmer 30B weights | Apache-2.0 | The local backup router |
-| openai, numpy, PyYAML, httpx, sounddevice, pyserial, pytest | Apache-2.0, BSD-3, MIT, BSD-3, MIT, BSD-3, MIT | Python dependencies |
+| openai, numpy, PyYAML, httpx, sounddevice, pyserial, pytest, OpenCV | Apache-2.0, BSD-3, MIT, BSD-3, MIT, BSD-3, MIT, Apache-2.0 | Python dependencies |
 | Adafruit SSD1306 and Adafruit GFX | BSD | Demo board display driver |
 | [PlatformIO](https://platformio.org) and the [Arduino core for ESP32](https://github.com/espressif/arduino-esp32) | Apache-2.0, LGPL-2.1 | Building and flashing both firmware projects |
 
@@ -45,7 +48,8 @@ Everything in this repository was written during the hackathon, starting Oct 26,
 | FK/IK | Tested on the real SO-101 URDF. 200 of 200 bench poses round-trip to within 0.2 mm and 0.5°, at about 33 ms per solve. |
 | STS3215 client and gripper probe | Packet format, decoding, the squeeze ramp and torque release are tested against a fake servo. Not yet run on the arm. |
 | Force sensor sampler and tools (Oct 27) | The firmware runs on the ESP32: 500.0 Hz, no dropped frames and no CRC errors. On a real sensor, creep measured +6.8% over 3 s and +28% over 60 s under 51 g. Calibration is rough so far (coins up to 51 g, errors up to 27%), and readings at 34 g and 51 g came out about the same. That's an open question to settle with heavier weights before the jaw pads. |
-| Perception, motion layer, slip detector, web HUD | Not started (blueprint sheet 10). Their tools return a clear "not wired yet" error, or use the recorded bench with `--sim`. |
+| SAM 3.1 client (Oct 28) | Built to Meta's documented request and reply format and tested offline on replies written with Meta's own mask encoder. Not yet called live. |
+| Board reader, motion layer, slip detector, web HUD | Not started (blueprint sheet 10). Their tools return a clear "not wired yet" error, or use the recorded bench with `--sim`. |
 
 ## Setup (Apple Silicon)
 
@@ -160,6 +164,23 @@ python scripts/calibrate_fsr.py --port /dev/cu.usbserial-XXXX creep --channel SD
 - `creep` records 3 s unloaded, then the weight for 120 s, then 30 s unloaded again. It reports how far the reading drifts after 3, 10, 30, 60 and 120 s, the drift rate compared with the slip detector's 3 N/s cue, and what's left after you lift the weight off.
 - Both write `.wbc/logs/fsr-<mode>-<time>.csv`.
 
+## Seeing the bench with SAM 3.1
+
+SAM 3.1 on the Meta Model API takes one short noun phrase and one image per request, and returns a box and a mask for every match. `wbc/perception/sam_client.py` sends one request per phrase, in parallel, and decodes the masks with Meta's `meta-sam-parser`. Each request is billed as one image, $2.50 per 1,000. `scripts/sam_probe.py` shows what SAM finds on your bench. Run it from Terminal.app, because macOS only lets a terminal it has asked use the camera:
+
+```bash
+uv pip install -e '.[eyes]'
+python scripts/sam_probe.py cameras                  # free: which cameras macOS and OpenCV see
+python scripts/sam_probe.py capture --camera 0       # free: a 1920x1080 still in .wbc/vision/
+python scripts/sam_probe.py segment .wbc/vision/photo-<time>.png --phrase "jumper wire"   # $0.0025 per phrase
+python scripts/sam_probe.py replay .wbc/vision/sam-<time>.json   # free: parse and draw a saved reply again
+```
+
+- Name the thing, not an instruction: `"jumper wire"`, not `"find the wires"`. A list or an "and" doesn't segment two things, so pass `--phrase` once per thing.
+- No match is a normal, empty result, not an error.
+- `segment` draws every mask over the photo in `.wbc/vision/sam-<time>.png`, lists each match's box, area and confidence, and keeps SAM's whole reply in the run's `.json`, so `replay` can parse it again without paying.
+- `--crop X,Y,W,H` sends only part of the photo. The open SAM 3 model works on 1008 × 1008 pixel images, so a crop of just the breadboard may show thin wires at more detail than the whole 1920 × 1080 frame.
+
 ## How the router works
 
 Muse Spark is the only model that talks to you and the only one that decides. Every other model sits behind a tool:
@@ -180,4 +201,4 @@ Muse Spark is the only model that talks to you and the only one that decides. Ev
 ## Check on Day 1
 
 - Model ids and prices: run `scripts/smoke_test.py` and compare with Meta's pricing page. The Spark 1.3, Wonder and Voice Transcribe prices in `models.yaml` come from third-party write-ups.
-- The SAM 3.1 request format, which isn't in this scaffold yet. Also request access to the gated `facebook/sam3.1` weights.
+- The SAM 3.1 request format: found in Meta's docs and built on Oct 28 (see "Seeing the bench with SAM 3.1"). Access to the gated `facebook/sam3.1` weights is requested, for an offline backup.

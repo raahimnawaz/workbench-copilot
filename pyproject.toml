@@ -7,7 +7,7 @@ name = "workbench-copilot"
 version = "0.1.0"
 description = "An AI lab partner on your workbench: a Muse Spark router that calls Muse Wonder, SAM 3.1 and Voice Transcribe, and drives an SO-101 arm."
 readme = "README.md"
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 license = { text = "Apache-2.0" }
 dependencies = [
     "openai>=1.66",
@@ -19,6 +19,8 @@ dependencies = [
 [project.optional-dependencies]
 voice = ["sounddevice>=0.4"]
 arm = ["pyserial>=3.5"]
+# the camera and SAM 3.1; meta-sam-parser is pinned because the tests build replies with its encoder
+eyes = ["meta-sam-parser>=0.1,<0.2", "opencv-python-headless>=4.8"]
 firmware = ["platformio>=6.1"]   # builds and flashes the ESP32 firmware; also turns on ask_coder's compile check
 lerobot = ["lerobot[feetech]>=0.6"]   # arm calibration and moves; brings PyTorch, so CI leaves it out
 dev = ["pytest>=8"]

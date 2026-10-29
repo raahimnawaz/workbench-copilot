@@ -29,8 +29,9 @@ coder:
   compile_timeout_s: 180
 
 eyes:
-  model: sam-3.1
-  fallback: local                   # facebook/sam3.1 weights, gated on Hugging Face: request access
+  model: sam-3.1                    # request format from dev.meta.ai/docs/sam (Oct 28): one noun phrase per request
+  timeout_s: 30
+  fallback: local                   # facebook/sam3.1 weights, gated on Hugging Face: requested, not granted (Oct 28)
 
 ears:
   model: muse-voice-transcribe-1.0
@@ -60,5 +61,5 @@ budget:
     muse-spark-1.1: {in: 1.25, cached_in: 0.15, out: 4.25}      # cached rate assumed equal to 1.3
     muse-wonder-1.0: {in: 4.00, cached_in: 0.20, out: 20.00}    # third-party
     muse-voice-transcribe-1.0: {per_hour: 0.18}                # third-party
-    sam-3.1: {per_1k_images: 2.50}
+    sam-3.1: {per_1k_images: 2.50}                              # Meta's pricing page (Oct 28)
     muse-glimmer-30b: {in: 0, out: 0}                           # runs locally
