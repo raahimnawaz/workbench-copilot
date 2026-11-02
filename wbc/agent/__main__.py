@@ -2,8 +2,9 @@
 [--no-prefetch]
 
 Typed lines and spoken requests go on one queue, and the router handles them one turn at a time. Before each turn,
-code fetches the bench facts in models.yaml's router.prefetch (Act 1's board read, pins.h and the sensor);
---no-prefetch skips them, for a session that only moves the arm. With --voice (or
+code fetches the bench facts in models.yaml's router.prefetch: pins.h and the sensor, and Act 1's board read, which is
+made once at start-up and kept until the router reads the board itself; --no-prefetch skips them, for a session that
+only moves the arm. With --voice (or
 --speak), the co-pilot says the first sentence or two of each reply out loud, and the mic is muted while it speaks.
 With --arm, the arm's tools may move it. With robot.yaml's hand.go_ahead "request", the request is the go-ahead and
 the arm moves at once. With "enter", or --enter for bench tests, each move waits for Enter at the keyboard: while a
@@ -176,6 +177,9 @@ def main(argv=None) -> int:
         inbox.put(None)
 
     threading.Thread(target=typed, daemon=True).start()
+    read_ahead = getattr(router, "read_ahead", None)
+    if read_ahead is not None and not args.hear:  # the board read, made now and kept, so no turn waits for a photo
+        threading.Thread(target=read_ahead, daemon=True).start()
     fast = getattr(router, "fast", None)
     if fast is not None and not args.hear:  # it loads its model on the first request, so that goes now
         threading.Thread(target=fast.start, daemon=True).start()

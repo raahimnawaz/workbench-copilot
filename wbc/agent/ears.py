@@ -31,6 +31,18 @@ ANSWER_WORDS = 5  # the most words such an answer has, as in "yes, go ahead and 
 STOPS = ("stop", "halt", "freeze")  # the stop's words: after the wake phrase, or a whole utterance on their own
 STOP_ALSO = ("it", "now", "please", "the", "arm", "copilot")  # what "Stop!" on its own may come with ("stop it now")
 STOP_PIECE_S = 2.0  # while the co-pilot speaks, the mic is cut into pieces this long, each heard only for the stop
+# How a question opens even when it ends in ".": a verb such as "does", then its subject ("Does the LED blink now").
+# A verb followed by anything else is a statement: "Should be fixed now.", "Will do.", "Can't reach it."
+ASKING = ("do", "does", "did", "is", "are", "was", "were", "can", "could", "should", "shall", "will", "would", "may",
+          "might", "have", "has")
+SUBJECTS = ("i", "you", "we", "it", "they", "he", "she", "this", "that", "these", "those", "there", "the", "a", "an",
+            "my", "your", "its", "our", "their", "any", "both", "all", "each", "anything", "everything", "something")
+_QUESTION = re.compile(
+    r"(?:(?:so|and|but|now|then|ok|okay|also)\W+)?"  # "So, is it blinking"
+    r"(?:(?:what|which|where|how|who|why)\s+(?:\w+\s+)?)?"  # "Which thing should I move"
+    rf"(?:(?:{'|'.join(ASKING)})\s+(?:{'|'.join(SUBJECTS)})|want\s+(?:me|to))\b", flags=re.IGNORECASE)
+# A reply that asks to be told something back: "say go and I'll flash it", "let me know if it blinks"
+_INVITES = re.compile(r"\b(?:say\s+[\"'“‘]?(?:go|yes)|tell me|let me know)\b", flags=re.IGNORECASE)
 
 
 def pcm_to_wav(pcm: bytes, rate: int) -> bytes:
@@ -93,8 +105,14 @@ def said_stop(text: str, phrase: str) -> bool:
 
 
 def asks(reply: str) -> bool:
-    """Whether a reply ends asking something."""
-    return re.search(r"\?[\"')\]]*\s*$", reply) is not None
+    """Whether a reply waits for an answer: it ends with "?", its last sentence opens the way a question does though it
+    ends with "." (Nov 2: "It's flashed. Does the LED blink now, though the latest photo shows no wire to pin 4."), or
+    it asks to be told something back ("say go and I'll flash it"). A question it answers itself ("Is it? No.") doesn't
+    count."""
+    if re.search(r"\?[\"')\]]*\s*$", reply) or _INVITES.search(reply):
+        return True
+    last = re.split(r"(?<=[.!?])\s+", reply.strip())[-1]
+    return any(_QUESTION.match(clause.lstrip("\"'“‘([ ")) for clause in re.split(r"[,;:–—]", last))
 
 
 class Question:

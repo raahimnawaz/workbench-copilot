@@ -1,4 +1,7 @@
 import json
+import shutil
+import sys
+import threading
 import time
 
 import pytest
@@ -254,6 +257,106 @@ def test_a_prefetched_image_rides_with_the_first_call():
     assert content[-1]["image_url"].startswith("data:image/png;base64,")
 
 
+KEPT = [{"tool": "read_breadboard", "keep": True}, {"tool": "read_file", "args": {"path": "pins.h"}}]
+
+
+def test_the_board_read_is_kept_for_the_session():
+    """Nov 2: every turn read the board again, 6-9 s each, and the "go" turn's read missed a wire the first one had,
+    so right after a correct fix Spark said the latest photo showed no wire to the pin."""
+    log = []
+    router, api, hud = make_router([response(f"r{i}", text="ok") for i in range(3)], facts_toolbox(log), prefetch=KEPT)
+    for text in ("my LED isn't blinking", "go", "does it blink"):
+        router.run_turn(text)
+    assert log.count("board") == 1 and log.count("pins.h") == 3, "pins.h is still read every turn"
+    assert "SENSOR_PIN" in asked(api.requests[0])
+    assert all("read_breadboard {}: unchanged since you last saw it" in asked(r) for r in api.requests[1:])
+    assert sum(1 for e in hud.events if e[0] == "note" and e[1].startswith("read_breadboard: kept from")) == 2
+
+
+def test_the_kept_read_is_made_before_the_first_request_and_its_image_goes_once():
+    log = []
+    router, api, hud = make_router([response("r1", text="ok"), response("r2", text="ok")],
+                                   facts_toolbox(log, {"ok": True, "mismatches": [], "_image": PNG}), prefetch=KEPT)
+    router.read_ahead()
+    assert log == ["board"] and ("call", "SAM", "read_breadboard") in hud.events
+    router.run_turn("check my wiring")
+    router.run_turn("go")
+    assert log == ["board", "pins.h", "pins.h"]
+    first, second = api.requests[0]["input"][0]["content"], asked(api.requests[1])
+    assert "mismatches" in first[0]["text"] and first[-1]["image_url"].startswith("data:image/png;base64,")
+    assert isinstance(second, str) and "unchanged since you last saw it" in second
+
+
+def test_a_turn_waits_for_the_read_made_at_start_up_instead_of_reading_again():
+    log, reading, done = [], threading.Event(), threading.Event()
+    tb = Toolbox()
+
+    @tb.register("read_breadboard", "", {"type": "object", "properties": {}}, label="SAM")
+    def read_breadboard():
+        reading.set()
+        done.wait(5)
+        log.append("board")
+        return {"ok": True, "mismatches": []}
+
+    router, api, _ = make_router([response("r1", text="ok")], tb, prefetch=KEPT[:1])
+    ahead = threading.Thread(target=router.read_ahead)
+    ahead.start()
+    assert reading.wait(5)
+    threading.Timer(0.2, done.set).start()
+    router.run_turn("check my wiring")  # asked while the photo is being read
+    ahead.join(5)
+    assert log == ["board"] and "mismatches" in asked(api.requests[0])
+
+
+def test_a_read_that_failed_isnt_kept():
+    log, board = [], {"ok": False, "error": "the camera isn't allowed"}
+    router, api, _ = make_router([response("r1", text="ok"), response("r2", text="ok")], facts_toolbox(log, board),
+                                 prefetch=KEPT[:1])
+    router.read_ahead()
+    board.clear()
+    board.update({"ok": True, "mismatches": []})  # the camera works now
+    router.run_turn("check my wiring")
+    router.run_turn("go")
+    assert log == ["board", "board"], "the first turn reads it again, and keeps that one"
+
+
+def test_the_routers_own_board_read_is_kept_in_place_of_the_first():
+    """When the user says the wiring changed, Spark reads the board itself, and later turns keep that read."""
+    log, board = [], {"ok": True, "mismatches": [{"signal": "SENSOR_PIN"}]}
+    router, api, _ = make_router([response("r1", text="Found it."),
+                                  response("r2", [function_call("c1", "read_breadboard", "{ }")]),
+                                  response("r3", text="It's right now."), response("r4", text="ok"),
+                                  response("r5", text="ok")], facts_toolbox(log, board), prefetch=KEPT)
+    router.run_turn("check my wiring")
+    board["mismatches"] = []  # the user moves the wire
+    router.run_turn("I moved the wire, look again")
+    router.run_turn("and now?")
+    assert log.count("board") == 2  # the first read, then Spark's
+    assert "read_breadboard {}: unchanged since you last saw it" in asked(api.requests[3]), "Spark saw its own read"
+    router._new_conversation()  # as after a summary: the new conversation gets the kept read in full
+    router.run_turn("one more")
+    assert log.count("board") == 2 and '"mismatches": []' in asked(api.requests[4])
+
+
+def test_a_kept_result_is_brought_up_to_date_by_its_tool_each_turn():
+    log, pins = [], {"SENSOR_PIN": 15}
+    tb = Toolbox()
+
+    @tb.register("read_breadboard", "", {"type": "object", "properties": {}}, label="SAM",
+                 recheck=lambda result: {**result, "pins_h": pins["SENSOR_PIN"]})
+    def read_breadboard():
+        log.append("board")
+        return {"ok": True, "pins_h": 15}
+
+    router, api, _ = make_router([response(f"r{i}", text="ok") for i in range(3)], tb, prefetch=KEPT[:1])
+    router.run_turn("check my wiring")
+    pins["SENSOR_PIN"] = 4  # the fix, staged
+    router.run_turn("go")
+    router.run_turn("does it work")
+    assert log == ["board"]
+    assert '"pins_h": 4' in asked(api.requests[1]) and "unchanged" in asked(api.requests[2])
+
+
 def test_private_keys_stay_out_of_what_the_model_sees():
     tb = Toolbox()
 
@@ -308,6 +411,32 @@ def test_sim_bench_tools():
     assert "point_at" not in tb.names(), "Act 1 has no arm step: live, the stub only said it wasn't wired"
     assert "call ask_coder first" in tb.dispatch("propose_patch", {"patch_id": "p9"})["error"]
     assert set(tb.names()) >= {"read_file", "ask_coder", "propose_patch", "read_breadboard", "look"}
+
+
+def test_a_kept_board_read_is_checked_against_pins_h_as_it_is_now(tmp_path, monkeypatch):
+    """The board read is kept for the session, so once a fix is staged, its mismatches have to come from pins.h as it
+    is then, not as it was when the photo was taken. The recording (--sim) is checked the same way."""
+    (tmp_path / "fixtures").mkdir()
+    shutil.copy(ROOT / "fixtures" / "breadboard_mismatch.json", tmp_path / "fixtures")
+    pins_h = tmp_path / "firmware/dut_demo/include/pins.h"
+    pins_h.parent.mkdir(parents=True)
+    buggy = (ROOT / "firmware/dut_demo/include/pins.h").read_text()
+    tb = build_toolbox(Bench(tmp_path, load_yaml("models.yaml"), None, Budget(10, {}), sim=True,
+                             layout=load_yaml("bench.yaml")))
+    read = {**tb.dispatch("read_breadboard", {}), "_image": PNG}
+
+    pins_h.write_text(buggy)  # as it was for the photo
+    assert tb.recheck("read_breadboard", dict(read)) == read
+    pins_h.write_text(buggy.replace("SENSOR_PIN 15", "SENSOR_PIN 4"))  # the fix, staged
+    fixed = tb.recheck("read_breadboard", dict(read))
+    assert fixed["mismatches"] == [] and fixed["wires"] == read["wires"] and fixed["netlist"] == read["netlist"]
+    assert "_image" not in fixed, "its drawing still shows the mismatch in red"
+    pins_h.write_text(buggy.replace("SENSOR_PIN 15", "SENSOR_PIN 5"))  # another wrong pin: the same wire and hole
+    assert tb.recheck("read_breadboard", dict(read))["mismatches"] == [{**read["mismatches"][0], "pins_h": 5}]
+
+    monkeypatch.setitem(sys.modules, "wbc.perception.netlist", None)  # --sim without the eyes extra
+    monkeypatch.delattr("wbc.perception.netlist", raising=False)
+    assert tb.recheck("read_breadboard", dict(read)) == read
 
 
 def test_nothing_the_agent_reads_by_default_says_where_the_bug_is():

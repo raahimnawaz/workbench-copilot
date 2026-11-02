@@ -201,6 +201,24 @@ def test_check_follows_each_signal_to_the_gpio_its_net_reaches():
                     "line": 5, "problem": "not wired to any GPIO"}
 
 
+def test_recheck_finds_what_check_would_once_pins_h_changes():
+    """A board read kept for the session is checked again against each turn's pins.h, with no new photo."""
+    bench = bench_config()
+    pins = netlist.module_pins(bench["modules"], PARTS, [board()])
+
+    def unplaced(misses):  # a read that matched pins.h didn't say which end of the wire to point at
+        return [{k: v for k, v in m.items() if k not in ("hole", "row")} for m in misses]
+
+    for wires in ([_wire("wire:1", "5a-e", "26a-e")], [_wire("wire:1", "3a-e", "26a-e")], [],
+                  [_wire("wire:1", "5a-e", "26a-e"), _wire("wire:2", "4a-e", "26a-e")]):
+        rows, found = netlist.check(wires, pins, bench["firmware"], {"SENSOR_PIN": (15, 5)}, "pins.h")
+        for now in (15, 4, 2, 7):
+            _, expected = netlist.check(wires, pins, bench["firmware"], {"SENSOR_PIN": (now, 5)}, "pins.h")
+            rechecked = netlist.recheck(rows, {"SENSOR_PIN": (now, 5)}, "pins.h", found)
+            assert rechecked == (expected if found else unplaced(expected)), (wires, now)
+    assert netlist.recheck(rows, {}, "pins.h", found) == [], "a signal pins.h no longer defines isn't checked"
+
+
 # --- the whole read ---
 
 def test_reader_finds_the_planted_sensor_bug(tmp_path):

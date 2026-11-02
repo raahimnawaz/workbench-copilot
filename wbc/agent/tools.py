@@ -34,15 +34,17 @@ class Tool:
     parameters: dict
     fn: Callable
     label: str  # which model or system does the work, for the HUD timeline
+    recheck: Callable | None = None  # brings a kept result up to date without running the tool (see Toolbox.recheck)
 
 
 class Toolbox:
     def __init__(self):
         self._tools = {}
 
-    def register(self, name: str, description: str, parameters: dict, label: str = "code"):
+    def register(self, name: str, description: str, parameters: dict, label: str = "code",
+                 recheck: Callable | None = None):
         def decorate(fn):
-            self._tools[name] = Tool(name, description, parameters, fn, label)
+            self._tools[name] = Tool(name, description, parameters, fn, label, recheck)
             return fn
         return decorate
 
@@ -75,6 +77,12 @@ class Toolbox:
         except Exception as e:
             return {"ok": False, "error": f"{type(e).__name__}: {e}"}
         return result if isinstance(result, dict) else {"ok": True, "result": result}
+
+    def recheck(self, name: str, result: dict) -> dict:
+        """An earlier result of `name`, kept for the session (models.yaml's prefetch `keep`), brought up to date by its
+        tool's recheck without running the tool again; as it was for a tool without one."""
+        tool = self._tools.get(name)
+        return tool.recheck(result) if tool is not None and tool.recheck is not None else result
 
 
 @dataclass
@@ -275,10 +283,28 @@ def build_toolbox(bench: Bench) -> Toolbox:
             return {"ok": True, "already_staged": True, "why": patch["why"]}
         return coder.propose_patch(bench.root, patch["diff"], patch["why"])
 
+    def board_now(result: dict) -> dict:
+        """A board read kept for the session, checked against pins.h as it is now: the wires and the netlist are its
+        photo's, and the mismatches are worked out again, so a staged fix shows without another photo. The drawing
+        shows the mismatches as they were, so it's left out once they've changed. As it was when pins.h can't be read,
+        or without the eyes extra (--sim)."""
+        fw = bench.layout.get("firmware") or {}
+        try:
+            from wbc.perception import netlist  # the eyes extra
+
+            defines = netlist.read_defines(bench.root / fw["file"])
+        except (ImportError, KeyError, OSError):
+            return result
+        found = result.get("mismatches") or []
+        mismatches = netlist.recheck(result.get("netlist") or [], defines, fw["file"], found)
+        if mismatches == found:
+            return result
+        return {**{k: v for k, v in result.items() if k != "_image"}, "mismatches": mismatches}
+
     @tb.register("read_breadboard", (
         "Photograph the breadboard with the overhead camera, segment its jumper wires with SAM 3.1, and return "
         "each wire's two holes, the netlist, any mismatches against pins.h, and an annotated image."), {
-        "type": "object", "properties": {}}, label="SAM")
+        "type": "object", "properties": {}}, label="SAM", recheck=board_now)
     def read_breadboard() -> dict:
         if bench.sim:
             return json.loads((bench.root / "fixtures" / "breadboard_mismatch.json").read_text(encoding="utf-8"))

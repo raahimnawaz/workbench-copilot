@@ -7,7 +7,7 @@ Loose jumper leads stand up off the board, and the camera sees their tips displa
 flat ones.
 
 The netlist: each strip and rail is a node, wires join nodes, and module pins sit in holes (bench.yaml).
-Plain code then compares the nets with pins.h.
+Plain code then compares the nets with pins.h, and recheck() compares an earlier read's netlist with it again.
 """
 from __future__ import annotations
 
@@ -227,6 +227,16 @@ def _row(hole: str) -> str | None:
     return f"row:{name[1:]}" if name[1:].isdigit() else None
 
 
+def _mismatch(signal: str, define: tuple, wired_to, wire: str | None, file: str) -> dict:
+    """A signal whose net doesn't reach the GPIO pins.h gives it. `define` is pins.h's (number, line) for it, and
+    `wired_to` what its net reaches: one GPIO, a list of several, or None."""
+    gpios = [] if wired_to is None else wired_to if isinstance(wired_to, list) else [wired_to]
+    value, line = define
+    return {"signal": signal, "pins_h": value, "wired_to": wired_to, "wire": wire, "file": file, "line": line,
+            "problem": ("not wired to any GPIO" if not gpios else "wired to several GPIOs" if len(gpios) > 1
+                        else "wired to a different GPIO")}
+
+
 def check(wires: list, pins: dict, firmware: dict, defines: dict, file: str) -> tuple:
     """(netlist rows, mismatches): each signal's part pin, the GPIO its net reaches, and pins.h's number."""
     nets = Nets()
@@ -245,16 +255,27 @@ def check(wires: list, pins: dict, firmware: dict, defines: dict, file: str) -> 
         wired_to = gpios[0] if len(gpios) == 1 else gpios or None
         rows.append({"signal": signal, "wire": wire.id if wire else None, "pin": pin,
                      "esp32_gpio": wired_to})
-        value, line = defines[signal]
-        if gpios == [value]:
+        if gpios == [defines[signal][0]]:
             continue
-        miss = {"signal": signal, "pins_h": value, "wired_to": wired_to, "wire": wire.id if wire else None,
-                "file": file, "line": line,
-                "problem": ("not wired to any GPIO" if not gpios else "wired to several GPIOs" if len(gpios) > 1
-                            else "wired to a different GPIO")}
+        miss = _mismatch(signal, defines[signal], wired_to, wire.id if wire else None, file)
         if wire:  # point at the wire's far end: on the GPIO it reaches, or wherever it goes instead
             far = next((e for e in wire.ends if e.node in gpio_nodes.values()),
                        next((e for e in wire.ends if e.node != pins[pin]), wire.ends[0]))
             miss["hole"], miss["row"] = far.hole, _row(far.hole)
         mismatches.append(miss)
     return rows, mismatches
+
+
+def recheck(rows: list, defines: dict, file: str, found: list) -> list:
+    """check()'s mismatches for an earlier read's netlist rows against pins.h as it is now (`defines`), so a read kept
+    for the session shows a staged fix without another photo. A mismatch the read itself found (`found`) keeps its
+    hole and row, since the wiring is still the read's."""
+    ends = {m["signal"]: {k: m[k] for k in ("hole", "row") if k in m} for m in found}
+    mismatches = []
+    for row in rows:
+        signal = row["signal"]
+        if signal not in defines or row["esp32_gpio"] == defines[signal][0]:
+            continue
+        mismatches.append({**_mismatch(signal, defines[signal], row["esp32_gpio"], row["wire"], file),
+                           **ends.get(signal, {})})
+    return mismatches

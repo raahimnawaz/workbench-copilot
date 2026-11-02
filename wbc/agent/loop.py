@@ -8,11 +8,15 @@ next one starts from a summary of it, or from the recorded turns, instead of fro
 
 With a FastArm (fast_arm.py), an arm command its rules and the local model agree on runs first, with no call to the
 router's model, and joins the conversation as a turn like any other.
+
+A prefetch kept for the session (`keep: true` in models.yaml, the board read) runs once, at start-up, and its result
+stands in for it on every later turn, brought up to date by its tool, until the router calls that tool itself.
 """
 from __future__ import annotations
 
 import base64
 import json
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
@@ -74,8 +78,10 @@ class _RouterBase:
         self.hud = hud
         self.system = system
         self.max_steps = max_steps
-        self.prefetch = prefetch or []  # [{tool, args}] that code runs before the first call of every turn
+        self.prefetch = prefetch or []  # [{tool, args, keep}] that code runs before the first call of every turn
         self._seen = {}  # each prefetched result as this conversation last saw it
+        self._kept = {}  # each kept prefetch's last good result, as (result, when), whatever ran it
+        self._reading = threading.Lock()  # held while kept prefetches run, so a turn waits for one already running
         self.pool = ThreadPoolExecutor(max_workers=4)
         self.memory = memory  # what outlives a conversation; None keeps only the conversation itself
         self.fast = fast  # the arm's fast path (fast_arm.py); None sends every request to the router's model
@@ -86,13 +92,56 @@ class _RouterBase:
         self.running = []  # the round of tool calls running now
         self._ran_out = False  # whether the last turn stopped at max_steps with calls unanswered
 
+    def _prefetches(self) -> list:
+        return [Call(f"prefetch{i}", p["tool"], json.dumps(p.get("args", {}))) for i, p in enumerate(self.prefetch)]
+
+    def _kept_key(self, c: Call) -> str | None:
+        """For a call that runs a prefetch kept for the session, that prefetch's key ("tool args", as the bench facts
+        name it), whether the prefetch made the call or the router's model did; None for any other call."""
+        try:
+            args = json.loads(c.arguments or "{}")
+        except json.JSONDecodeError:
+            return None
+        return next((f"{p['tool']} {json.dumps(p.get('args', {}))}" for p in self.prefetch
+                     if p.get("keep") and p["tool"] == c.name and p.get("args", {}) == args), None)
+
+    def _keep(self, key: str | None, result: dict) -> None:
+        """A kept prefetch's result, if it worked: it stands in for the tool from now on."""
+        if key is not None and result.get("ok"):
+            self._kept[key] = ({k: v for k, v in result.items() if k != "_timing"}, time.strftime("%H:%M:%S"))
+
+    def read_ahead(self) -> None:
+        """At start-up, before the first request: run the prefetches kept for the session (the board read), so the
+        first turn finds them done. A turn that starts meanwhile waits for them rather than running them again."""
+        with self._reading:
+            calls = [c for c in self._prefetches() if self._kept_key(c) is not None]
+            calls = [c for c in calls if self._kept_key(c) not in self._kept]  # a turn may have run it already
+            for c, res in zip(calls, self._run_calls(calls)):
+                self._keep(self._kept_key(c), res)
+
     def _fetch(self) -> list:
         """Run the prefetch tools, so the router starts a turn with the bench facts instead of spending a round
-        asking for them: [(call, result, image)]."""
-        calls = [Call(f"prefetch{i}", p["tool"], json.dumps(p.get("args", {}))) for i, p in enumerate(self.prefetch)]
+        asking for them: [(call, result, image)]. A kept one runs only when it has no result to keep yet. Otherwise
+        its last good result stands in for it, brought up to date by its tool without running it (Toolbox.recheck)."""
+        calls = self._prefetches()
         if not calls:
             return []
-        return [(c, res, _private(res).get("_image")) for c, res in zip(calls, self._run_calls(calls))]
+        with self._reading:  # a kept one still running from start-up is waited for, not run again
+            kept = {c.id: self._kept[self._kept_key(c)] for c in calls if self._kept_key(c) in self._kept}
+            fresh = [c for c in calls if c.id not in kept]
+            ran = dict(zip([c.id for c in fresh], self._run_calls(fresh)))
+            for c in fresh:
+                self._keep(self._kept_key(c), ran[c.id])
+        fetched = []
+        for c in calls:
+            if c.id in kept:
+                result, when = kept[c.id]
+                self.hud.note(f"{c.name}: kept from {when}")
+                res = self.toolbox.recheck(c.name, dict(result))
+            else:
+                res = ran[c.id]
+            fetched.append((c, res, _private(res).get("_image")))
+        return fetched
 
     def _bench_facts(self, fetched: list) -> tuple:
         """The fetched bench facts as (text, images) to send; facts the conversation already has go out as
@@ -242,11 +291,17 @@ class _RouterBase:
 
     def _round(self, calls: list, done: list) -> list:
         """Run one round of tool calls and record them in `done` first thing, so nothing after can lose or repeat
-        them."""
+        them. The router's own call of a prefetch kept for the session (the board read again, after the wiring
+        changed) is kept in place of the last, and the conversation has seen it."""
         self.running = calls
         results = self._run_calls(calls)
         done.extend(self._records(calls, results))
         self.running = []
+        for c, res in zip(calls, results):
+            key = self._kept_key(c)
+            if key is not None and res.get("ok"):
+                self._keep(key, res)
+                self._seen[key] = json.dumps({k: v for k, v in res.items() if not k.startswith("_")})
         return results
 
     def _record(self, user_text: str, done: list, reply: str, live: bool) -> None:

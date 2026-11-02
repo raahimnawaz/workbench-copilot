@@ -1031,6 +1031,25 @@ def test_no_prefetch_skips_the_bench_facts_fetched_before_each_turn(monkeypatch,
     assert bool(router.prefetch) is prefetch  # without it, the router fetches nothing before a turn
 
 
+@pytest.mark.parametrize("flags, reads", [([], True), (["--hear"], False)])
+def test_the_board_is_read_at_start_up_but_not_for_a_mic_check(monkeypatch, flags, reads):
+    """The board read is kept for the session, so it's made at start-up, before anyone asks anything."""
+    read = threading.Event()
+    bench = NS(park=lambda home=True: None, stop_arm=lambda: None, hand=None, stopped=threading.Event(),
+               can_go_home=lambda: False, resume=lambda: None)
+    budget = NS(spent=0.0, limit=5.0, check=lambda: None, pop_warning=lambda: None)
+    router = NS(label="Spark", model="spark", read_ahead=read.set,
+                run_turn=lambda text: "Done." if read.wait(5) else "The board wasn't read.")
+    monkeypatch.setattr(agent, "build", lambda *a: ({"ears": {}, "coder": {}, "mouth": {}}, budget, SilentHud(), router,
+                                                    bench, Keyboard(say=lambda s: None)))
+    monkeypatch.setattr(agent.coder, "compile_in_sandbox", lambda *a: None)
+    monkeypatch.setattr(agent.ears, "listen_forever", lambda *a, **kw: None)
+    monkeypatch.setattr(agent.config, "api_key", lambda: "key")
+    monkeypatch.setattr("sys.stdin", io.StringIO("check my wiring\n"))
+    assert agent.main(flags) == 0
+    assert read.wait(0.5) is reads
+
+
 def test_go_ahead_comes_from_robot_yaml_and_enter_overrides_it(monkeypatch):
     monkeypatch.setattr(agent.config, "meta_client", lambda models: NS())  # so building needs no key
     assert agent.build(True, False)[4].go_ahead == "request"

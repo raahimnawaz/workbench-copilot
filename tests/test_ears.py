@@ -246,6 +246,20 @@ def test_a_reply_asks_when_it_ends_with_a_question(reply, asking):
     assert asks(reply) is asking
 
 
+@pytest.mark.parametrize("reply, asking", [
+    ("It's flashed. Does the LED blink now, though the latest photo shows no wire to pin 4.", True),  # Nov 2, 01:54
+    ("I've staged the pin fix to use pin 4, say go and I'll flash it.", True),  # Nov 2, 01:53
+    ("Want me to flash it.", True), ("Staged. Which thing should I move first.", True),
+    ("I've staged it, is that right.", True), ("So, is it blinking now.", True), ("Let me know if it blinks.", True),
+    ("Should be fixed now.", False), ("Could be the LED's polarity.", False), ("Will do.", False),
+    ("Can't reach it: it's 360 mm out.", False), ("Which is why it stayed dark.", False),
+    ("It's flashed, and is blinking.", False), ("If it blinks, the fix worked.", False),
+])
+def test_a_reply_asks_when_it_asks_with_a_full_stop_too(reply, asking):
+    """Spark sometimes asks with a "." at the end, and on Nov 2 the answer after the flash was dropped for it."""
+    assert asks(reply) is asking
+
+
 def hear(mic, transcriber, muted=None, clock=lambda: 0.0, question=None):
     hud, sent, stops = SilentHud(), [], []
     listen_forever(sent.append, {"wake_phrase": "copilot"}, "key", None, hud, mic=mic, transcriber=transcriber,
@@ -284,6 +298,15 @@ def test_a_short_answer_to_a_question_needs_no_wake_phrase(now, text, routed):
     mic = FakeMic(quiet(2.5), voice(0.6), quiet(1.5))
     assert hear(mic, FakeTranscriber(text), clock=lambda: now, question=question) == (routed, [])
     assert (question.at is None) is bool(routed)  # answered, so closed
+
+
+def test_the_answer_to_a_question_asked_with_a_full_stop_needs_no_wake_phrase():
+    """Nov 2, 01:54: "yes it blinks thank you" was "heard, not for me"."""
+    question = Question()
+    question.asked("It's flashed. Does the LED blink now, though the latest photo shows no wire to pin 4.", at=0.0)
+    mic = FakeMic(quiet(2.5), voice(0.6), quiet(1.5))
+    assert hear(mic, FakeTranscriber("yes it blinks thank you"), clock=lambda: 3.0, question=question) == (
+        ["yes it blinks thank you"], [])
 
 
 def test_the_answer_may_come_until_some_seconds_after_the_question_was_said():

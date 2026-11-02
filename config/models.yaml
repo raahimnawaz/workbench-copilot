@@ -13,11 +13,15 @@ router:
   # about 19 s each at the API default (Oct 26) and 4.4-14.0 s at "low" (Oct 28).
   effort: low
   # Code runs these before Spark's first call of every turn and sends what changed since Spark last saw it,
-  # so Spark starts with the bench facts instead of spending a round asking for them.
+  # so Spark starts with the bench facts instead of spending a round asking for them. One with keep: true runs
+  # once, at start-up, and its result stands in for it on later turns until Spark calls that tool itself.
   prefetch:
-    - {tool: read_breadboard}
+    # A board read takes 6-9 s, 5 of them opening the camera, and on Nov 2 a second read of the same wiring
+    # missed a wire and put another's end in the wrong hole. The kept read is checked against pins.h each turn,
+    # so a staged fix shows.
+    - {tool: read_breadboard, keep: true}
     - {tool: read_file, args: {path: firmware/dut_demo/include/pins.h}}
-    - {tool: read_sensor}               # the demo board's force sensor, live, while the board is read
+    - {tool: read_sensor}               # the demo board's force sensor, live
 
 coder:
   model: muse-wonder-1.0
