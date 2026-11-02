@@ -1,6 +1,8 @@
-"""Run the bench agent: python -m wbc.agent [--sim] [--voice] [--hear] [--speak] [--backup] [--arm]
+"""Run the bench agent: python -m wbc.agent [--sim] [--voice] [--hear] [--speak] [--backup] [--arm] [--no-prefetch]
 
-Typed lines and spoken requests go on one queue, and the router handles them one turn at a time. With --voice (or
+Typed lines and spoken requests go on one queue, and the router handles them one turn at a time. Before each turn,
+code fetches the bench facts in models.yaml's router.prefetch (Act 1's board read, pins.h and the sensor);
+--no-prefetch skips them, for a session that only moves the arm. With --voice (or
 --speak), the co-pilot says the first sentence or two of each reply out loud, and the mic is muted while it speaks.
 With --arm, the arm's tools may move it, each move only after Enter at the keyboard: while a move waits, the next
 typed line answers it instead of going to the router, and nothing heard by voice does. Ctrl-C cuts every motor (the
@@ -30,7 +32,7 @@ SYSTEM = (Path(__file__).parent / "prompts" / "system.md").read_text(encoding="u
 
 
 def build(sim: bool, backup: bool, router_model: str | None = None, arm: bool = False,
-          calibration_dir: str | None = None):
+          calibration_dir: str | None = None, prefetch: bool = True):
     models = config.load_yaml("models.yaml")
     budget = Budget.from_config(models, config.ROOT)
     hud = ConsoleHud()
@@ -43,7 +45,7 @@ def build(sim: bool, backup: bool, router_model: str | None = None, arm: bool = 
                   calibration_dir=calibration_dir or robot_cfg.get("calibration_dir"), confirm=keyboard.ask)
     toolbox = build_toolbox(bench)
     max_steps = models["router"].get("max_steps", 12)
-    prefetch = models["router"].get("prefetch")
+    prefetch = models["router"].get("prefetch") if prefetch else None
     if backup:
         b = models["backup"]
         router = ChatRouter(config.backup_client(models), b["model"], toolbox, budget, hud, SYSTEM,
@@ -70,11 +72,13 @@ def main(argv=None) -> int:
                     help="let the arm's tools move it, each move after Enter (the port is robot.yaml's)")
     ap.add_argument("--calibration-dir", metavar="DIR",
                     help="lerobot-calibrate's folder for the arm, when it's another macOS account's")
+    ap.add_argument("--no-prefetch", action="store_true",
+                    help="skip the bench facts fetched before each turn (Act 1's board read, pins.h and the sensor)")
     args = ap.parse_args(argv)
 
     try:
         models, budget, hud, router, bench, keyboard = build(args.sim, args.backup, args.router_model, args.arm,
-                                                             args.calibration_dir)
+                                                             args.calibration_dir, not args.no_prefetch)
     except RuntimeError as e:  # missing key or voice extras
         print(e, file=sys.stderr)
         return 2

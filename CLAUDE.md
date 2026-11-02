@@ -17,6 +17,7 @@ echo "My force sensor isn't reading anything. Check my wiring against the firmwa
 echo "My force sensor isn't reading anything. Check my wiring against the firmware." | .venv/bin/python -m wbc.agent --sim --router-model muse-spark-1.1   # PAID, about $0.025: the same turn routed by Spark 1.1
 .venv/bin/python -m wbc.agent --hear                           # PAID, about $0.0001 a sentence: prints what the mic hears, routes nothing
 .venv/bin/python -m wbc.agent --voice                          # PAID: each turn, plus about $0.0001 a sentence heard; replies said out loud (--no-speak: HUD only)
+.venv/bin/python -m wbc.agent --arm --no-prefetch             # PAID: each turn, plus $0.0025 a locate; the arm moves only after Enter, and --no-prefetch skips Act 1's board read
 .venv/bin/python scripts/gripper_probe.py --list                # free: find the servo bus port
 .venv/bin/python scripts/gripper_probe.py --port /dev/cu.usbmodem5B910297421 watch   # read only: the gripper's settings and jaw positions
 .venv/bin/python scripts/gripper_probe.py --port /dev/cu.usbmodem5B910297421 squeeze --closed 1278 --gain 32 --torque-limit 240   # torque on: waits for Enter, then closes on the object

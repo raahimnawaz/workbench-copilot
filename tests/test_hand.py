@@ -798,6 +798,23 @@ def test_after_ctrl_c_nothing_is_staged_or_flashed_but_after_the_end_of_the_inpu
         assert tb.dispatch("build_and_flash", {})["ok"] and len(staged) == len(flashed) == 1
 
 
+@pytest.mark.parametrize("flags, prefetch", [([], True), (["--arm", "--no-prefetch"], False)])
+def test_no_prefetch_skips_the_bench_facts_fetched_before_each_turn(monkeypatch, flags, prefetch):
+    build, built = agent.build, []
+    bench = NS(park=lambda home=True: None, stop_arm=lambda: None, hand=None, stopped=threading.Event(),
+               can_go_home=lambda: False)
+    budget = NS(spent=0.0, limit=5.0, check=lambda: None, pop_warning=lambda: None)
+    fake = NS(label="Spark", model="spark", run_turn=lambda text: "Done.")
+    parts = ({"ears": {}, "coder": {}, "mouth": {}}, budget, SilentHud(), fake, bench, Keyboard(say=lambda s: None))
+    monkeypatch.setattr(agent, "build", lambda *a: built.append(a) or parts)
+    monkeypatch.setattr(agent.coder, "compile_in_sandbox", lambda *a: None)
+    monkeypatch.setattr("sys.stdin", io.StringIO("pick up the screwdriver\n"))
+    assert agent.main(flags) == 0 and built[0][5] is prefetch
+    monkeypatch.setattr(agent.config, "meta_client", lambda models: NS())  # so building needs no key
+    router = build(*built[0])[3]
+    assert bool(router.prefetch) is prefetch  # without it, the router fetches nothing before a turn
+
+
 def test_the_wbc_script_ends_the_way_python_m_does():
     assert 'wbc = "wbc.agent.__main__:cli"' in (ROOT / "pyproject.toml").read_text(encoding="utf-8")
     assert callable(agent.cli)
