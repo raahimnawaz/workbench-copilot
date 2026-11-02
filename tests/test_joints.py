@@ -49,7 +49,9 @@ L_POSE = {"shoulder_pan": 2105, "shoulder_lift": 2066, "elbow_flex": 2060, "wris
 
 @pytest.fixture(scope="module")
 def robot_cfg():
-    return yaml.safe_load((ROOT / "config" / "robot.yaml").read_text())
+    cfg = yaml.safe_load((ROOT / "config" / "robot.yaml").read_text())
+    cfg["tool"]["xyz"] = [0, 0, 0]  # these tests' heights are the URDF's point between the jaws
+    return cfg
 
 
 @pytest.fixture(scope="module")

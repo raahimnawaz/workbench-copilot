@@ -5,10 +5,36 @@ tip_link: gripper_frame_link          # the point between the jaws
 joints: [shoulder_pan, shoulder_lift, elbow_flex, wrist_flex, wrist_roll]
 
 # In the URDF the gripper's approach direction is its z-axis. Turning the tool frame -90° about y
-# makes approach the x-axis, which is what kinematics.task_to_pose expects.
+# makes approach the x-axis, which is what kinematics.task_to_pose expects. xyz moves the tool point from the URDF's
+# point between the jaws to the closed jaws' tips, by the four-touch test (Oct 29, 22:34, arm-bench/tip_offset.py
+# --roll): one dot touched straight down over 255° of wrist roll read 11.6 mm rms apart with the URDF's point and 4.9
+# with this, which puts the tips 3.7 mm from the roll's axis instead of 7.9. Along the gripper it stays 0, as the 20:35
+# tilt test found (-3 mm).
 tool:
-  xyz: [0, 0, 0]
+  xyz: [-0.0099, 0.0033, 0]
   rpy: [0, -1.5708, 0]
+
+# The table's z in the arm's frame, mm: the driver's floors (10 mm for the tool point, 30 for the elbow and wrist axes)
+# are measured from it. The base's underside is z 0, but the desk reads lower: about -17 mm 14 cm from the base (desk
+# tag 25, Oct 29) and -21 at 15 cm (the 22:34 dot), down to -30 to -36 mm 27-29 cm out (tags 22 and 23). This is the
+# highest of them, so the floors hold everywhere and the jaws get within 10 mm of the desk near the base; far out they
+# stop higher above it.
+table_mm: -17
+
+# The arm's servo adapter, for python -m wbc.agent --arm, and lerobot-calibrate's folder when it's another macOS
+# account's (empty: this account's own).
+port: /dev/cu.usbmodem5B910297421
+calibration_dir:
+
+# Picking things up and putting them down (wbc/motion/hand.py).
+hand:
+  # The wrist roll at which the gripper, pointing straight down, closes its jaws across the arm, along the wrist
+  # flex's axis: in the rest pose the line between the jaws runs down the arm's middle with the roll reading about 0
+  # (Oct 29). The URDF puts that a quarter turn away.
+  across_roll_deg: 0
+  # Ask again over the thing, before the jaws open and go down, so a jaw line or a spot that's wrong stops there.
+  # Turn it off once picks land where they should.
+  check_over: true
 
 # Servo ids, and the signs wbc/motion/joints.py maps raw ticks with: q = sign * (raw - 2047) * 2 pi / 4096 radians.
 # The URDF's zero is lerobot-calibrate's Part 1 L pose (base facing forward, upper arm straight up, forearm and

@@ -61,14 +61,15 @@ def min_seconds(q0, q1, max_joint_speed: float, chain=None, max_tip_speed: float
     return max(seconds, float(fastest) * PEAK / max_tip_speed)
 
 
-def lowest(chain, path, joints: tuple) -> tuple[float, float]:
+def lowest(chain, path, joints: tuple, table: float = 0.0) -> tuple[float, float]:
     """Along a path (rows of joint angles in radians), the lowest the tool point goes and the lowest any of the named
-    joints' axes goes, as heights in metres above the base's underside, which sits on the table (inf with no
-    joints named)."""
+    joints' axes goes, as heights in metres above the table (inf with no joints named). The base's underside is z 0,
+    and `table` is the table's z, config/robot.yaml's table_mm: 0 when the base sits on the table, below 0 when the
+    table reads lower than that."""
     named = [chain.names.index(m) for m in joints]
     tool = axis = np.inf
     for q in np.atleast_2d(path):
         T, axes = chain.frames(q)  # axes: (origin, direction) per joint, in chain.names order
         tool = min(tool, T[2, 3])
         axis = min([axis] + [axes[i][0][2] for i in named])
-    return float(tool), float(axis)
+    return float(tool) - table, float(axis) - table

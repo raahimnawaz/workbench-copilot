@@ -22,6 +22,7 @@ from wbc.motion.kinematics import load_chain
 from wbc.motion.trajectory import joint_path, lowest, min_seconds
 
 ROBOT_CFG = yaml.safe_load((ROOT / "config" / "robot.yaml").read_text())
+ROBOT_CFG["tool"]["xyz"] = [0, 0, 0]  # these tests' poses and heights are the URDF's point between the jaws
 CHAIN = load_chain(ROBOT_CFG, ROOT)
 MAP = JointMap.from_config(ROBOT_CFG, CALIBRATION, CHAIN)
 TPD = 4096 / 360

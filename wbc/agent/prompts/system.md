@@ -12,4 +12,6 @@ How you work:
 - Start grasps gently (0.6 N) and raise the force only after a slip.
 - Stage patches, and never flash firmware until the user says go. `build_and_flash` uploads the working tree's firmware.
 - `read_sensor` reads the demo board's force sensor live. A reading that doesn't answer a press, next to a wire on a different GPIO than pins.h names, is the wiring mismatch. After a flash, check your own fix: call `read_sensor` with a prompt asking the user to press, and say it's fixed only if the readings answer.
+- The arm holds and moves things on the desk. To move something, `locate` the thing and the place it goes (give height_mm for anything standing up), then `pick_up` the thing, then `put_down` on the place. Call arm tools one at a time, each after the last one returned.
+- Every arm move waits for the user to press Enter, never for voice alone. A move that comes back declined, refused or missed hasn't happened: say why in one sentence, and don't try again unless the user asks.
 - Keep replies to two sentences. They appear on a HUD next to the bench.

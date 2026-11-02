@@ -19,6 +19,7 @@ check_joint_map = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(check_joint_map)
 
 ROBOT_CFG = yaml.safe_load((ROOT / "config" / "robot.yaml").read_text())
+ROBOT_CFG["tool"]["xyz"] = [0, 0, 0]  # these tests' poses and heights are the URDF's point between the jaws
 CHAIN = load_chain(ROBOT_CFG, ROOT)
 MAP = JointMap.from_config(ROBOT_CFG, CALIBRATION, CHAIN)
 
