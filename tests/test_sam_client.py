@@ -116,36 +116,3 @@ def test_overlay_tints_the_masks_and_leaves_the_rest_alone():
     assert out.shape == image.shape and not np.array_equal(out[40:70, 10:70], image[40:70, 10:70])
     assert np.array_equal(out[100:, 150:], image[100:, 150:])
     assert np.array_equal(image, photo())  # the photo itself is untouched
-
-
-def load_probe():
-    import importlib.util
-
-    from wbc.config import ROOT
-
-    spec = importlib.util.spec_from_file_location("sam_probe", ROOT / "scripts" / "sam_probe.py")
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
-
-
-def test_probe_segments_a_crop_saves_the_run_and_replays_it_free(tmp_path, monkeypatch, capsys):
-    probe = load_probe()
-    path = tmp_path / "photo.png"
-    cv2.imwrite(str(path), np.vstack([photo(), photo()]))  # the wire sits in the top half, which is cropped out
-    client, b = FakeSam({"wire": wire_reply()}), budget()
-    monkeypatch.setattr(probe, "OUT", tmp_path / "vision")
-    monkeypatch.setattr(probe.config, "meta_client", lambda models: client)
-    monkeypatch.setattr(probe.Budget, "from_config", classmethod(lambda cls, models, root: b))
-
-    assert probe.main(["segment", str(path), "--phrase", "wire", "--crop", "0,0,200,120"]) == 0
-    out = capsys.readouterr().out
-    assert "1 request(s) to sam-3.1 on a 200x120 image, about $0.0025" in out and '"wire": 1 match ' in out
-    (run,) = (tmp_path / "vision").glob("sam-*.json")
-    assert run.with_suffix(".png").exists() and len(client.requests) == 1
-    assert b.spent == pytest.approx(0.0025)
-
-    assert probe.main(["replay", str(run)]) == 0
-    assert '"wire": 1 match ' in capsys.readouterr().out
-    assert run.with_name(run.stem + "-replay.png").exists()
-    assert len(client.requests) == 1 and b.spent == pytest.approx(0.0025)  # replaying costs nothing

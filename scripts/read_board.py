@@ -2,6 +2,8 @@
 
 Run from Terminal.app: macOS only lets a terminal it has asked use the camera.
 
+0. cameras (free): which cameras macOS and OpenCV see, by OpenCV index. bench.yaml's camera index is the board's.
+       python scripts/read_board.py cameras
 1. check (free): finds the carrier's tags, cuts out the top-down view of the board and fits its hole grid.
    The drawing in .wbc/vision/check-<time>.png puts an orange ring on every hole the reader expects: they
    should sit on the real holes, with row 1 and column a where the labels say.
@@ -58,6 +60,20 @@ def frame_from(args, bench: dict):
     return image
 
 
+def cmd_cameras(args, bench: dict, parts: dict) -> int:
+    names = camera.camera_names()
+    print("macOS sees: " + (", ".join(names) if names else "no cameras (or system_profiler failed)"))
+    found = camera.list_cameras()
+    if not found:
+        print(f"OpenCV opened none. {camera.NOT_ALLOWED}")
+        return 1
+    for c in found:
+        size = "no frame" if c["size"] is None else f"{c['size'][0]}x{c['size'][1]}"
+        print(f"  index {c['index']}: {size}")
+    print(f"bench.yaml reads the board from index {bench['camera']['index']}; desk.yaml has the desk camera's.")
+    return 0
+
+
 def cmd_check(args, bench: dict, parts: dict) -> int:
     image = frame_from(args, bench)
     fit, boards, area, view = reader.locate_boards(image, bench, parts)
@@ -104,12 +120,12 @@ def cmd_read(args, bench: dict, parts: dict) -> int:
 
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    ap.add_argument("cmd", choices=["check", "read"])
+    ap.add_argument("cmd", choices=["cameras", "check", "read"])
     ap.add_argument("--photo", help="read this saved photo instead of taking one")
     args = ap.parse_args(argv)
     bench, parts = config.load_yaml("bench.yaml"), config.load_yaml("parts.yaml")
     try:
-        return {"check": cmd_check, "read": cmd_read}[args.cmd](args, bench, parts)
+        return {"cameras": cmd_cameras, "check": cmd_check, "read": cmd_read}[args.cmd](args, bench, parts)
     except (RuntimeError, ValueError) as e:  # no camera, or not enough tags in view
         print(e)
         return 1

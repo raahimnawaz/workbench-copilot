@@ -2,8 +2,8 @@
 
 The Act 1 firmware (firmware/dut_demo) prints one line per reading, "mv 1873", every 20 ms, and every 50
 readings a line naming the GPIO it reads, "# reading GPIO 15". So a couple of seconds of lines tell the router
-both whether the sensor answers a press and which pin the firmware thinks it's on. Plain text rather than the
-force sampler's binary frames: one sensor at 50 Hz needs no framing, and it reads in any serial monitor.
+both whether the sensor answers a press and which pin the firmware thinks it's on. Plain text: one sensor at 50 Hz
+needs no framing, and it reads in any serial monitor.
 
 Opening the port with DTR and RTS asserted would reset the ESP32 through its auto-reset circuit, so both are
 cleared before opening. Only one program can use a serial port at a time, so reads and flashes share a lock.
@@ -31,7 +31,7 @@ _port_lock = threading.Lock()
 
 
 def find_port(cfg: dict) -> str:
-    """bench.yaml's firmware.port, or with "auto" the one USB serial port that isn't the arm's or the sampler's."""
+    """bench.yaml's firmware.port, or with "auto" the one USB serial port that isn't the arm's."""
     port = cfg.get("port", "auto")
     if port != "auto":
         return port

@@ -327,3 +327,14 @@ def test_read_board_script_checks_and_reads_a_saved_photo(tmp_path, monkeypatch,
     out = capsys.readouterr().out
     assert "MISMATCH SENSOR_PIN: wired to a different GPIO, wired to 4, pins.h line 5 says 15 (at a5)" in out
     assert len(client.requests) == 1 and b.spent == pytest.approx(0.0025)
+
+
+def test_read_board_script_lists_the_cameras(monkeypatch, capsys):
+    script = _script("read_board")
+    monkeypatch.setattr(script.camera, "camera_names", lambda: ["C920 HD Pro Webcam", "C920 HD Pro Webcam"])
+    monkeypatch.setattr(script.camera, "list_cameras", lambda: [{"index": 0, "size": (1920, 1080)},
+                                                               {"index": 1, "size": None}])
+    assert script.main(["cameras"]) == 0
+    out = capsys.readouterr().out
+    assert "macOS sees: C920 HD Pro Webcam, C920 HD Pro Webcam" in out
+    assert "index 0: 1920x1080" in out and "index 1: no frame" in out and "from index 1" in out
