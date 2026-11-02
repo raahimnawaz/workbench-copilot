@@ -1,9 +1,10 @@
-"""Run the bench agent: python -m wbc.agent [--sim] [--voice] [--hear] [--backup] [--arm]
+"""Run the bench agent: python -m wbc.agent [--sim] [--voice] [--hear] [--speak] [--backup] [--arm]
 
-Typed lines and spoken requests go on one queue, and the router handles them one turn at a time. With --arm, the
-arm's tools may move it, each move only after Enter at the keyboard: while a move waits, the next typed line answers
-it instead of going to the router, and nothing heard by voice does. Ctrl-C cuts every motor (the arm drops, so keep a
-hand near it) and quits. At exit the arm goes back to where it rested and its motors go off.
+Typed lines and spoken requests go on one queue, and the router handles them one turn at a time. With --voice (or
+--speak), the co-pilot says the first sentence or two of each reply out loud, and the mic is muted while it speaks.
+With --arm, the arm's tools may move it, each move only after Enter at the keyboard: while a move waits, the next
+typed line answers it instead of going to the router, and nothing heard by voice does. Ctrl-C cuts every motor (the
+arm drops, so keep a hand near it) and quits. At exit the arm goes back to where it rested and its motors go off.
 """
 from __future__ import annotations
 
@@ -19,6 +20,7 @@ from wbc.agent.approve import Keyboard
 from wbc.agent.budget import Budget, BudgetExceeded
 from wbc.agent.hud import ConsoleHud
 from wbc.agent.loop import ChatRouter, Router
+from wbc.agent.mouth import Mouth
 from wbc.agent.tools import Bench, build_toolbox
 
 SYSTEM = (Path(__file__).parent / "prompts" / "system.md").read_text(encoding="utf-8")
@@ -56,6 +58,8 @@ def main(argv=None) -> int:
     ap.add_argument("--voice", action="store_true", help='listen for "Copilot, ..." as well as typed input')
     ap.add_argument("--hear", action="store_true",
                     help="mic check: print what the mic hears and route nothing (implies --voice)")
+    ap.add_argument("--speak", action=argparse.BooleanOptionalAction,
+                    help="say each reply's first sentence or two with macOS say (on with --voice)")
     ap.add_argument("--backup", action="store_true", help="route with the local open-weights model")
     ap.add_argument("--router-model", metavar="ID",
                     help="route with this model instead of router.model, e.g. muse-spark-1.1 to compare speed")
@@ -81,6 +85,12 @@ def main(argv=None) -> int:
     warning = budget.pop_warning()
     if warning:
         hud.note(warning)
+    mouth = None
+    if (args.voice if args.speak is None else args.speak) and not args.hear:
+        mouth = Mouth(models.get("mouth") or {})
+        if mouth.command is None:
+            hud.note("spoken replies off: macOS say isn't on this machine")
+            mouth = None
     inbox = queue.Queue()
 
     def typed() -> None:
@@ -97,7 +107,8 @@ def main(argv=None) -> int:
     if args.voice or args.hear:
         on_text = (lambda text: None) if args.hear else inbox.put  # listen_forever prints what it heard
         threading.Thread(target=ears.listen_forever, daemon=True,
-                         args=(on_text, models["ears"], config.api_key(), budget, hud)).start()
+                         args=(on_text, models["ears"], config.api_key(), budget, hud),
+                         kwargs={"muted": mouth.busy if mouth else None}).start()
     if args.hear:
         hud.note("mic check: nothing goes to the router. Ctrl-D quits.")
 
@@ -109,14 +120,20 @@ def main(argv=None) -> int:
             if args.hear:
                 continue
             try:
-                router.run_turn(text)
+                reply = router.run_turn(text)
+                if mouth:
+                    mouth.speak(reply)
             except BudgetExceeded as e:
                 hud.note(str(e))
                 return 1
             except Exception as e:
                 hud.note(f"turn failed: {type(e).__name__}: {e}")
+                if mouth:
+                    mouth.speak("That turn failed. The error is on the screen.")
     except KeyboardInterrupt:
         bench.stop_arm()
+        if mouth:
+            mouth.stop()
         hud.note("Ctrl-C: every motor is cut." if bench.hand is not None else "Ctrl-C.")
         return 130
     finally:

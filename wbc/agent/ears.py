@@ -2,8 +2,9 @@
 
 The mic stays open while voice is on. A loudness gate cuts the stream into utterances, Muse Voice Transcribe
 transcribes each one, and only those that start with the wake phrase ("Copilot, check my wiring") go to the
-router. The wake phrase alone ("Copilot.") makes the next utterance the request. Streaming partial transcripts
-over the realtime socket is the v2 upgrade (sheet 08).
+router. The wake phrase alone ("Copilot.") makes the next utterance the request. While the co-pilot speaks a reply
+(`mouth.py`), what the mic picks up is dropped. Streaming partial transcripts over the realtime socket is the v2
+upgrade (sheet 08).
 
 The request format was checked against the live API on 2026-10-26: a multipart upload with a JSON
 `request` part (model, audioEncoding, keywords) and an `audio` part, answered with {"transcript": ...}.
@@ -90,6 +91,21 @@ class Segmenter:
     def threshold(self) -> float:
         return max(self.min_rms, (self.floor or 0.0) * self.ratio)
 
+    def reset(self) -> bytes | None:
+        """Stop listening mid-stream, keeping the room's noise floor.
+
+        An utterance that had already gone quiet is over, so it comes back, to be transcribed like any other. One
+        still going, and the audio before it, are dropped.
+        """
+        done = None
+        if self._speech is not None and self._quiet > 0 and self._voiced >= self.min_frames:
+            done = b"".join(self._speech)
+        self._pending = b""
+        self._before.clear()
+        self._loud_run = 0
+        self._speech = None
+        return done
+
     def feed(self, pcm: bytes) -> list:
         """Add audio and return the utterances that ended in it, as 16-bit PCM."""
         self._pending += pcm
@@ -145,7 +161,8 @@ class Transcriber:
 
 
 class Microphone:
-    """The bench mic as a stream of 16-bit mono chunks. The Mac Studio has no built-in mic, so plug one in."""
+    """The bench mic as a stream of (time.monotonic() when it arrived, 16-bit mono chunk). The Mac Studio has no
+    built-in mic, so plug one in."""
 
     def __init__(self, rate: int = 16000, device: str | None = None):
         try:
@@ -156,7 +173,8 @@ class Microphone:
         self._chunks = queue.Queue()
         # sounddevice matches `device` against part of the name, so "Razer Seiren Mini" finds the Razer.
         self._stream = sounddevice.RawInputStream(samplerate=rate, channels=1, dtype="int16", device=device,
-                                                  callback=lambda data, frames, t, status: self._chunks.put(bytes(data)))
+                                                  callback=lambda data, frames, t, status: self._chunks.put(
+                                                      (time.monotonic(), bytes(data))))
         self.name = sounddevice.query_devices(self._stream.device)["name"]
 
     def chunks(self):
@@ -166,8 +184,12 @@ class Microphone:
 
 
 def listen_forever(on_text, cfg: dict, api_key: str, budget, hud, mic=None, transcriber=None,
-                   clock=time.monotonic) -> None:
-    """Loop: cut the mic stream into utterances, transcribe each, and hand on the ones addressed to the co-pilot."""
+                   clock=time.monotonic, muted=None) -> None:
+    """Loop: cut the mic stream into utterances, transcribe each, and hand on the ones addressed to the co-pilot.
+
+    Audio for which `muted(t)` is true, t being when it was recorded (the co-pilot speaking), is dropped, along with
+    any utterance it cut into. One that had already gone quiet when the co-pilot started is still heard.
+    """
     try:
         mic = mic or Microphone(cfg.get("sample_rate", 16000), cfg.get("input_device"))
     except Exception as e:  # no voice extras, no such mic, or PortAudio refusing the stream
@@ -178,10 +200,14 @@ def listen_forever(on_text, cfg: dict, api_key: str, budget, hud, mic=None, tran
     gate = Segmenter(mic.rate)
     hud.note(f'voice on {mic.name}: say "{phrase.capitalize()}," and your request')
     listened, checked, awake_until = 0.0, False, 0.0
-    for chunk in mic.chunks():
-        if not checked:
-            listened += len(chunk) / 2 / mic.rate
-        for pcm in gate.feed(chunk):
+    for t, chunk in mic.chunks():
+        if muted is not None and muted(t):
+            heard = [pcm for pcm in [gate.reset()] if pcm]  # only a request that ended before the co-pilot spoke
+        else:
+            heard = gate.feed(chunk)
+            if not checked:
+                listened += len(chunk) / 2 / mic.rate
+        for pcm in heard:
             seconds = len(pcm) / 2 / mic.rate
             try:
                 text = transcriber.transcribe(pcm_to_wav(pcm, mic.rate), seconds)

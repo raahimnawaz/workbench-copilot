@@ -12,7 +12,7 @@ Everything in this repository was written during the hackathon, starting Oct 26,
 
 | Built here | What it does |
 |---|---|
-| `wbc/agent/` | Router loop, tool registry, `ask_coder`, voice front end, budget guard, console HUD |
+| `wbc/agent/` | Router loop, tool registry, `ask_coder`, voice front end, spoken replies, budget guard, console HUD |
 | `wbc/motion/kinematics.py` | URDF chain loader, forward kinematics, damped least-squares IK, the (x, y, z, pitch, roll) grasp frame |
 | `wbc/motion/sts.py`, `wbc/motion/probe.py` | A small STS3215 servo client and the gripper feedback probe |
 | `wbc/motion/joints.py`, `wbc/motion/trajectory.py` | The joint map from raw servo ticks to the URDF's joint angles, with signs checked by hand on the arm, and quintic joint moves timed under joint and tip speed caps |
@@ -38,6 +38,7 @@ Everything in this repository was written during the hackathon, starting Oct 26,
 | [meta-sam-parser](https://pypi.org/project/meta-sam-parser/) 0.1, from Meta | SAM License | Reading SAM 3.1's replies: the token grammar and the mask codec (installed from PyPI, not vendored) |
 | [AprilTag](https://april.eecs.umich.edu/software/apriltag)'s tag36h11 family, as built into OpenCV's ArUco module | BSD-2-Clause | The carrier's tags |
 | Muse Glimmer 30B weights | Apache-2.0 | The local backup router |
+| macOS `say` | Part of macOS | Spoken replies (Meta's API has no text-to-speech model) |
 | openai, numpy, PyYAML, httpx, sounddevice, pyserial, pytest, OpenCV, Pillow | Apache-2.0, BSD-3, MIT, BSD-3, MIT, BSD-3, MIT, Apache-2.0, MIT-CMU | Python dependencies |
 | [PlatformIO](https://platformio.org) and the [Arduino core for ESP32](https://github.com/espressif/arduino-esp32) | Apache-2.0, LGPL-2.1 | Building and flashing both firmware projects |
 
@@ -84,6 +85,7 @@ python -m wbc.agent --sim
 Then type `My force sensor isn't reading anything. Check my wiring against the firmware.` With `--sim`, `read_breadboard` returns the recorded Act 1 scene from `fixtures/`, `read_sensor` answers a press only once firmware reading GPIO 4 has been "flashed", and `point_at` and `build_and_flash` pretend. That exercises the real router and the real Wonder coder with no hardware attached.
 
 - `--voice` also listens on the bench mic (`ears.input_device`, the Razer Seiren Mini). Say "Copilot," and your request, or "Copilot." and then the request. Every utterance is transcribed, and only the ones addressed to the co-pilot go to the router. `--hear` is a mic check: it prints what it heard and routes nothing. The first time, macOS asks to let your terminal use the microphone.
+- With `--voice`, replies are also said out loud with macOS `say`: the first sentence or two of each, while the HUD shows all of it. The mic drops what it hears while the co-pilot speaks, so it doesn't answer itself. `--no-speak` keeps replies on the HUD, and `--speak` says them without `--voice`. `mouth:` in `config/models.yaml` picks the voice (`say -v '?'` lists them) and the rate.
 - `--backup` routes with Muse Glimmer on your own machine. Serve it with any OpenAI-compatible server that supports tool calls (llama.cpp's `llama-server`, LM Studio or Ollama), then set `backup.base_url` and `backup.model` in `config/models.yaml`. The 4-bit build fits easily in 64 GB.
 
 ## Servo ids on an assembled arm

@@ -119,7 +119,7 @@ class FakeMic:
 
     def chunks(self):
         for i in range(0, len(self.audio), 1600):  # 50 ms, about one stream callback
-            yield self.audio[i:i + 1600]
+            yield i / 2 / RATE, self.audio[i:i + 1600]
 
 
 class FakeTranscriber:
@@ -160,3 +160,29 @@ def test_silent_mic_is_reported_and_never_sent():
     sent, notes = listen(FakeMic(bytes(2 * RATE * 3)), t)
     assert sent == [] and t.seconds == []
     assert any("pure silence" in n for n in notes)
+
+
+def test_drops_what_the_mic_hears_while_the_copilot_speaks():
+    """Its own voice ("Copilot, ..." in a reply included) never becomes a request, and a request after it does."""
+    mic = FakeMic(quiet(2.5), voice(1), quiet(1.5), voice(1), quiet(1.5))
+    speaking = lambda t: 2.5 <= t < 4.0  # over the first voice
+    hud, sent, t = SilentHud(), [], FakeTranscriber("Copilot, check my wiring.")
+    listen_forever(sent.append, {"wake_phrase": "copilot"}, "key", None, hud, mic=mic, transcriber=t, muted=speaking)
+    assert sent == ["check my wiring."] and len(t.seconds) == 1
+
+
+def test_a_mute_cuts_off_the_utterance_in_progress():
+    mic = FakeMic(quiet(2.5), voice(2), quiet(1.5))
+    speaking = lambda t: 3.0 <= t < 3.5  # in the middle of the voice
+    hud, sent, t = SilentHud(), [], FakeTranscriber("Copilot, flash it.")
+    listen_forever(sent.append, {"wake_phrase": "copilot"}, "key", None, hud, mic=mic, transcriber=t, muted=speaking)
+    assert len(t.seconds) == 1 and t.seconds[0] < 2.0  # the last 1 s of voice and the hangover; uncut it'd be 2.9 s
+
+
+def test_a_request_that_ended_just_before_the_reply_is_still_heard():
+    """Said during the gate's 0.8 s hangover, as the last turn's reply starts: it was over, so it goes through."""
+    mic = FakeMic(quiet(2.5), voice(1), quiet(4))
+    speaking = lambda t: 4.0 <= t < 6.0  # from 0.5 s after the voice
+    hud, sent, t = SilentHud(), [], FakeTranscriber("Copilot, flash it.")
+    listen_forever(sent.append, {"wake_phrase": "copilot"}, "key", None, hud, mic=mic, transcriber=t, muted=speaking)
+    assert sent == ["flash it."]

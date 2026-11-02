@@ -46,6 +46,12 @@ ears:
   # as a hint.
   keywords: [GPIO, ADC, regrasp]
 
+mouth:                              # spoken replies (--voice or --speak), with macOS `say`: Meta's API has no TTS
+  voice: null                       # a name from `say -v '?'`; null keeps the Mac's system voice
+  rate: null                        # words a minute; null keeps the system rate
+  sentences: 2                      # how much of each reply is said; the HUD shows all of it
+  tail_s: 0.4                       # the mic stays muted this long after speech ends, for the room's echo
+
 backup:                             # open-weights router served on your own machine
   model: muse-glimmer-30b           # the name your local server registers
   base_url: http://127.0.0.1:8080/v1
