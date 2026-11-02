@@ -9,6 +9,9 @@ typed line answers it instead of going to the router, and nothing heard by voice
 arm drops, so keep a hand near it) and quits at once, and no arm move starts after it. At the end of the input (Ctrl-D)
 a question still waiting gets a no, no arm move starts, and once the turn ends the arm goes back to where it rested and
 its motors go off; any other exit asks before moving it.
+
+Every turn is recorded in .wbc/session.json (wbc/agent/memory.py), however it ends. Each run starts a new session, and
+--resume picks up the last one instead; the notebook the router keeps with `remember` carries over either way.
 """
 from __future__ import annotations
 
@@ -25,14 +28,15 @@ from wbc.agent.approve import Keyboard
 from wbc.agent.budget import Budget, BudgetExceeded
 from wbc.agent.hud import ConsoleHud
 from wbc.agent.loop import ChatRouter, Router
+from wbc.agent.memory import Memory
 from wbc.agent.mouth import Mouth
-from wbc.agent.tools import Bench, build_toolbox
+from wbc.agent.tools import Bench, add_memory_tools, build_toolbox
 
 SYSTEM = (Path(__file__).parent / "prompts" / "system.md").read_text(encoding="utf-8")
 
 
 def build(sim: bool, backup: bool, router_model: str | None = None, arm: bool = False,
-          calibration_dir: str | None = None, prefetch: bool = True):
+          calibration_dir: str | None = None, prefetch: bool = True, resume: bool = False):
     models = config.load_yaml("models.yaml")
     budget = Budget.from_config(models, config.ROOT)
     hud = ConsoleHud()
@@ -46,14 +50,16 @@ def build(sim: bool, backup: bool, router_model: str | None = None, arm: bool = 
     toolbox = build_toolbox(bench)
     max_steps = models["router"].get("max_steps", 12)
     prefetch = models["router"].get("prefetch") if prefetch else None
+    memory = Memory.from_config(models, config.ROOT, resume=resume, sim=sim)
+    add_memory_tools(toolbox, memory.notebook)
     if backup:
         b = models["backup"]
         router = ChatRouter(config.backup_client(models), b["model"], toolbox, budget, hud, SYSTEM,
-                            max_steps=max_steps, prefetch=prefetch, reasoning=b.get("reasoning"))
+                            max_steps=max_steps, prefetch=prefetch, memory=memory, reasoning=b.get("reasoning"))
     else:
         r = models["router"]
         router = Router(meta, router_model or r["model"], toolbox, budget, hud, SYSTEM, max_steps=max_steps,
-                        prefetch=prefetch, fallback=r.get("fallback"), effort=r.get("effort"))
+                        prefetch=prefetch, memory=memory, fallback=r.get("fallback"), effort=r.get("effort"))
     return models, budget, hud, router, bench, keyboard
 
 
@@ -74,16 +80,21 @@ def main(argv=None) -> int:
                     help="lerobot-calibrate's folder for the arm, when it's another macOS account's")
     ap.add_argument("--no-prefetch", action="store_true",
                     help="skip the bench facts fetched before each turn (Act 1's board read, pins.h and the sensor)")
+    ap.add_argument("--resume", action="store_true",
+                    help="pick up the last session (.wbc/session.json) instead of starting a new one")
     args = ap.parse_args(argv)
 
     try:
         models, budget, hud, router, bench, keyboard = build(args.sim, args.backup, args.router_model, args.arm,
-                                                             args.calibration_dir, not args.no_prefetch)
+                                                             args.calibration_dir, not args.no_prefetch, args.resume)
     except RuntimeError as e:  # missing key or voice extras
         print(e, file=sys.stderr)
         return 2
     hud.note(f"router: {router.label} ({router.model}) · spent ${budget.spent:.2f}, "
              f"stops at ${budget.limit:.0f}" + (" · SIM bench" if args.sim else ""))
+    memory = getattr(router, "memory", None)
+    if memory is not None:
+        hud.note(memory.describe())
     try:
         budget.check()
     except BudgetExceeded as e:
@@ -156,6 +167,9 @@ def main(argv=None) -> int:
         if mouth:
             mouth.stop()
         hud.note("Ctrl-C: every motor is cut." if bench.hand is not None else "Ctrl-C.")
+        record = getattr(router, "record_unfinished", None)
+        if record is not None:  # after the motors, never before: the turn it stopped, for a --resume to know
+            record("stopped by Ctrl-C, which cut every motor" if bench.hand is not None else "stopped by Ctrl-C")
         return 130
     finally:
         keyboard.close()

@@ -57,6 +57,15 @@ backup:                             # open-weights router served on your own mac
   base_url: http://127.0.0.1:8080/v1
   reasoning: medium                 # Glimmer reads "Reasoning strength: <value>" from the system prompt
 
+memory:                             # what outlives a conversation (wbc/agent/memory.py); both files stay in .wbc/
+  session_file: .wbc/session.json   # each turn's record and a summary; --resume picks it up (--sim: session-sim.json)
+  notebook_file: .wbc/notebook.jsonl  # facts the router keeps with `remember`, which every session sees
+  # Summarize and start a new conversation once a call's input reaches this many tokens. Spark's context
+  # window isn't documented, so this stays well under any likely size.
+  compact_at_tokens: 60000
+  keep_turns: 40                    # ...or once this many turns have piled up since the last summary
+  notebook_in_prompt: 20            # newest notes the router sees every turn; recall finds the rest
+
 budget:
   # Hard stop. Every paid call checks it first, and the agent, coder, voice and smoke test stop once
   # tracked spend reaches it. It sits a little under the $150 credit because the prices below are

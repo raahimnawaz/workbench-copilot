@@ -4,7 +4,7 @@ read_breadboard photographs the board and reads it with SAM 3.1 (wbc/perception)
 with the desk camera, and pick_up, put_down and arm_home move them with the arm (wbc/motion/hand.py), each only after
 the user presses Enter, and only with the agent started with --arm. look and point_at are still stubs. With --sim,
 read_breadboard and locate return recorded scenes and the arm's tools pretend to move, so the router and coder can be
-tested with no hardware.
+tested with no hardware. remember, recall and forget keep the router's notebook (wbc/agent/memory.py).
 """
 from __future__ import annotations
 
@@ -316,7 +316,10 @@ def build_toolbox(bench: Bench) -> Toolbox:
 
     thing_params = {
         "type": "object",
-        "properties": {"thing": {"type": "string", "description": "a short noun phrase, e.g. 'screwdriver' or 'tray'"},
+        "properties": {"thing": {"type": "string", "description": (
+            "what the desk camera looks for: one plain thing in a few words, e.g. 'screwdriver', 'tray' or 'sticky "
+            "note'. A longer description, such as 'bit case with yellow sticky note', can match nothing or the wrong "
+            "thing. For a place from the notebook, use the name the note puts in quotes")},
                        "height_mm": {"type": "number", "minimum": 0, "maximum": 300, "default": 0,
                                      "description": "how tall it stands, for anything standing up such as a cup; 0 "
                                                     "for something lying flat"}},
@@ -439,3 +442,34 @@ def build_toolbox(bench: Bench) -> Toolbox:
         return move("Move the arm back to where it rested?", home)
 
     return tb
+
+
+def add_memory_tools(tb: Toolbox, notebook) -> None:
+    """remember, recall and forget: the router's notebook of facts worth keeping across sessions
+    (wbc/agent/memory.py), such as where a thing goes on the desk. A note never moves the arm: pick_up and put_down
+    take only names, which locate turns into coordinates, and each move still waits for Enter."""
+
+    @tb.register("remember", (
+        "Keep a fact for later sessions: a preference, a decision and its reason, a fix that worked, or where a thing "
+        "goes on the desk. For a place, put in quotes the short name locate should look for there, so a later "
+        "session gives locate that name: 'The screwdriver goes on the \"sticky note\" in the long recess of the bit "
+        "case.' Never coordinates, wiring or where something is now: those come only from the bench tools."), {
+        "type": "object",
+        "properties": {"note": {"type": "string", "description": "One self-contained sentence, at most 300 characters"}},
+        "required": ["note"]}, label="memory")
+    def remember(note: str) -> dict:
+        return notebook.add(note)
+
+    @tb.register("recall", "Search the notebook: the best matches, newest first. With no query, the newest notes.", {
+        "type": "object",
+        "properties": {"query": {"type": "string", "description": "Words to look for, e.g. 'screwdriver goes'"}}},
+        label="memory")
+    def recall(query: str = "") -> dict:
+        return {"ok": True, "notes": notebook.search(query)}
+
+    @tb.register("forget", "Remove a note that turned out to be wrong, by the id recall or your instructions show.", {
+        "type": "object",
+        "properties": {"note_id": {"type": "string", "description": "e.g. 'n3'"}},
+        "required": ["note_id"]}, label="memory")
+    def forget(note_id: str) -> dict:
+        return notebook.remove(note_id)

@@ -13,6 +13,7 @@ Everything in this repository was written during the hackathon, starting Oct 26,
 | Built here | What it does |
 |---|---|
 | `wbc/agent/` | Router loop, tool registry, `ask_coder`, voice front end, spoken replies, budget guard, console HUD |
+| `wbc/agent/memory.py` | The session record that survives restarts and a full context (a summary plus a record of each turn), and the `remember` / `recall` / `forget` notebook |
 | `wbc/motion/kinematics.py` | URDF chain loader, forward kinematics, damped least-squares IK, the (x, y, z, pitch, roll) grasp frame |
 | `wbc/motion/sts.py`, `wbc/motion/probe.py` | A small STS3215 servo client and the gripper feedback probe |
 | `wbc/motion/joints.py`, `wbc/motion/trajectory.py` | The joint map from raw servo ticks to the URDF's joint angles, with signs checked by hand on the arm, and quintic joint moves timed under joint and tip speed caps |
@@ -26,7 +27,7 @@ Everything in this repository was written during the hackathon, starting Oct 26,
 | `wbc/reflex/fsr_link.py`, `wbc/reflex/fsr_cal.py` | The force sensor link (500 Hz frames with a CRC), per-sensor calibration fit and creep analysis |
 | `wbc/perception/` | The SAM 3.1 client (one noun phrase per request, sent in parallel; masks decoded and drawn), camera capture, and the board reader: the carrier's tags, the top-down board view, the hole grid fit, wire tracing, the netlist and its check against `pins.h` |
 | `scripts/sam_probe.py`, `scripts/read_board.py`, `scripts/make_carrier.py` | What SAM 3.1 finds in a still; the board reader on a still; the printable carrier sheet |
-| `config/`, `fixtures/`, `scripts/`, `tests/` | Model routing config, the recorded bench for `--sim`, the smoke test, gripper probe and force sensor tools, 269 tests |
+| `config/`, `fixtures/`, `scripts/`, `tests/` | Model routing config, the recorded bench for `--sim`, the smoke test, gripper probe and force sensor tools, 709 tests |
 | `firmware/dut_demo/` | The Act 1 demo board firmware, with the wiring bug planted on purpose |
 | `firmware/fsr_sampler/` | ESP32 firmware that samples the four jaw sensors at 500 Hz and streams them over USB |
 
@@ -48,6 +49,7 @@ Everything in this repository was written during the hackathon, starting Oct 26,
 |---|---|
 | Router loop on Muse Spark (Responses API) | Runs live. On Oct 28 a spoken Act 1 on the recorded bench took about 63 s in four router rounds. Code now fetches the bench facts first and stages checked patches itself, and the same turn takes 25 s in two rounds. |
 | Backup router on Muse Glimmer (Chat Completions) | Built and tested against a fake API. |
+| Memory (Oct 30) | Built and tested against a fake API only. The context-full error's wording is a guess at Meta's, so a full conversation is also caught by its token count (60,000) and by two failed turns in a row. |
 | `ask_coder` on Muse Wonder | Runs live: Wonder wrote the Act 1 fix in 3–7 s on Oct 28. The fix compiles in a sandbox copy in about 8 s once its build cache is warm (about 14 s cold). |
 | Voice front end | The request format was checked against the live API on Oct 26. The wake phrase and the loudness gate that cuts the mic into utterances are tested on synthetic audio, and on Oct 28 they worked on the live mic (the Razer, run from Terminal.app). |
 | Budget guard | Built and tested. Spend persists in `.wbc/spend.json`. |
@@ -87,6 +89,8 @@ Then type `My force sensor isn't reading anything. Check my wiring against the f
 - `--voice` also listens on the bench mic (`ears.input_device`, the Razer Seiren Mini). Say "Copilot," and your request, or "Copilot." and then the request. Every utterance is transcribed, and only the ones addressed to the co-pilot go to the router. `--hear` is a mic check: it prints what it heard and routes nothing. The first time, macOS asks to let your terminal use the microphone.
 - With `--voice`, replies are also said out loud with macOS `say`: the first sentence or two of each, while the HUD shows all of it. The mic drops what it hears while the co-pilot speaks, so it doesn't answer itself. `--no-speak` keeps replies on the HUD, and `--speak` says them without `--voice`. `mouth:` in `config/models.yaml` picks the voice (`say -v '?'` lists them) and the rate.
 - `--backup` routes with Muse Glimmer on your own machine. Serve it with any OpenAI-compatible server that supports tool calls (llama.cpp's `llama-server`, LM Studio or Ollama), then set `backup.base_url` and `backup.model` in `config/models.yaml`. The 4-bit build fits easily in 64 GB.
+- Every turn is recorded in `.wbc/session.json`, with the tools it ran, however it ends (a failure, the budget's stop, Ctrl-C). Each run starts a new session and moves the last one to `.wbc/sessions/` at its first turn; `--resume` picks the last one up instead. `--sim` runs keep their own (`.wbc/session-sim.json`), so a rehearsal never becomes the session a real run picks up. Within a run, Spark chains each turn onto the last. When the conversation gets too long (`memory.compact_at_tokens` or `memory.keep_turns`) or two turns in a row fail, its turns become a summary and a new conversation starts from it. Picked-up turns and summaries reach the router as reference only, with a rule to ask what's still to do rather than redo anything. Where code decides, it never runs a tool twice: a context that fills up after a tool has run ends the turn with that question instead of running it again.
+- The router keeps a notebook in `.wbc/notebook.jsonl` with its `remember`, `recall` and `forget` tools, and the newest 20 notes go into every call, in every session, `--sim` or not. A note can say where a thing goes on the desk, with the short name `locate` should look for in quotes (The screwdriver goes on the "sticky note" in the long recess of the bit case), so "put the screwdriver away" works in a later session. A note never moves the arm: the arm's tools take only names, which the desk camera turns into places, and every move waits for Enter. Move the notebook aside for a run that shouldn't see it, such as a timed Act 1.
 
 ## Servo ids on an assembled arm
 
