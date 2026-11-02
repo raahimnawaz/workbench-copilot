@@ -359,10 +359,10 @@ class _RouterBase:
 class Router(_RouterBase):
     """Muse Spark on the Meta Model API's Responses endpoint.
 
-    The conversation is kept here and sent whole with every call, rather than chained on the last response's id.
-    On Nov 1, every call chained with previous_response_id took 11.8–13.8 s, whether or not it carried a tool result,
-    while the same conversation's first call, sent whole, took 3.4 s (pipeline-notes/spark-chaining-test). Only a
-    finished turn joins the conversation, so a failed one leaves it as it was, as it did when chained."""
+    The conversation is kept here and sent whole with every call, rather than chained on the last response's id: a
+    call chained with previous_response_id took 11.8–13.8 s, whether or not it carried a tool result, where the same
+    conversation's first call, sent whole, took 3.4 s. Only a finished turn joins the conversation, so a failed one
+    leaves it as it was."""
 
     label = "Spark"
 

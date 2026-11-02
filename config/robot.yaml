@@ -6,19 +6,16 @@ joints: [shoulder_pan, shoulder_lift, elbow_flex, wrist_flex, wrist_roll]
 
 # In the URDF the gripper's approach direction is its z-axis. Turning the tool frame -90° about y
 # makes approach the x-axis, which is what kinematics.task_to_pose expects. xyz moves the tool point from the URDF's
-# point between the jaws to the closed jaws' tips, by the four-touch test (Oct 29, 22:34, arm-bench/tip_offset.py
-# --roll): one dot touched straight down over 255° of wrist roll read 11.6 mm rms apart with the URDF's point and 4.9
-# with this, which puts the tips 3.7 mm from the roll's axis instead of 7.9. Along the gripper it stays 0, as the 20:35
-# tilt test found (-3 mm). On Oct 30 the wrist roll's zero went back half a turn, so that the gripper's standard
-# upright pose reads about 0° (arm-bench/roll_half_turn.py --undo), and the tips turned half a turn about the roll's
-# axis with it: [-0.0099, 0.0033, 0] before. Every pose's tips are where they were, within a micrometre.
+# point between the jaws to the closed jaws' tips, by a four-touch test: one dot touched straight down over 255° of
+# wrist roll reads 11.6 mm rms apart with the URDF's point and 4.9 with this, which puts the tips 3.7 mm from the roll's
+# axis instead of 7.9. Along the gripper it stays 0.
 tool:
   xyz: [-0.0059, -0.00286, 0]
   rpy: [0, -1.5708, 0]
 
 # The table under the arm (wbc/motion/table.py): the driver's floors are measured from it. The desk sits about 15 mm
 # under the URDF's z 0 near the base, which stands about 0.6 in tall, and reads lower the further out the arm reaches,
-# most likely its joints' zeros. Touched with the arm (Oct 29, 23:05: desk tags 21-25, 95-399 mm from the base's pan
+# most likely its joints' zeros. Touched with the arm (desk tags 21-25, 95-399 mm from the base's pan
 # axis, at bearings -92° to +27°) it's -8.7 mm at the pan axis falling 88.9 mm per m of reach, every tag within 1.3 mm.
 # The floors add a 2 mm margin. Nearer or further out than the touches, the table is the higher of the line and its
 # nearest touched end, and past their bearings it rises over 10° to the highest the line reached, never lower; a pick
@@ -46,13 +43,13 @@ calibration_dir:
 # Picking things up and putting them down (wbc/motion/hand.py).
 hand:
   # The wrist roll at which the gripper, pointing straight down, closes its jaws across the arm, along the wrist
-  # flex's axis: in the rest pose the line between the jaws runs down the arm's middle with the roll reading about 0
-  # (Oct 29). The URDF puts that a quarter turn away.
+  # flex's axis: in the rest pose the line between the jaws runs down the arm's middle with the roll reading about 0.
+  # The URDF puts that a quarter turn away.
   across_roll_deg: 0
   # Which side the moving jaw is on, left or right, standing behind the base looking out along the arm with the gripper
   # pointing straight down at the rest roll. One jaw is fixed, so a pick puts that one beside the thing; without this,
-  # picks are refused. Left: on Oct 30, in the gripper's standard upright pose (the wrist roll at about 0° since its
-  # zero went back half a turn), the jaw that moved was on the arm's left.
+  # picks are refused. Left: in the gripper's standard upright pose, the wrist roll at about 0°, the jaw that moves
+  # is on the arm's left.
   moving_jaw: left
   # What lets an arm move go. request: the request itself, spoken or typed ("Copilot, put the screwdriver away"), so the
   # arm moves at once; "Copilot, stop" (or "Stop!" on its own) holds it where it is, and Ctrl-C or the strip cuts it.
@@ -66,7 +63,7 @@ hand:
 # Servo ids, and the signs wbc/motion/joints.py maps raw ticks with: q = sign * (raw - 2047) * 2 pi / 4096 radians.
 # The URDF's zero is lerobot-calibrate's Part 1 L pose (base facing forward, upper arm straight up, forearm and
 # gripper level pointing forward), where every joint reads raw 2047. Sign 1 means raw rising turns the joint the
-# URDF's positive way. Checked by hand on Oct 28 with the motors off, each joint turned in a pose where the move
+# URDF's positive way. Checked by hand with the motors off, each joint turned in a pose where the move
 # reads clearly: raw rises as the base turns clockwise seen from above, the shoulder lift tips forward, the elbow
 # folds, the wrist flex tips the gripper down, and the wrist roll turns counterclockwise looking from the wrist
 # toward the jaw tips, which is each joint's URDF plus. scripts/check_joint_map.py re-checks it. The gripper isn't
@@ -79,10 +76,9 @@ servos:
   wrist_roll: {id: 5, sign: 1}
   gripper: {id: 6}
 
-# P gains written over the 16 that LeRobot's configure() gives every joint, each time after it runs. The elbow is a
-# weaker 1:191 servo: at 16 it couldn't lift its folded forearm (Oct 27, 18:09), and at 32 it opened from the fold
-# and held within 0.1° (18:25). At 16 the gripper stops where its push near closed meets the friction, short of
-# gripping the multimeter probe at the jaw tips; at 32 it holds it there (Oct 29, 21:25).
+# P gains written over the 16 that LeRobot's configure() gives every joint, each time after it runs. At 32 the elbow
+# lifts the forearm from flat to straight up at the speed caps, lagging 3.5° at most. At 16 the gripper stops where its
+# push near closed meets the friction, short of gripping the multimeter probe at the jaw tips; at 32 it holds it there.
 gains:
   elbow_flex: 32
   gripper: 32

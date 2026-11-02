@@ -8,7 +8,7 @@ breadboard:                         # full-size, 830 tie points
   columns: {a: 0, b: 1, c: 2, d: 3, e: 4, f: 7, g: 8, h: 9, i: 10, j: 11}
   strips: [abcde, fghij]            # in each row, the holes of one strip are connected
   # Power rails run the board's length: pitches from column a (negative is beyond a, past 11 is beyond j).
-  # Measured on Raahim's board from a check photo (Oct 28): each side has a - row and a + row, marked by the
+  # Measured from a check photo: each side has a - row and a + row, marked by the
   # blue and red stripes beside them. The reader's check drawing shows them as thin blue and red lines.
   rails: {"a-": -2.74, "a+": -3.80, "j+": 13.85, "j-": 14.93}
   body_mm: [165.1, 54.6]            # length along the rows, width across; the holes sit centered in it
@@ -23,10 +23,3 @@ modules:
   # so OUT is just the pin wired to the divider and the GPIO.
   tfs100:
     legs: [OUT, VCC]
-  # A 5 mm LED, Act 1's board until Oct 29. Its legs go in two neighboring rows, the anode (A, the longer leg) first.
-  led_5mm:
-    legs: [A, K]
-  # 0.96" SSD1306 OLED, 7-pin SPI (the UMLIFE modules), left to right with the text upright. Shelved on Oct 28:
-  # beside the DevKit only column a is free, and its seven flat wires can't all leave it without stacking.
-  ssd1306_spi_7:
-    pins: [GND, VCC, D0, D1, RES, DC, CS]

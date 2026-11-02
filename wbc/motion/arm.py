@@ -7,28 +7,25 @@ the URDF's, through joints.py's map, so FK and IK see the arm as it is. Keep to 
 port without locking it, so a second Arm, or another program on the port such as scripts/check_joint_map.py, would
 interleave its packets with this one's.
 
-It powers the arm on the way scripts/first_moves.py does, which brought all six joints up without a jump on Oct 27:
-LeRobot's configure() with its final torque-on held back, this arm's P gains (the elbow at 32) and a torque cap on every
-joint, then the joints one at a time from the base out, each watched for 0.3 s. Writing a joint's goal with its torque
-off turns the torque on (Oct 29), so each goal is set to where its joint is, from a fresh reading, only as that joint's
-turn comes: a hand or a sag can move it while the joints before it come up. A joint that moves more than 3° as its
-torque comes on, or strays more than 5° from where it should be during a move, cuts every motor at once with one
-broadcast write, which a servo flagging overload can't refuse. Those thresholds caught the elbow's runaway on Oct 27,
-126 ms in, at -3.2°. The wrist and gripper servos' voltage readings glitch under their 4.0 V limit for single replies
-while the supply holds 5.3 V (Oct 28-29), and LeRobot fails any reply that flags it, so a write or setting read whose
-reply flags the input voltage is sent again.
+It powers the arm on with LeRobot's configure() with its final torque-on held back, this arm's P gains (the elbow and
+gripper at 32) and a torque cap on every joint, then the joints one at a time from the base out, each watched for 0.3 s.
+Writing a joint's goal with its torque off turns the torque on, so each goal is set to where its joint is, from a fresh
+reading, only as that joint's turn comes: a hand or a sag can move it while the joints before it come up. A joint that
+moves more than 3° as its torque comes on, or strays more than 5° from where it should be during a move, cuts every
+motor at once with one broadcast write, which a servo flagging overload can't refuse. The wrist and gripper servos'
+voltage readings glitch under their 4.0 V limit for single replies while the supply holds steady, and LeRobot fails any
+reply that flags it, so a write or setting read whose reply flags the input voltage is sent again.
 
 Refusals come before anything is written. power_on refuses a joint past an end of its range or a servo at 65 °C (heat
 is checked only there). move_to refuses a start past an end of a range, a target too near one, and a path that takes
 the tool point or the elbow and wrist axes too near the table. A move that starts under one of those floors has to
 climb back over it, going no lower on the way than the 50 µm its goals' whole ticks can dip (ROUNDING), or only turn
 the base, so moves can't walk the arm down a little at a time. The floors are measured from config/robot.yaml's table
-(table.py): the desk sits under the URDF's z 0 and reads lower the further out the arm reaches (Oct 29), so floors
-measured from z 0 kept the jaws 27-46 mm above it, too high to pick up anything lying there.
+(table.py), since the desk sits under the URDF's z 0 and reads lower the further out the arm reaches.
 Moves are quintic and peak at 45°/s on any joint and 120 mm/s at the tool point, and no goal goes more than 5° from
 where its joint is. The floors hold for the plan, and joints within the 5° stray can put the tool point 17-41 mm
 under it, so a move also cuts every motor when the arm itself goes 5 mm under a floor. After a power cut the servos
-come back limp, with every goal 0 and no torque cap (Oct 28), so each move first checks that every powered joint still
+come back limp, with every goal 0 and no torque cap, so each move first checks that every powered joint still
 has its torque on at its cap.
 
 Every cut latches, whether it came from cut() on any thread, from a signal handler or from a trip: a move or power-on
@@ -54,10 +51,10 @@ across the wrap would turn it the long way round. Moves keep it inside the URDF'
 wrap, and power_on and move_to refuse a roll that starts outside them. A gripper turned a whole turn by hand reads as
 if it hadn't been.
 
-Each joint stops short of its goal and holds there, by its load over its P gain: gravity and gearbox friction, 1-4° on
-the first powered run (Oct 29), which reaching out puts at 11-16 mm at the tool point. So once a move's path is done,
-move_to re-aims: it sets each goal past its target by how far its joint stopped short, ramped under the same speed caps
-and with every check a move has, until each joint is within AIM of its target, for up to AIM_ROUNDS rounds.
+Each joint stops short of its goal and holds there, by its load over its P gain: gravity and gearbox friction, 1-4°,
+which reaching out puts at 11-16 mm at the tool point. So once a move's path is done, move_to re-aims: it sets each goal
+past its target by how far its joint stopped short, ramped under the same speed caps and with every check a move has,
+until each joint is within AIM of its target, for up to AIM_ROUNDS rounds.
 
 The gripper moves on its own goal. release() opens it to a share of its range, and grip() closes it on what's between
 its jaws and keeps squeezing, under its 24% cap, saying whether the jaws stopped on something. While it grips, jaws
@@ -84,17 +81,17 @@ from .table import Surface
 from .trajectory import PEAK, joint_path, lowest, min_seconds
 
 HZ = 50.0               # goal writes per second during a move
-TORQUE_CAP = 50         # percent of full torque on the arm joints (each servo's Torque_Limit), as first_moves.py ran
+TORQUE_CAP = 50         # percent of full torque on the arm joints (each servo's Torque_Limit)
 GRIPPER_CAP = 24        # percent on the gripper: under the 25% where the overload protection configure() sets starts
 MAX_JUMP = 3.0          # degrees a joint may move on its own as its torque comes on before every motor is cut
 MAX_STRAY = 5.0         # degrees a joint may be from where it should be during a move before every motor is cut
 MAX_STEP = 5.0          # degrees: no goal goes further than this from where its joint is (LeRobot's max_relative_target)
-MAX_JOINT_SPEED = 45.0  # degrees per second any joint may reach at a move's peak: 1.5x the first 30, since the 1/345
-                        # elbow lifted the forearm from flat to straight up at it lagging 3.5° at most (Nov 2)
-MAX_TIP_SPEED = 0.12    # metres per second the tool point may reach at a move's peak: 1.5x the plan's first 80 mm/s
+MAX_JOINT_SPEED = 45.0  # degrees per second any joint may reach at a move's peak: the 1/345 elbow lifts the forearm
+                        # from flat to straight up at it lagging 3.5° at most, under MAX_STRAY
+MAX_TIP_SPEED = 0.12    # metres per second the tool point may reach at a move's peak
 RANGE_MARGIN = 2.0      # degrees inside each end of a joint's range that a move may aim for
 TOOL_FLOOR = 0.010      # metres above the table the tool point has to stay, unless config/robot.yaml's tool_floor_mm
-                        # sets it: since the tool point is the jaw tips (Oct 29), a pick needs them lower
+                        # sets it: the tool point is the jaw tips, and a pick needs them lower
 TOOL_FLOOR_RANGE = (0.005, 0.030)  # metres the tool point's floor may be set to. The low end is SAG: under it, the cut
                                    # for the arm sagging SAG under a floor would come only once it's under the table
 JOINT_FLOOR = 0.030     # metres above the table the elbow, wrist flex and wrist roll axes have to stay: their servos
@@ -105,12 +102,12 @@ LEVEL = 1e-6            # metres two heights may differ and still count as level
 ROUNDING = 50e-6        # metres a move from under a floor, or just over it, may dip under where it starts, unless it
                         # only turns the base: its goals go out in whole ticks, and climbing from a grip the wrist flex
                         # steps first, swinging the tips 0.24 mm toward the base, up to about 30 µm lower over the
-                        # sloped table (reviews, Oct 30)
+                        # sloped table
 SAG = 0.005             # metres the arm itself may go under a floor during a move before every motor is cut: joints
-                        # within MAX_STRAY can put the tool point 17-41 mm under the plan (review, Oct 29)
+                        # within MAX_STRAY can put the tool point 17-41 mm under the plan
 TEMP_WARN = 55          # °C, the median of TEMP_READS readings: power_on says so
 TEMP_STOP = 65          # °C: power_on refuses. The shoulder lift's own limit is 70 °C, the others' 80
-TEMP_READS = 5          # readings per median: single temperature readings glitch high on this arm (Oct 28)
+TEMP_READS = 5          # readings per median: single temperature readings glitch high on this arm
 WATCH = 0.3             # seconds each joint is watched after its torque comes on
 SETTLE = 0.3            # seconds a move holds its last goal, still checking
 AIM = 0.2               # degrees from its target each joint should end a move within: move_to re-aims until it does
@@ -119,21 +116,21 @@ MAX_OFFSET = 4.0        # degrees past its target a re-aim may set a goal: under
                         # short still sits clear of the stray cut
 GRIPPER_SPEED = 60.0    # degrees per second the gripper's goal may reach at a release's peak: fully open in about 4 s.
                         # The jaw pushes about 2.4% of drive per degree it trails its goal, so under its 24% cap it
-                        # tops out about 110°/s, 10° behind, where GRIP_LAG stops it; at 60°/s it trailed 4-6° (Oct 29)
+                        # tops out about 110°/s, 10° behind, where GRIP_LAG stops it; at 60°/s it trails 4-6°
 GRIP_SPEED = 60.0       # and at a grip's, so the jaws meet what they close on without a knock
 GRIP_LAG = 10.0         # degrees the jaw may trail its goal before release() stops it where it is: something's in the way
-GRIP_CLEAR = 30         # raw ticks from its closed end the jaw has to start a grip at, as gripper_probe's squeeze (Oct 28)
+GRIP_CLEAR = 30         # raw ticks from its closed end the jaw has to start a grip at
 EMPTY = 22              # raw ticks: a grip that ends nearer its closed end than this holds nothing. At the gripper's P
-                        # of 32, closed on nothing, the jaws stopped 19 short, and on the multimeter probe at their
-                        # tips, the only place they can grip it, 24-25 short (Oct 29). That's 2-3 ticks either side,
-                        # so check it again if the gripper's P changes. A half breadboard stopped them 21 short at P 32
-                        # (Oct 28), so a grip like that reads as nothing
+                        # of 32, closed on nothing, the jaws stop 19 short, and on the multimeter probe at their tips,
+                        # the only place they can grip it, 24-25 short. That's 2-3 ticks either side, so check it
+                        # again if the gripper's P changes. A half breadboard stops them 21 short, so a grip like that
+                        # reads as nothing
 MAX_SECONDS = 60.0      # the slowest move this takes: a longer one is more likely a mistake in units
 GAIN_RANGE = (8, 64)    # P gains it takes. LeRobot's configure() sets every joint to 16; the elbow and gripper need 32
 CUT_TRIES = 3           # times a cut is sent and every servo's torque read back before it counts as unconfirmed
 VOLTAGE_TRIES = 3       # times a write or setting read goes out while its reply flags the input voltage: single readings
                         # on the wrist and gripper servos dip under their 4.0 V limit, the gripper's about every 4 s at
-                        # rest, while the supply holds 5.3 V (Oct 29, 15:36)
+                        # rest, while the supply holds steady
 STALE = 0.05            # seconds the reply to an interrupted request may take to arrive: three of the 16 ms USB latency
                         # scservo_sdk allows for (LATENCY_TIMER)
 TICKS_PER_DEGREE = TICKS_PER_TURN / 360
@@ -326,7 +323,7 @@ class Arm:
                 raise Refused(f"the servos didn't answer ({e}). Is their power on?") from e
         where, turn = self._past(raw, joints)
         if where:
-            # Whose pose it is, said outright: Spark read "move it in" as moving the thing on the desk (Nov 2).
+            # Whose pose it is, said outright: Spark read "move it in" as moving the thing on the desk.
             raise Refused(f"the arm itself is past the end of its range: {where}. That's the arm's own pose, not "
                           "where anything on the desk is: with the motors off, turn that joint by hand a little toward "
                           "the middle" + (f". {turn}" if turn else ""))
@@ -345,7 +342,7 @@ class Arm:
         each shifted as it came on, in degrees.
 
         A servo drives to whatever its goal register holds the moment torque comes on, and after a power-up that's
-        0, and writing its goal with the torque off turns the torque on (Oct 29). So this runs LeRobot's configure()
+        0, and writing its goal with the torque off turns the torque on. So this runs LeRobot's configure()
         with its final torque-on held back, sets the gains over the 16 it gives every joint and caps the torque, all
         before any torque; then, one joint at a time, sets its goal to where it is now from a fresh reading, which
         brings it on, and confirms its torque-on. The other joints' goals aren't written, so they stay off. Refused,
@@ -579,7 +576,7 @@ class Arm:
                 for m in JOINTS:
                     try:
                         self._flagged(bus.write, "Lock", m, 1, normalize=False, num_retry=2)
-                    except Exception:  # noqa: BLE001 - a power cycle locks them again too (Oct 28)
+                    except Exception:  # noqa: BLE001 - a power cycle locks them again too
                         pass
             try:
                 bus.disconnect(disable_torque=False)
@@ -878,7 +875,7 @@ class Arm:
         every powered arm joint stays within MAX_STRAY of where it was and, with all five powered, over its floors.
         Closing on something, the jaws stop short of their goal, which is the grip, but they may not open MAX_STRAY.
         Otherwise a jaw trailing its goal by GRIP_LAG is stopped where it is, and says so, and that goal is held SETTLE
-        seconds with the same checks while the jaw comes to rest: one stopped at 110°/s coasted on 6.6° (Oct 29), and a
+        seconds with the same checks while the jaw comes to rest: one stopped at 110°/s coasted on 6.6°, and a
         grip started then took that for the jaws opening. One going MAX_STRAY the wrong way trips. The bus lock is
         held."""
         bus = self.robot.bus

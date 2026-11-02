@@ -1,6 +1,6 @@
 # Every model id and price lives here, never in code, so a renamed preview model is a one-line change.
-# Ids come from Meta's model page and playground (checked 2026-10-26).
-# Prices marked "third-party" come from write-ups, not Meta's pricing page. Confirm them on Day 1.
+# Ids come from Meta's model page and playground. Prices marked "third-party" come from write-ups, not Meta's
+# pricing page.
 
 api:
   base_url: https://api.meta.ai/v1
@@ -9,16 +9,14 @@ router:
   model: muse-spark-1.3
   fallback: muse-spark-1.1          # the version in Meta's tool-calling examples
   max_steps: 12                     # tool rounds per turn before the loop gives up
-  # Routing is short decisions; the coder and the tools do the heavy work. Act 1's router calls took
-  # about 19 s each at the API default (Oct 26) and 4.4-14.0 s at "low" (Oct 28).
+  # Routing is short decisions; the coder and the tools do the heavy work.
   effort: low
   # Code runs these before Spark's first call of every turn and sends what changed since Spark last saw it,
   # so Spark starts with the bench facts instead of spending a round asking for them. One with keep: true runs
   # once, at start-up, and its result stands in for it on later turns until Spark calls that tool itself.
   prefetch:
-    # A board read takes 6-9 s, 5 of them opening the camera, and on Nov 2 a second read of the same wiring
-    # missed a wire and put another's end in the wrong hole. The kept read is checked against pins.h each turn,
-    # so a staged fix shows.
+    # A board read takes 6-9 s, 5 of them opening the camera, and a second read of the same wiring can miss a
+    # wire. The kept read is checked against pins.h each turn, so a staged fix shows.
     - {tool: read_breadboard, keep: true}
     - {tool: read_file, args: {path: firmware/dut_demo/include/pins.h}}
     - {tool: read_sensor}               # the demo board's force sensor, live
@@ -34,9 +32,8 @@ coder:
   compile_timeout_s: 180
 
 eyes:
-  model: sam-3.1                    # request format from dev.meta.ai/docs/sam (Oct 28): one noun phrase per request
+  model: sam-3.1                    # request format from dev.meta.ai/docs/sam: one noun phrase per request
   timeout_s: 30
-  fallback: local                   # facebook/sam3.1 weights, gated on Hugging Face: requested, not granted (Oct 28)
 
 ears:
   model: muse-voice-transcribe-1.0
@@ -99,5 +96,5 @@ budget:
     muse-spark-1.1: {in: 1.25, cached_in: 0.15, out: 4.25}      # cached rate assumed equal to 1.3
     muse-wonder-1.0: {in: 4.00, cached_in: 0.20, out: 20.00}    # third-party
     muse-voice-transcribe-1.0: {per_hour: 0.18}                # third-party
-    sam-3.1: {per_1k_images: 2.50}                              # Meta's pricing page (Oct 28)
+    sam-3.1: {per_1k_images: 2.50}                              # Meta's pricing page
     muse-glimmer-30b: {in: 0, out: 0}                           # runs locally

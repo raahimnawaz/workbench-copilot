@@ -20,7 +20,7 @@ from wbc.agent.approve import Keyboard
 from wbc.agent.budget import BudgetExceeded
 from wbc.config import ROOT
 from wbc.motion import arm as driver
-from wbc.motion.arm import Arm, Refused, Tripped
+from wbc.motion.arm import Arm, Refused
 from wbc.motion.hand import (CLOSED_GAP_MM, FLOOR_MARGIN_MM, HOVER_MM, JAW_CLEAR_MM, JUST_OVER_MM, THIN, Hand, Thing,
                              line)
 from wbc.motion.joints import ARM, JointMap

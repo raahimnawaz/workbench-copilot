@@ -4,7 +4,7 @@ import pytest
 import yaml
 
 from wbc.config import ROOT
-from wbc.motion.kinematics import (Chain, load_chain, pose_to_task, rot_x, rot_y, rot_z, rotation_error,
+from wbc.motion.kinematics import (Chain, load_chain, pose_to_task, rot_z, rotation_error,
                                    solve_ik, solve_task, task_to_pose)
 
 

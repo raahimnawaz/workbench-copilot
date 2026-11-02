@@ -106,7 +106,7 @@ def said_stop(text: str, phrase: str) -> bool:
 
 def asks(reply: str) -> bool:
     """Whether a reply waits for an answer: it ends with "?", its last sentence opens the way a question does though it
-    ends with "." (Nov 2: "It's flashed. Does the LED blink now, though the latest photo shows no wire to pin 4."), or
+    ends with "." ("It's flashed. Does the LED blink now, though the latest photo shows no wire to pin 4."), or
     it asks to be told something back ("say go and I'll flash it"). A question it answers itself ("Is it? No.") doesn't
     count."""
     if re.search(r"\?[\"')\]]*\s*$", reply) or _INVITES.search(reply):

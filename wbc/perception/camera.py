@@ -46,7 +46,7 @@ def capture(index: int = 0, width: int = 1920, height: int = 1080, settle_s: flo
             pick_s: float = 1.5) -> np.ndarray:
     """One BGR still: after `settle_s` for exposure, the sharpest frame seen over the next `pick_s`.
 
-    The C920 refocuses each time it's opened, and on Oct 28 the frame at 1.5 s was still soft, so this keeps
+    The C920 refocuses each time it's opened, and the frame at 1.5 s can still be soft, so this keeps
     looking while the autofocus settles instead of taking whatever frame arrives first.
     """
     cap = open_camera(index, width, height)

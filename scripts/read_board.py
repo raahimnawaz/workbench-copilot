@@ -10,7 +10,7 @@ Run from Terminal.app: macOS only lets a terminal it has asked use the camera.
    snap to holes, and the nets are checked against pins.h once bench.yaml says where the modules sit.
        python scripts/read_board.py read
 
-Both take a still from the camera in bench.yaml (saved as .wbc/vision/photo-<time>.png, for the golden set),
+Both take a still from the camera in bench.yaml (saved as .wbc/vision/photo-<time>.png),
 or --photo PATH to read a saved one instead.
 """
 from __future__ import annotations

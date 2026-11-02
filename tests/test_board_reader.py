@@ -3,7 +3,7 @@ and the diff against pins.h, with SAM's wire masks replayed by a fake."""
 import cv2
 import numpy as np
 import pytest
-from board_scene import PARTS, WIRES, bar, bench_config, camera_homography, photo, wire_ends, wire_masks
+from board_scene import PARTS, WIRES, bench_config, camera_homography, photo, wire_ends, wire_masks
 from fakes import FakeSam, sam_reply
 
 from wbc.agent.budget import Budget

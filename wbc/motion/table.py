@@ -2,7 +2,7 @@
 
 The desk isn't at the URDF's z 0. Near the base it's about 15 mm under it, where the base stands about 0.6 in tall, and
 it reads lower the further out the arm reaches: touched with the arm, the desk's height falls about 9 mm for every
-10 cm of reach (Oct 29, 23:05: five desk tags, 95-399 mm from the pan axis, all within 1.3 mm of the line). That fall
+10 cm of reach (five desk tags, 95-399 mm from the pan axis, all within 1.3 mm of the line). That fall
 is the arm's own reading, most likely its joints' zeros, and the arm moves by the same reading, so the floors follow
 what the touches measured rather than a level table: a straight line in reach, fitted to the touched points
 (Surface.fit). Reach is measured from the base's pan axis, 38.8 mm in front of the URDF's origin, so turning only the

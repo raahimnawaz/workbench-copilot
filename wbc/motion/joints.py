@@ -7,16 +7,15 @@ level along +x). So with 4096 ticks to a turn, a joint's URDF angle in radians i
 
     q = sign * (raw - 2047) * 2 pi / 4096
 
-with each joint's sign in config/robot.yaml. All five are +1. On Oct 28 each joint was turned by hand with the motors
-off, in a pose where the move reads clearly, and every time raw rose or fell as the URDF's angle does. The URDF's
-positive way is the base clockwise seen from above (its pan axis points down), the shoulder lift forward, the elbow
-folding, the wrist flex tipping the gripper down, and the wrist roll counterclockwise looking from the wrist toward
-the jaw tips (its axis points from the jaw back toward the wrist). The L pose held by hand read within 2° of 0 on the
-shoulder lift, elbow and wrist flex. That agrees with LeRobot's own RobotKinematics, which feeds LeRobot's degrees
-straight into this URDF, and with the URDF's CAD, where every joint sits on its STS3215 the same way.
-scripts/check_joint_map.py repeats the test. first_moves.py's answers on Oct 27 had the base, wrist flex and wrist
-roll the other way round: they were read from the folded rest pose, where the arm's bulk sits behind the pan axis
-and the gripper points up and back.
+with each joint's sign in config/robot.yaml. All five are +1: each joint was turned by hand with the motors off, in a
+pose where the move reads clearly, and every time raw rose or fell as the URDF's angle does. The URDF's positive way is
+the base clockwise seen from above (its pan axis points down), the shoulder lift forward, the elbow folding, the wrist
+flex tipping the gripper down, and the wrist roll counterclockwise looking from the wrist toward the jaw tips (its axis
+points from the jaw back toward the wrist). The L pose held by hand reads within 2° of 0 on the shoulder lift, elbow and
+wrist flex. That agrees with LeRobot's own RobotKinematics, which feeds LeRobot's degrees straight into this URDF, and
+with the URDF's CAD, where every joint sits on its STS3215 the same way. scripts/check_joint_map.py repeats the test.
+Don't read the signs from the folded rest pose: there the arm's bulk sits behind the pan axis and the gripper points up
+and back, so the base, wrist flex and wrist roll look the other way round.
 
 LeRobot's degrees aren't these. It puts 0 at the middle of each joint's calibrated range and divides by 4095, so at
 raw 2047 its base reads -11.9°; lerobot_degrees and gripper_percent give its numbers, for comparison. The calibrated
@@ -43,7 +42,7 @@ NAMES = {"shoulder_pan": "base", "shoulder_lift": "shoulder lift", "elbow_flex":
 CALIBRATION_POSE = 2047  # raw ticks every joint reads in lerobot-calibrate's Part 1 L pose: the URDF's q = 0
 TICKS_PER_TURN = 4096    # raw ticks per turn of an STS3215's output shaft
 LEROBOT_RES = 4095       # ticks LeRobot counts to 360° in its degrees: the STS3215's 4096 minus 1
-CALIBRATION_ID = "wbc_follower"  # the --robot.id this arm was calibrated under (Oct 27): its file is wbc_follower.json
+CALIBRATION_ID = "wbc_follower"  # the --robot.id this arm was calibrated under: its file is wbc_follower.json
 
 
 @dataclass(frozen=True)

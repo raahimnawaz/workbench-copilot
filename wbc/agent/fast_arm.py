@@ -1,7 +1,7 @@
 """The arm's fast path: a spoken arm command runs at once, without Spark, when plain rules and a local model agree.
 
 Before any arm tool runs, Spark's first call of a turn takes about 2 s, and its reply once the move is done about 2.4 s
-more (pipeline-notes/local-arm-router-benchmark.md). Here the rules read the request first: the kind of command from
+more. Here the rules read the request first: the kind of command from
 its trigger words ("put", "pick up", "go home"), the thing and the place from the names in models.yaml's fast_arm
 section (or, for "away" or "back", the place a note gives the thing in quotes), and the skill from what the arm holds.
 Only when they find an arm command does Llama 3.2 3B, served on this Mac by mlx_lm.server, read the request too, and
@@ -10,8 +10,8 @@ names, and a request the rules don't take costs no model call at all. Everything
 question, a negation, a statement about yourself, a bare "that", a thing the rules don't know, a model that disagrees,
 answers slowly or isn't running.
 
-On Nov 1, on 117 phrasings that neither was tuned on, the model alone would have moved the arm wrongly 20 times, the
-rules alone 3 times (each now caught by a rule here), and the two agreeing never; 49 of the 62 commands ran locally.
+On 117 phrasings that neither was tuned on, the model alone would have moved the arm wrongly 20 times, the rules alone 3
+times (each now caught by a rule here), and the two agreeing never; 49 of the 62 commands ran locally.
 
 Nothing is said before a move. Once it's done, the reply is built from the skill's result; a move that comes back
 failed goes to Spark to explain (loop.py).
@@ -25,7 +25,7 @@ import time
 
 from .ears import wake_request
 
-# The benchmark's prompt as it ran on Nov 1 (v1, frozen at 20:58), so its answers are the ones measured.
+# The prompt as benchmarked, kept as it was, so its answers are the ones measured.
 SYSTEM = """You sort what the user says to the voice co-pilot of an electronics bench, where a robot arm sits on the desk. Most of what the user says is for the main assistant. Your only job is to catch a direct command to move the arm now and turn it into one call.
 
 Answer with one JSON object and nothing else, in this form:
@@ -66,7 +66,7 @@ MAX_TOKENS = 64  # an answer is about 19 tokens
 KINDS = {"pick_up": "carry", "put_down": "carry", "move_thing": "carry", "arm_home": "home", "hold": "hold",
          "let_go": "let go"}
 # Questions, negations, waiting and the notebook are Spark's, and so is talk about yourself ("I put my screwdriver in
-# the cup", "I'm going to pick it up myself": two of the rules' three wrong moves on Nov 1)
+# the cup", "I'm going to pick it up myself": two of the rules' three wrong moves in the benchmark)
 NOT_A_COMMAND = re.compile(r"^(what|whats|why|how|where|when|which|who|is|are|was|were|does|do|did|has|have|should|"
                            r"can the|could the|will the|i|im|i'm|ive|i've|ill|i'll|i'd|we|we're|we've|we'll)\b|"
                            r"\b(don't|dont|do not|never|not yet|wait|stop|remember|notebook)\b")

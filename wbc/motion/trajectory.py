@@ -3,7 +3,7 @@
 A move takes every joint along one straight line in joint space, from q0 to q1, so they all start and finish
 together. Its pace is the quintic 10s³ - 15s⁴ + 6s⁵, with s the share of the move's time gone, 0 to 1: zero
 velocity and zero acceleration at both ends, as the plan says, so the arm isn't jerked as a move starts or stops.
-first_moves.py's half cosine starts at rest too, but its acceleration jumps from 0 the moment it starts. The quintic
+A half cosine starts at rest too, but its acceleration jumps from 0 the moment it starts. The quintic
 pays for that with a higher top speed: halfway through it moves at 15/8 times its average speed, against the half
 cosine's pi/2.
 

@@ -39,10 +39,10 @@ the way round decides which side of the thing the fixed jaw comes down. A pick o
 before anything moves (whichever needs the wrist roll nearest where it is), and every pose it goes through keeps it.
 
 Which way the jaws close: pointing straight down with the wrist roll at config/robot.yaml's hand.across_roll_deg, they
-close across the arm, along the wrist flex's axis. That's from a look at the jaws in the rest pose (Oct 29), where the
-line between them runs down the arm's middle with the roll reading about 0°. The URDF has them a quarter turn from
-there, so the jaws' line comes from the wrist flex's axis, not from the URDF's frame. The four-touch test (Oct 29,
-22:34) put the tips 3.7 mm from the roll's axis, too near it to tell which way round they are.
+close across the arm, along the wrist flex's axis. In the rest pose the line between them runs down the arm's middle
+with the roll reading about 0°. The URDF has them a quarter turn from there, so the jaws' line comes from the wrist
+flex's axis, not from the URDF's frame. The tips sit 3.7 mm from the roll's axis, by a four-touch test, too near it to
+tell which way round they are.
 """
 from __future__ import annotations
 
@@ -62,9 +62,9 @@ HOVER_MM = (60.0, 45.0, 30.0)  # over a thing's top, where a pick or a put start
 FLOOR_MARGIN_MM = 1.0   # over the driver's tool floor that a pick goes down to, so its end isn't refused for a scrap
 THICK_MM = 40.0         # the thickest something lying flat is taken to be, whatever its width
 GRIP_DEPTH_MM = 15.0    # under its top that the tips go to on something standing up
-CLOSED_GAP_MM = 5.0     # the closed tips' gap (Oct 28): the tool point sits half of it from the fixed jaw's face
+CLOSED_GAP_MM = 5.0     # the closed tips' gap: the tool point sits half of it from the fixed jaw's face
 JAW_CLEAR_MM = 5.0      # between the fixed jaw and the thing's side at the grip: the four-touch fit puts the closed
-                        # tips' middle within about 2.4 mm (one sd) along the jaws' line (review, Oct 30)
+                        # tips' middle within about 2.4 mm (one sd) along the jaws' line
 JUST_OVER_MM = 5.0      # over the thing's top that a pick's last way down starts from: a short move, so its line in
                         # joint space can't swing the jaws into the thing (5.5 mm off the vertical over a 60 mm one)
 SAG_SPARE_MM = 1.0      # that a pick keeps between where its grip would read, sagging as it did just over the thing,

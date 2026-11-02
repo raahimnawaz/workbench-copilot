@@ -1,11 +1,10 @@
 """Check the arm's joint map by hand, with the motors off: which way each joint's URDF angle goes as you turn it.
 
 wbc/motion/joints.py turns raw servo ticks into the URDF's joint angles, q = sign * (raw - 2047) * 2 pi / 4096, with
-each joint's sign in config/robot.yaml. All five are +1: on Oct 28 each joint was turned by hand in a pose where the
-move reads clearly, and each one turned the URDF's positive way as its raw position rose. The answers first_moves.py
-recorded on Oct 27 had the base, wrist flex and wrist roll the other way round, because they were read from the folded
-rest pose, where the arm's bulk sits behind the pan axis and the gripper points up and back. This repeats the Oct 28
-test, so run it again after a recalibration or a servo swap.
+each joint's sign in config/robot.yaml. All five are +1: each joint, turned by hand in a pose where the move reads
+clearly, turns the URDF's positive way as its raw position rises. Read from the folded rest pose, the base, wrist flex
+and wrist roll look the other way round, because the arm's bulk sits behind the pan axis and the gripper points up and
+back. This repeats that test, so run it again after a recalibration or a servo swap.
 
 Nothing is written to the servos: it only sends ping and read requests, through wbc/motion/sts.py, never LeRobot. It
 reads each servo's position, whether its torque is on, and the position limits lerobot-calibrate wrote into it, which
@@ -42,7 +41,7 @@ from wbc.motion import sts  # noqa: E402
 from wbc.motion.joints import ARM, JOINTS, NAMES, TICKS_PER_TURN, JointMap, load_calibration  # noqa: E402
 from wbc.motion.kinematics import load_chain, pose_to_task  # noqa: E402
 
-# The moves check asks for, worded as they worked on Oct 28, and which way each one turns its joint's URDF angle. That
+# The moves check asks for, and which way each one turns its joint's URDF angle. That
 # way is a fact about the URDF, not this arm: its pan axis points down, so the base turning counterclockwise seen from
 # above is minus; the upper arm tipping forward, the elbow folding and the gripper tipping down are plus; and its roll
 # axis points from the jaw back toward the wrist, so rolling clockwise looking from the wrist toward the jaw tips is
@@ -63,7 +62,7 @@ MOVES = [
 ]
 L_POSE = ("L POSE. Hold the arm in an L: the base facing straight forward, the upper arm straight up, the forearm "
           "level and pointing forward, and the gripper straight out along the forearm.")
-L_TOLERANCE = 8.0  # degrees the shoulder lift, elbow and wrist flex may read from 0 in the L pose: within 2° on Oct 28
+L_TOLERANCE = 8.0  # degrees the shoulder lift, elbow and wrist flex may read from 0 in the L pose: they read within 2°
 MIN_MOVE = 5.0     # degrees a move has to turn its joint to count
 READS = 5          # reads of each servo per position, whose median is kept: a single reading can glitch
 EVERY = 0.2        # seconds between watch's lines
