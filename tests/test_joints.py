@@ -118,10 +118,11 @@ SEEN = {"shoulder_pan": turn_from_above, "shoulder_lift": tip_forward, "elbow_fl
         "wrist_flex": tool_drop, "wrist_roll": roll_clockwise_from_the_wrist}
 
 
-def test_robot_yaml_gives_ids_1_to_6_a_plus_sign_on_every_arm_joint_and_the_elbow_p_32(robot_cfg, joint_map):
+def test_robot_yaml_gives_ids_1_to_6_a_plus_sign_on_every_arm_joint_and_p_32_to_the_elbow_and_gripper(robot_cfg,
+                                                                                                      joint_map):
     assert [joint_map.servos[m].id for m in JOINTS] == [1, 2, 3, 4, 5, 6]
     assert [joint_map.servos[m].sign for m in ARM] == [1] * 5
-    assert robot_cfg["gains"] == {"elbow_flex": 32}
+    assert robot_cfg["gains"] == {"elbow_flex": 32, "gripper": 32}
 
 
 def test_raw_2047_is_the_urdfs_zero_on_every_joint(joint_map):

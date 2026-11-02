@@ -496,8 +496,8 @@ def test_a_cut_from_another_thread_stops_a_power_on_before_the_next_joint():
     (lambda robot: robot.pos.update(wrist_flex=826),
      r"past the end of its range: the wrist flex by 2\.2°. Move it in a little, toward the middle"),
     (lambda robot: robot.pos.update(wrist_roll=4071),  # where the roll read in the L pose on Oct 28
-     r"the wrist roll by 15\.1°.*Turn the gripper clockwise, looking from the wrist toward the jaw tips, unless it got "
-     "there by turning more than half a turn clockwise"),
+     r"the wrist roll by 15\.1°.*Turn the gripper clockwise, looking from the wrist toward the jaw tips\. Its reading "
+     "wraps at ±180°, and a move across the wrap would turn the servo the long way round"),
     (lambda robot: robot.pos.update(wrist_roll=150), r"the wrist roll by 9\.5°.*Turn the gripper counterclockwise"),
     (lambda robot: robot.temperature.update(shoulder_lift=66), "too hot to power on: the shoulder lift at 66 °C"),
     (lambda robot: robot.temperature.update(wrist_roll=65), "too hot to power on: the wrist roll at 65 °C"),
@@ -580,7 +580,7 @@ def test_no_goal_runs_more_than_max_step_ahead_of_a_joint_that_lags(monkeypatch)
     (LOW, LOWER, r"the tool point down to -?0 mm above the table, lower than the 6 mm it starts at"),
     (LOW, [0, -40, 69, 40, 0], r"leave the tool point \d mm above the table, still under its 10 mm floor: from under "
                                "a floor, a move has to climb back over it or only turn the base"),
-], ids=["past the elbow's range", "inside the margin", "past the roll's cable", "under the table", "dips between ends",
+], ids=["past the elbow's range", "inside the margin", "past the roll's limits", "under the table", "dips between ends",
         "wrist under its floor", "roll axis under its floor", "lower than a low start", "staying low"])
 def test_a_move_that_would_leave_the_envelope_is_refused_with_nothing_written(start, target, match):
     arm, robot, said = powered(start)
@@ -654,7 +654,7 @@ def test_a_move_wont_start_from_a_wrist_roll_past_its_limits():
     robot.pos["wrist_roll"] = 4071  # +177.9°, turned past its limit while the arm held
     with pytest.raises(Refused, match=r"the arm starts past the end of its range: the wrist roll by 15\.1°.*Turn the "
                                       "gripper clockwise"):
-        arm.move_to(np.radians([*START[:4], -150]))  # it would have turned the roll -327.9°, winding its cable
+        arm.move_to(np.radians([*START[:4], -150]))  # it would have turned the roll -327.9°, the long way round
     assert wrote(robot) == []
 
 
@@ -791,7 +791,7 @@ def test_a_re_aim_sets_no_goal_more_than_max_offset_past_its_target():
 
 
 def test_a_re_aim_never_sets_a_goal_past_its_joints_range():
-    arm, robot, said = powered(sag={"wrist_roll": -35})  # 3.1° short of +160°, which is 2.8° inside the cable's limit
+    arm, robot, said = powered(sag={"wrist_roll": -35})  # 3.1° short of +160°, which is 2.8° inside the roll's limit
     reading = arm.move_to(np.radians([0, -20, 40, 30, 160]))
     top = math.degrees(MAP.limits("wrist_roll")[1])
     assert max(goal["wrist_roll"] for _, goal in robot.sent) <= MAP.raw(np.radians([0, 0, 0, 0, top]))["wrist_roll"]
@@ -856,6 +856,15 @@ def test_grip_on_nothing_closes_the_jaws_and_says_so():
     arm, robot, said = powered()
     grip = arm.grip()
     assert not grip.holding and grip.gap == 0 and grip.opening == 0 and robot.pos["gripper"] == CLOSED
+
+
+# where the jaws stopped at the gripper's P of 32 on Oct 29: on nothing, and on the multimeter probe at their tips
+@pytest.mark.parametrize("gap, holding", [(19, False), (24, True)])
+def test_grip_tells_empty_jaws_that_stop_short_of_closed_from_jaws_on_the_probe_at_their_tips(gap, holding):
+    arm, robot, said = powered()
+    robot.between["gripper"] = (CLOSED + gap, math.inf)
+    grip = arm.grip()
+    assert grip.gap == gap and grip.holding is holding
 
 
 def test_grip_closes_no_faster_than_its_speed():
@@ -1228,7 +1237,7 @@ def test_open_connects_only_the_bus_and_takes_the_map_and_gains_from_the_config(
     arm = Arm.open("/dev/cu.fake", ROBOT_CFG, ROOT, calibration_dir="/elsewhere", make_robot=make_robot)
     assert made == [("/dev/cu.fake", "wbc_follower", "/elsewhere")]
     assert arm.robot.events == ["bus connect"]  # nothing written, and robot.connect() never ran: the fake raises
-    assert arm.joints.servos == MAP.servos and arm.gains == {"elbow_flex": 32}
+    assert arm.joints.servos == MAP.servos and arm.gains == {"elbow_flex": 32, "gripper": 32}
 
 
 @pytest.mark.parametrize("setup, match", [

@@ -42,9 +42,10 @@ whatever goals the servos hold (0 after a power-up). Only robot.bus.connect() ru
 servos, with the calibration read from calibration_dir: from another account, the folder of the one that ran
 lerobot-calibrate.
 
-The wrist roll has no stop, and its reading wraps at ±180°, so it can't show how far its cable has wound. Moves keep it
-inside the URDF's limits, at least 17° clear of the wrap, and power_on and move_to refuse a roll that starts outside
-them. A gripper turned a whole turn by hand reads as if it hadn't been: turn it back before powering on.
+The wrist roll has no stop, and its reading wraps at ±180°, where the servo's position count goes from 4095 to 0: a goal
+across the wrap would turn it the long way round. Moves keep it inside the URDF's limits, at least 17° clear of the
+wrap, and power_on and move_to refuse a roll that starts outside them. A gripper turned a whole turn by hand reads as
+if it hadn't been.
 
 Each joint stops short of its goal and holds there, by its load over its P gain: gravity and gearbox friction, 1-4° on
 the first powered run (Oct 29), which reaching out puts at 11-16 mm at the tool point. So once a move's path is done,
@@ -105,10 +106,13 @@ GRIPPER_SPEED = 60.0    # degrees per second the gripper's goal may reach at a r
 GRIP_SPEED = 60.0       # and at a grip's, so the jaws meet what they close on without a knock
 GRIP_LAG = 10.0         # degrees the jaw may trail its goal before release() stops it where it is: something's in the way
 GRIP_CLEAR = 30         # raw ticks from its closed end the jaw has to start a grip at, as gripper_probe's squeeze (Oct 28)
-EMPTY = 20              # raw ticks: a grip that ends nearer its closed end than this holds nothing. Closed on nothing, the
-                        # jaws stop 0-12 ticks past it (1277-1290 against 1278, Oct 28)
+EMPTY = 22              # raw ticks: a grip that ends nearer its closed end than this holds nothing. At the gripper's P
+                        # of 32, closed on nothing, the jaws stopped 19 short, and on the multimeter probe at their
+                        # tips, the only place they can grip it, 24-25 short (Oct 29). That's 2-3 ticks either side,
+                        # so check it again if the gripper's P changes. A half breadboard stopped them 21 short at P 32
+                        # (Oct 28), so a grip like that reads as nothing
 MAX_SECONDS = 60.0      # the slowest move this takes: a longer one is more likely a mistake in units
-GAIN_RANGE = (8, 64)    # P gains it takes. LeRobot's configure() sets every joint to 16; the elbow needs 32
+GAIN_RANGE = (8, 64)    # P gains it takes. LeRobot's configure() sets every joint to 16; the elbow and gripper need 32
 CUT_TRIES = 3           # times a cut is sent and every servo's torque read back before it counts as unconfirmed
 VOLTAGE_TRIES = 3       # times a write or setting read goes out while its reply flags the input voltage: single readings
                         # on the wrist and gripper servos dip under their 4.0 V limit, the gripper's about every 4 s at
@@ -630,9 +634,8 @@ class Arm:
         if "wrist_roll" not in past:
             return where, ""
         way = "clockwise" if self.joints.angle("wrist_roll", raw["wrist_roll"]) > 0 else "counterclockwise"
-        return where, (f"Turn the gripper {way}, looking from the wrist toward the jaw tips, unless it got there by "
-                       f"turning more than half a turn {way}, which its reading can't show: the wrist roll's limit is "
-                       "its cable")
+        return where, (f"Turn the gripper {way}, looking from the wrist toward the jaw tips. Its reading wraps at "
+                       "±180°, and a move across the wrap would turn the servo the long way round")
 
     def _hold_here(self, joint: str) -> int:
         """Set `joint`'s goal to where it is now, which turns its torque on, and return that, in raw ticks. Tripped if

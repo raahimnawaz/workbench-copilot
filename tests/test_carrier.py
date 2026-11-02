@@ -132,8 +132,9 @@ def test_aim_tries_the_pitches_steepest_first(monkeypatch):
 
 @pytest.mark.parametrize("name", ["a5", "j63", "tag10"])
 def test_aim_keeps_the_wrist_roll_near_where_it_is(name):
-    """Pointing doesn't care how the jaws are turned about its line, and the roll's cable does. From the rest pose on
-    Oct 29 (roll -149.9°), a pose at roll 0 would first turn the gripper about 150°."""
+    """Pointing doesn't care how the jaws are turned about its line, so there's no need to turn them far. From the rest
+    pose on Oct 29 (roll -149.9°, before its zero moved half a turn), a pose at roll 0 would first turn the gripper
+    about 150°."""
     rest = np.radians([6.33, -110.57, 89.3, -92.55, -149.85])
     spot = TRUE.to_arm(point_mm(BENCH, PARTS, name))
     a = aim(CHAIN, MAP, spot, rest)

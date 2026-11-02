@@ -281,7 +281,7 @@ def test_once_says_which_joints_are_past_where_moves_may_take_them():
 
 
 def test_watch_reads_until_its_time_is_up_and_writes_nothing():
-    line = FakeLine({**REST, "wrist_roll": 4071})  # where the roll read in the L pose: past its cable's limit
+    line = FakeLine({**REST, "wrist_roll": 4071})  # the roll in the L pose before its zero moved: past its limits
     ok, record, said = session(line, mode="watch")
     lines = [s for s in said if s.startswith("\r")]
     assert ok and len(lines) == 5 and line.written() == []

@@ -28,6 +28,8 @@ servos:
 
 # P gains written over the 16 that LeRobot's configure() gives every joint, each time after it runs. The elbow is a
 # weaker 1:191 servo: at 16 it couldn't lift its folded forearm (Oct 27, 18:09), and at 32 it opened from the fold
-# and held within 0.1° (18:25).
+# and held within 0.1° (18:25). At 16 the gripper stops where its push near closed meets the friction, short of
+# gripping the multimeter probe at the jaw tips; at 32 it holds it there (Oct 29, 21:25).
 gains:
   elbow_flex: 32
+  gripper: 32

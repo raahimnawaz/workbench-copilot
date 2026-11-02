@@ -193,9 +193,9 @@ def _toward(chain, spot, back: float, pitch: float, q0, roll: float = 0.0):
 
 def _turns(chain, spot, back: float, pitch: float, q0) -> list:
     """_toward's poses for one line, the wrist roll nearest q0's first. Pointing doesn't care how the jaws are turned
-    about the line, and the roll's cable does: from the rest pose on Oct 29 (roll -149.9°), a pose at roll 0 would
-    first turn the gripper about 150°. Turning about the line moves the wrist roll joint one way or the other, so both
-    are tried, with roll 0 as well."""
+    about the line, so there's no need to turn them far: from the rest pose on Oct 29 (roll -149.9°, before its zero
+    moved half a turn), a pose at roll 0 would first turn the gripper about 150°. Turning about the line moves the
+    wrist roll joint one way or the other, so both are tried, with roll 0 as well."""
     plain = _toward(chain, spot, back, pitch, q0)
     if plain is None:
         return []

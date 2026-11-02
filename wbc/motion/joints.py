@@ -23,7 +23,8 @@ raw 2047 its base reads -11.9°; lerobot_degrees and gripper_percent give its nu
 ranges come from LeRobot's calibration file, and lerobot-calibrate also wrote them into each servo as its position
 limits, so a joint can't be driven past either end. The real arm's stops go past the URDF's limits (at rest the
 shoulder lift reads -111° against the URDF's -100°), so a joint's limits here are its calibrated range. The wrist
-roll has no stop, so its range is the whole turn and its limits are the URDF's: its cable is the limit.
+roll has no stop, so its range is the whole turn and its limits are the URDF's, which keep it clear of where its
+reading wraps at ±180°.
 """
 from __future__ import annotations
 
@@ -154,7 +155,8 @@ class JointMap:
 
     def limits(self, joint: str) -> tuple[float, float]:
         """The joint's calibrated range as URDF angles (low, high) in radians, low first whatever its sign. A joint
-        with no stop gets the URDF's limits instead (its cable is the limit), or ±pi without them."""
+        with no stop gets the URDF's limits instead, which keep it clear of where its reading wraps, or ±pi without
+        them."""
         s = self.servos[joint]
         if s.full_turn:
             if joint in ARM and self.urdf_lower is not None and self.urdf_upper is not None:
@@ -178,8 +180,8 @@ class JointMap:
 
     def past_limits(self, raw: dict) -> dict:
         """Every joint in `raw` past where moves may take it, as {joint: degrees past}: past an end of its calibrated
-        range, as outside() says, or for a joint with no stop, past its limits(), the URDF's, which keep its cable from
-        winding up. Such a joint's reading wraps at ±180°, so a whole turn by hand doesn't show."""
+        range, as outside() says, or for a joint with no stop, past its limits(), the URDF's, which keep it clear of
+        where its reading wraps at ±180°. A whole turn by hand doesn't show."""
         past = self.outside(raw)
         for m in JOINTS:
             if m in raw and self.servos[m].full_turn:
