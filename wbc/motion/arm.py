@@ -21,9 +21,10 @@ reply flags the input voltage is sent again.
 Refusals come before anything is written. power_on refuses a joint past an end of its range or a servo at 65 °C (heat
 is checked only there). move_to refuses a start past an end of a range, a target too near one, and a path that takes
 the tool point or the elbow and wrist axes too near the table. A move that starts under one of those floors has to
-climb back over it without going lower on the way, or only turn the base, so moves can't walk the arm down a little at
-a time. The table sits at config/robot.yaml's table_mm: the base's underside is z 0, but the desk reads lower than that
-(Oct 29), and a floor measured from z 0 kept the jaws 27-46 mm above it, too high to pick up anything lying there.
+climb back over it, going no lower on the way than the 50 µm its goals' whole ticks can dip (ROUNDING), or only turn
+the base, so moves can't walk the arm down a little at a time. The floors are measured from config/robot.yaml's table
+(table.py): the desk sits under the URDF's z 0 and reads lower the further out the arm reaches (Oct 29), so floors
+measured from z 0 kept the jaws 27-46 mm above it, too high to pick up anything lying there.
 Moves are quintic and peak at 30°/s on any joint and 80 mm/s at the tool point, and no goal goes more than 5° from
 where its joint is. The floors hold for the plan, and joints within the 5° stray can put the tool point 17-41 mm
 under it, so a move also cuts every motor when the arm itself goes 5 mm under a floor. After a power cut the servos
@@ -75,6 +76,7 @@ import numpy as np
 
 from .joints import ARM, CALIBRATION_ID, JOINTS, NAMES, TICKS_PER_TURN, JointMap
 from .kinematics import load_chain
+from .table import Surface
 from .trajectory import PEAK, joint_path, lowest, min_seconds
 
 HZ = 50.0               # goal writes per second during a move
@@ -86,14 +88,19 @@ MAX_STEP = 5.0          # degrees: no goal goes further than this from where its
 MAX_JOINT_SPEED = 30.0  # degrees per second any joint may reach at a move's peak
 MAX_TIP_SPEED = 0.08    # metres per second the tool point may reach at a move's peak: the plan's 80 mm/s near the bench
 RANGE_MARGIN = 2.0      # degrees inside each end of a joint's range that a move may aim for
-TOOL_FLOOR = 0.010      # metres above the table the tool point has to stay
+TOOL_FLOOR = 0.010      # metres above the table the tool point has to stay, unless config/robot.yaml's tool_floor_mm
+                        # sets it: since the tool point is the jaw tips (Oct 29), a pick needs them lower
+TOOL_FLOOR_RANGE = (0.005, 0.030)  # metres the tool point's floor may be set to. The low end is SAG: under it, the cut
+                                   # for the arm sagging SAG under a floor would come only once it's under the table
 JOINT_FLOOR = 0.030     # metres above the table the elbow, wrist flex and wrist roll axes have to stay: their servos
                         # are about 25 mm thick
-TABLE_RANGE = (-0.060, 0.010)  # metres: where the table may be set, from the base's underside. The desk reads 17-36 mm
-                               # under it (Oct 29); a value far outside that is more likely a mistake in units
 FLOOR_JOINTS = ("elbow_flex", "wrist_flex", "wrist_roll")
 LEVEL = 1e-6            # metres two heights may differ and still count as level: the URDF's base axis isn't quite
                         # vertical, so turning the base alone moves the tool point up to about 0.4 µm
+ROUNDING = 50e-6        # metres a move from under a floor, or just over it, may dip under where it starts, unless it
+                        # only turns the base: its goals go out in whole ticks, and climbing from a grip the wrist flex
+                        # steps first, swinging the tips 0.24 mm toward the base, up to about 30 µm lower over the
+                        # sloped table (reviews, Oct 30)
 SAG = 0.005             # metres the arm itself may go under a floor during a move before every motor is cut: joints
                         # within MAX_STRAY can put the tool point 17-41 mm under the plan (review, Oct 29)
 TEMP_WARN = 55          # °C, the median of TEMP_READS readings: power_on says so
@@ -219,28 +226,33 @@ def cut_torque(robot) -> bool:
 
 class Arm:
     def __init__(self, robot, joints: JointMap, chain, gains: dict | None = None, cap: int = TORQUE_CAP, say=print,
-                 clock=time.monotonic, sleep=time.sleep, table: float = 0.0):
+                 clock=time.monotonic, sleep=time.sleep, table=0.0, tool_floor: float = TOOL_FLOOR):
         """robot: LeRobot's follower with its bus connected (open() builds one). joints and chain: the joint map and
         the IK chain. gains: P gains written over LeRobot's 16 at each power-on, {joint: P}. cap: the arm joints'
-        torque cap, 10-100 percent; the gripper's stays at most GRIPPER_CAP. table: the table's z in the arm's frame,
-        metres, TABLE_RANGE: the floors are measured from it."""
+        torque cap, 10-100 percent; the gripper's stays at most GRIPPER_CAP. table: what the floors are measured from,
+        a table.Surface or a level table's z in metres. tool_floor: how close the tool point may come to it, metres,
+        TOOL_FLOOR_RANGE."""
         if not 10 <= cap <= 100:
             raise ValueError(f"the torque cap has to be from 10 to 100 percent, not {cap}")
-        if not TABLE_RANGE[0] <= table <= TABLE_RANGE[1]:
-            raise ValueError(f"the table has to be from {1000 * TABLE_RANGE[0]:.0f} to {1000 * TABLE_RANGE[1]:.0f} mm, "
-                             f"not {1000 * table:.0f}")
+        if not TOOL_FLOOR_RANGE[0] <= tool_floor <= TOOL_FLOOR_RANGE[1]:
+            raise ValueError(f"the tool point's floor has to be from {1000 * TOOL_FLOOR_RANGE[0]:.0f} to "
+                             f"{1000 * TOOL_FLOOR_RANGE[1]:.0f} mm, not {1000 * tool_floor:g}")
+        table = table if isinstance(table, Surface) else Surface.flat(table)  # ValueError out of its range
         gains = dict(gains or {})
         for m, p in gains.items():
             if m not in JOINTS or not isinstance(p, int) or not GAIN_RANGE[0] <= p <= GAIN_RANGE[1]:
                 raise ValueError(f"a P gain needs a joint from {', '.join(JOINTS)} and a whole number from "
                                  f"{GAIN_RANGE[0]} to {GAIN_RANGE[1]}, not {m}: {p!r}")
         self.robot, self.joints, self.chain = robot, joints, chain
-        self.gains, self.cap, self.table = gains, cap, table
+        self.gains, self.cap, self.table, self.tool_floor = gains, cap, table, tool_floor
         self.caps = {m: 10 * (min(cap, GRIPPER_CAP) if m == "gripper" else cap) for m in JOINTS}  # Torque_Limit
         self.say, self.clock, self.sleep = say, clock, sleep
         self.powered = set()
         self._jaw_goal, self._gripping = None, False  # the gripper's goal in raw ticks, and whether grip() set it
         self._limits = None  # each servo's Torque_Limit before the first power-on, for close() to put back
+        # How far each arm joint stopped short of the last move_to's target before any re-aim, radians in ARM order:
+        # its load over its P gain, so a pose nearby with about the same load stops about as short. None until a move
+        self.stopped_short = None
         self._lock = threading.RLock()
         self._stopped = threading.Event()  # set by every cut, cleared only by clear_stop()
         self._closed = False
@@ -272,7 +284,8 @@ class Arm:
                               "and run lerobot-calibrate again if it is")
             chain = load_chain(robot_cfg, Path(root))
             joints = JointMap.from_config(robot_cfg, robot.calibration, chain)
-            kwargs.setdefault("table", robot_cfg.get("table_mm", 0) / 1000)
+            kwargs.setdefault("table", Surface.from_config(robot_cfg))
+            kwargs.setdefault("tool_floor", robot_cfg.get("tool_floor_mm", 1000 * TOOL_FLOOR) / 1000)
             return cls(robot, joints, chain, gains=robot_cfg.get("gains"), **kwargs)
         except BaseException:
             try:
@@ -395,17 +408,19 @@ class Arm:
         Refused, with nothing written, after a cut until clear_stop(), and unless all five are powered with their
         torque still on at their caps, each starts inside where moves may take it, each target is RANGE_MARGIN inside
         its joint's range, and the path keeps the tool point TOOL_FLOOR and the elbow and wrist axes JOINT_FLOOR above
-        the table. From a start under a floor, the path may not go lower than the start, and has to end over the floor
-        unless it only turns the base. Tripped, with every motor cut, if a joint strays MAX_STRAY from where it should
-        be, the gripper strays MAX_STRAY from its own goal, the arm goes SAG under a floor, a cut arrives from
-        elsewhere, or the bus fails. Ctrl-C holds the arm where it is and re-raises. `samples`, when given, gets one
-        entry a tick: t, goal and q in degrees, and every joint's load."""
+        the table. From a start under a floor, or within ROUNDING over it, the path may go no more than ROUNDING lower
+        than the start, and has to end over the floor; one that only turns the base may stay under, no lower. Tripped,
+        with every motor cut, if
+        a joint strays MAX_STRAY from where it should be, the gripper strays MAX_STRAY from its own goal, the arm goes
+        SAG under a floor, a cut arrives from elsewhere, or the bus fails. Ctrl-C holds the arm where it is and
+        re-raises. `samples`, when given, gets one entry a tick: t, goal and q in degrees, and every joint's load."""
         target = np.asarray(q, float)
         if target.shape != (len(ARM),) or not np.all(np.isfinite(target)):
             raise Refused(f"a move needs an angle for each of the {len(ARM)} arm joints, not {q!r}")
         if seconds is not None and not 0 <= seconds <= MAX_SECONDS:
             raise Refused(f"a move takes from 0 to {MAX_SECONDS:g} seconds, not {seconds!r}")
         with self._lock:
+            self.stopped_short = None
             self._refuse_if_stopped()
             missing = [m for m in ARM if m not in self.powered]
             if missing:
@@ -426,6 +441,7 @@ class Arm:
             path = joint_path(start.q, target, max(seconds or 0.0, fastest, 1 / HZ), HZ)
             floors = self._floors(start, target, path)
             reading = self._run(path, start, floors, samples)
+            self.stopped_short = target - reading.q
             return self._reaim(target, start, floors, reading, samples) if aim else reading
 
     def hold(self) -> None:
@@ -675,28 +691,33 @@ class Arm:
     def _floors(self, start: Reading, target: np.ndarray, path: np.ndarray) -> tuple[float, float]:
         """The heights the tool point and the floor axes may not go under during this move, in metres: their floors,
         or where they start when that's lower. Refused if the path, in the whole ticks its goals go out in, goes under
-        one, or starts under a floor and ends there without only turning the base."""
+        one; or, starting under one or within ROUNDING over it, goes more than ROUNDING lower than it starts or ends
+        under it. A move that only turns the base may stay under a floor it starts under, but go no lower."""
         goals = np.array([self.joints.q(self.joints.raw(row)) for row in path])
         lows = lowest(self.chain, goals, FLOOR_JOINTS, self.table)
         ends = lowest(self.chain, goals[-1], FLOOR_JOINTS, self.table)
         starts = lowest(self.chain, start.q, FLOOR_JOINTS, self.table)
         aim = self.joints.raw(target)
         turn = all(aim[m] == start.raw[m] for m in ARM[1:])  # only the base turns: every height stays put
+        near, dip = (0.0, LEVEL) if turn else (ROUNDING, ROUNDING)  # a turn's goals don't dip as they set off
         floors = []
         for what, low, end, begin, floor, need in (
-                ("tool point", lows[0], ends[0], starts[0], TOOL_FLOOR, "its {} mm floor"),
+                ("tool point", lows[0], ends[0], starts[0], self.tool_floor, "its {} mm floor"),
                 ("elbow or wrist", lows[1], ends[1], starts[1], JOINT_FLOOR, "the {} mm their servos need")):
             need = need.format(round(1000 * floor))
-            if begin >= floor:
+            under = begin < floor  # a start within ROUNDING over the floor isn't under it, for the reason given
+            if begin >= floor + near:
                 if low < floor:
                     raise Refused(f"the move would take the {what} down to {1000 * low:.0f} mm above the table, under "
                                   f"{need}")
-            elif low < begin - LEVEL:
-                raise Refused(f"the move would take the {what} down to {1000 * low:.0f} mm above the table, lower "
-                              f"than the {1000 * begin:.0f} mm it starts at, which is already under {need}")
+            elif low < begin - dip:
+                raise Refused(f"the move would take the {what} down to {1000 * low:.0f} mm above the table, " + (
+                    f"lower than the {1000 * begin:.0f} mm it starts at, which is already under {need}" if under
+                    else f"under {need}"))
             elif end < floor and not turn:
-                raise Refused(f"the move would leave the {what} {1000 * end:.0f} mm above the table, still under "
-                              f"{need}: from under a floor, a move has to climb back over it or only turn the base")
+                raise Refused(f"the move would leave the {what} {1000 * end:.0f} mm above the table, " + (
+                    f"still under {need}: from under a floor, a move has to climb back over it or only turn the base"
+                    if under else f"under {need}"))
             floors.append(min(floor, begin))
         return floors[0], floors[1]
 
@@ -825,7 +846,7 @@ class Arm:
         grip started then took that for the jaws opening. One going MAX_STRAY the wrong way trips. The bus lock is
         held."""
         bus = self.robot.bus
-        floors = tuple(min(f, h) for f, h in zip((TOOL_FLOOR, JOINT_FLOOR),
+        floors = tuple(min(f, h) for f, h in zip((self.tool_floor, JOINT_FLOOR),
                                                  lowest(self.chain, start.q, FLOOR_JOINTS, self.table)))
         arm = [m for m in ARM if m in self.powered]
         was = start.raw["gripper"]

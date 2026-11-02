@@ -147,9 +147,10 @@ def test_flags_choose_when_it_speaks_and_the_mic_waits_for_it(monkeypatch, flags
     say, heard, started = FakeSay(), {}, threading.Event()
     budget = NS(spent=0.0, limit=5.0, check=lambda: None, pop_warning=lambda: None)
     router = NS(label="Spark", model="spark", run_turn=lambda text: "Fixed. The patch is staged. Say go to flash it.")
-    bench = NS(park=lambda: None, stop_arm=lambda: None, hand=None)
+    bench = NS(park=lambda home=True: None, stop_arm=lambda: None, hand=None, stopped=threading.Event(),
+               can_go_home=lambda: False)
     monkeypatch.setattr(agent, "build", lambda *a: ({"ears": {}, "coder": {}, "mouth": {}}, budget, SilentHud(), router,
-                                                    bench, NS(offer=lambda line: False)))
+                                                    bench, NS(offer=lambda line: False, close=lambda: None)))
     monkeypatch.setattr(agent, "Mouth", lambda cfg: Mouth(cfg, command="say", popen=say))
     monkeypatch.setattr(agent.coder, "compile_in_sandbox", lambda *a: None)
     monkeypatch.setattr(agent.config, "api_key", lambda: "key")

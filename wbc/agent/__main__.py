@@ -4,11 +4,14 @@ Typed lines and spoken requests go on one queue, and the router handles them one
 --speak), the co-pilot says the first sentence or two of each reply out loud, and the mic is muted while it speaks.
 With --arm, the arm's tools may move it, each move only after Enter at the keyboard: while a move waits, the next
 typed line answers it instead of going to the router, and nothing heard by voice does. Ctrl-C cuts every motor (the
-arm drops, so keep a hand near it) and quits. At exit the arm goes back to where it rested and its motors go off.
+arm drops, so keep a hand near it) and quits at once, and no arm move starts after it. At the end of the input (Ctrl-D)
+a question still waiting gets a no, no arm move starts, and once the turn ends the arm goes back to where it rested and
+its motors go off; any other exit asks before moving it.
 """
 from __future__ import annotations
 
 import argparse
+import os
 import queue
 import sys
 import threading
@@ -99,6 +102,8 @@ def main(argv=None) -> int:
                 continue
             if line.strip():
                 inbox.put(line.strip())
+        bench.stopped.set()  # the end of the input: no arm move starts now, and a question waiting gets its no
+        keyboard.close()
         inbox.put(None)
 
     threading.Thread(target=typed, daemon=True).start()
@@ -112,6 +117,7 @@ def main(argv=None) -> int:
     if args.hear:
         hud.note("mic check: nothing goes to the router. Ctrl-D quits.")
 
+    home = True  # at the end of the input (Ctrl-D) the arm goes back to rest before its motors go off, as --help says
     try:
         while True:
             text = inbox.get()
@@ -125,20 +131,45 @@ def main(argv=None) -> int:
                     mouth.speak(reply)
             except BudgetExceeded as e:
                 hud.note(str(e))
+                # An exit nobody typed: the arm moves home only on Enter, and holds where it is until there's an
+                # answer. Once the input has ended (Ctrl-D), before the question or during it, it goes home as ever
+                home = bench.can_go_home()
+                if home and not keyboard.closed:
+                    if mouth:
+                        mouth.speak("The agent is stopping. Press Enter at the keyboard to take the arm back to rest.")
+                    home = keyboard.ask("The agent is stopping. Take the arm back to rest before its motors go off? "
+                                        "Anything else turns them off where it is, so hold the arm.",
+                                        forever=True) is not False
                 return 1
             except Exception as e:
                 hud.note(f"turn failed: {type(e).__name__}: {e}")
                 if mouth:
                     mouth.speak("That turn failed. The error is on the screen.")
     except KeyboardInterrupt:
+        home = False
+        keyboard.close()  # a move waiting for Enter gets a no, and so does any that asks later
         bench.stop_arm()
         if mouth:
             mouth.stop()
         hud.note("Ctrl-C: every motor is cut." if bench.hand is not None else "Ctrl-C.")
         return 130
     finally:
-        bench.park()
+        keyboard.close()
+        pool = getattr(router, "pool", None)
+        if pool is not None:  # tool calls not started yet don't start
+            pool.shutdown(wait=False, cancel_futures=True)
+        bench.park(home=home)
+
+
+def cli() -> None:
+    """python -m wbc.agent and the wbc script: main(), then out at once. The arm is parked by then, so a tool call
+    still running after Ctrl-C (a coder call, a locate) is dropped rather than waited for, and what it costs isn't in
+    .wbc/spend.json: the spend is added when a reply comes back."""
+    code = main()
+    sys.stdout.flush()
+    sys.stderr.flush()
+    os._exit(code)
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    cli()

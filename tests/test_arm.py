@@ -590,6 +590,25 @@ def test_a_move_that_would_leave_the_envelope_is_refused_with_nothing_written(st
     assert wrote(robot) == [] and arm.powered == set(JOINTS)
 
 
+@pytest.mark.parametrize("ticks, then, match", [
+    ((4, 2, 1), (0, 3, 0), r"the tool point down to 9 mm above the table, under its 10 mm floor$"),
+    ((4, 3, -2), (1, 0, -2), r"leave the tool point 10 mm above the table, under its 10 mm floor$"),
+], ids=["goes under", "ends under"])
+def test_a_move_from_within_rounding_over_the_floor_isnt_refused_as_starting_under_it(ticks, then, match):
+    # NEAR with the shoulder lift, elbow and wrist flex a few ticks on: the tool point 45.5 and 16.1 µm over its floor
+    near = pose(NEAR)
+    joints = ("shoulder_lift", "elbow_flex", "wrist_flex")
+    start = {**near, **{m: near[m] + d for m, d in zip(joints, ticks)}}
+    arm, robot, said = make(FakeFollower(start=start))
+    arm.power_on()
+    robot.events.clear()
+    robot.sent.clear()
+    assert driver.TOOL_FLOOR <= tool_height(arm) < driver.TOOL_FLOOR + driver.ROUNDING
+    with pytest.raises(Refused, match=match):
+        arm.move_to(MAP.q({**start, **{m: start[m] + d for m, d in zip(joints, then)}}))
+    assert wrote(robot) == []
+
+
 def test_a_move_from_under_the_floor_may_turn_the_base_or_climb_back_over_it():
     arm, robot, said = powered(LOW)
     assert np.degrees(arm.move_to(np.radians(SIDEWAYS)).q) == pytest.approx(SIDEWAYS, abs=0.1)

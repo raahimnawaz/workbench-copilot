@@ -64,6 +64,56 @@ def test_parallel_tool_round_then_reply():
     assert router.budget.spent > 0
 
 
+def test_only_the_first_arm_call_of_a_round_runs_in_sim_or_on_the_arm():
+    log = []
+    tb = slow_toolbox(log)
+
+    @tb.register("pick_up", "", {"type": "object", "properties": {}}, label="arm")
+    def pick_up():
+        log.append("pick")
+        return {"ok": True}
+
+    router, api, hud = make_router([
+        response("r1", [function_call("c1", "pick_up", "{}"), function_call("c2", "point_at", '{"target": "row:5"}'),
+                        function_call("c3", "ask_coder", "{}")]),
+        response("r2", text="Picked it up."),
+    ], tb)
+    assert router.run_turn("pick it up and fix the pin") == "Picked it up."
+    assert sorted(log) == ["coder", "pick"]  # point_at, a second arm tool, never ran
+    outputs = {o["call_id"]: json.loads(o["output"]) for o in api.requests[1]["input"]
+               if o.get("type") == "function_call_output"}
+    assert outputs["c2"] == {"ok": False, "error": "not run yet: pick_up came first this round, and arm tools run one "
+                                                   "at a time. Call point_at again once pick_up has returned, if it's "
+                                                   "still wanted"}
+
+
+def test_an_arm_call_after_one_whose_arguments_dont_parse_still_waits():
+    log = []
+    tb = slow_toolbox(log)
+
+    @tb.register("pick_up", "", {"type": "object", "properties": {"thing": {"type": "string"}}}, label="arm")
+    def pick_up(thing):
+        log.append("pick")
+        return {"ok": True}
+
+    @tb.register("put_down", "", {"type": "object", "properties": {"thing": {"type": "string"}}}, label="arm")
+    def put_down(thing):
+        log.append("put")
+        return {"ok": True}
+
+    router, api, hud = make_router([
+        response("r1", [function_call("c1", "pick_up", '{"thing": "scr'),
+                        function_call("c2", "put_down", '{"thing": "tray"}')]),
+        response("r2", text="Try again?"),
+    ], tb)
+    assert router.run_turn("put the screwdriver in the tray") == "Try again?"
+    assert log == []  # the put needs the pick to have happened, so it doesn't ask to go ahead without it
+    outputs = {o["call_id"]: json.loads(o["output"]) for o in api.requests[1]["input"]
+               if o.get("type") == "function_call_output"}
+    assert outputs["c1"]["error"].startswith("arguments were not valid JSON")
+    assert outputs["c2"]["error"].startswith("not run yet: pick_up came first this round")
+
+
 def test_reasoning_effort_is_sent_only_when_set():
     router, api, hud = make_router([response("r1", text="a"), response("r2", text="b")], Toolbox())
     router.run_turn("one")

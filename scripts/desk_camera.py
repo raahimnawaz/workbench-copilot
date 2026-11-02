@@ -18,6 +18,10 @@ A second webcam looking down at the desk lets locate say where something is in t
 4. locate (PAID, $0.0025: one SAM 3.1 request, from Terminal.app): where a named thing is, in the arm's frame. Give
    the height of anything standing up, such as a cup (--height 95), because one camera can't see it.
        python scripts/desk_camera.py locate cup --height 95
+5. table (free): the table under the arm, fitted from the touched tags' heights, as config/robot.yaml's table takes it.
+   The driver's floors are measured from it, so run this and copy its lines into robot.yaml after touching the tags
+   again.
+       python scripts/desk_camera.py table
 
 check and locate take a still from the desk camera (saved as .wbc/vision/desk-photo-<time>.png), or --photo PATH to use
 a saved one. locate saves SAM's reply as .wbc/vision/desk-<time>.json, and --replay PATH reads one again for free.
@@ -45,6 +49,7 @@ from wbc.config import ROOT  # noqa: E402
 from wbc.motion import sts  # noqa: E402
 from wbc.motion.joints import JOINTS, JointMap  # noqa: E402
 from wbc.motion.kinematics import load_chain, pose_to_task  # noqa: E402
+from wbc.motion.table import Surface  # noqa: E402
 from wbc.perception import camera, desk, sam_client  # noqa: E402
 from wbc.perception import tags as tagmap  # noqa: E402
 
@@ -278,6 +283,25 @@ def describe(n: int, f: desk.Found) -> str:
             f"{f.top_z:.0f} mm{far}")
 
 
+def cmd_table(args, cfg: dict, say=print) -> int:
+    """The table under the arm, fitted from the touched tags' heights, printed as config/robot.yaml's table."""
+    touched = desk.load_touched(args.file)
+    pan = load_chain(config.load_yaml("robot.yaml"), ROOT).frames(np.zeros(5))[1][0][0][:2]  # the base's pan axis
+    try:
+        surface = Surface.fit([p / 1000 for p in touched.values()], axis=pan)
+    except ValueError as e:
+        say(f"No table fitted: {e}.")
+        return 1
+    say(f"The {len(touched)} touched tags, the desk's height at each against the fitted line:")
+    for tag, p in sorted(touched.items()):
+        r = math.hypot(p[0] / 1000 - pan[0], p[1] / 1000 - pan[1])
+        say(f"  tag {tag}: {1000 * r:.0f} mm out, z {p[2]:+.1f} mm, {p[2] - 1000 * surface.line(r):+.1f} mm off")
+    c = surface.config()
+    say(f"\nThe desk is {c['at_base_mm']:+.1f} mm at the base's pan axis and falls {-c['slope_mm_per_m']:.1f} mm per m "
+        f"of reach. For config/robot.yaml:\n\ntable:\n" + "".join(f"  {k}: {v}\n" for k, v in c.items()).rstrip("\n"))
+    return 0
+
+
 def cmd_locate(args, cfg: dict) -> int:
     phrase = " ".join(args.what).strip()
     touched = desk.load_touched(args.file)
@@ -334,7 +358,7 @@ def cmd_locate(args, cfg: dict) -> int:
 
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    ap.add_argument("mode", choices=["tags", "touch", "check", "locate"])
+    ap.add_argument("mode", choices=["tags", "touch", "check", "locate", "table"])
     ap.add_argument("what", nargs="*", help="touch: tag ids (all of config/desk.yaml's when none); locate: the thing to "
                                             "find, such as cup")
     ap.add_argument("--port", help="touch: the arm's servo adapter, e.g. /dev/cu.usbmodem5B910297421")
@@ -347,7 +371,8 @@ def main(argv=None) -> int:
     args = ap.parse_args(argv)
     cfg = config.load_yaml("desk.yaml")
     try:
-        return {"tags": cmd_tags, "touch": cmd_touch, "check": cmd_check, "locate": cmd_locate}[args.mode](args, cfg)
+        return {"tags": cmd_tags, "touch": cmd_touch, "check": cmd_check, "locate": cmd_locate,
+                "table": cmd_table}[args.mode](args, cfg)
     except (RuntimeError, ValueError, FileNotFoundError) as e:  # no camera, too few tags in view, nothing touched yet
         print(e)
         return 1

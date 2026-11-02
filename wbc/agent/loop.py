@@ -74,9 +74,14 @@ class _RouterBase:
             self.hud.note(warning)
 
     def _run_calls(self, calls: list) -> list:
-        """Run one round of tool calls in parallel, so the arm can move while a coder call waits."""
+        """Run one round of tool calls in parallel, so the arm can move while a coder call waits. Of a round's arm
+        calls only the first goes to its tool, even if its arguments turn out wrong: the arm does one thing at a time,
+        in the order the router asked for them, and a later one may need the first to have happened (a put after a
+        pick)."""
         for c in calls:
             self.hud.call(self.toolbox.label(c.name), c.name, c.arguments)
+        arm = [c for c in calls if self.toolbox.label(c.name) == "arm"]
+        later = {id(c) for c in arm[1:]}
 
         def one(c: Call) -> dict:
             t0 = time.monotonic()
@@ -85,7 +90,12 @@ class _RouterBase:
             except json.JSONDecodeError as e:
                 result = {"ok": False, "error": f"arguments were not valid JSON: {e}"}
             else:
-                result = self.toolbox.dispatch(c.name, args)
+                if id(c) in later:
+                    result = {"ok": False, "error": f"not run yet: {arm[0].name} came first this round, and arm tools "
+                                                    f"run one at a time. Call {c.name} again once {arm[0].name} has "
+                                                    "returned, if it's still wanted"}
+                else:
+                    result = self.toolbox.dispatch(c.name, args)
             self.hud.result(self.toolbox.label(c.name), c.name, result, time.monotonic() - t0)
             return result
 

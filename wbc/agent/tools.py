@@ -20,6 +20,8 @@ from typing import Callable
 from . import coder, dut
 
 MAX_READ = 64_000
+SEEN_S = 60.0  # seconds a thing stays where locate found it: after that, or once the arm has moved it, locate again
+LOCATES = itertools.count(1)  # each locate's files get the next number, so two at once never share one
 
 
 @dataclass
@@ -90,28 +92,46 @@ class Bench:
     calibration_dir: str | None = None  # lerobot-calibrate's folder when it's another account's
     confirm: Callable | None = None  # asks the user and waits: True only for Enter at the keyboard
     hand: object = None  # wbc.motion.hand.Hand, opened at the first arm move
-    seen: dict = field(default_factory=dict)  # what locate last found, by name: wbc.motion.hand.Thing
+    seen: dict = field(default_factory=dict)  # what locate last found, by name: (wbc.motion.hand.Thing, when)
     sim_held: str | None = None  # --sim only: what the jaws pretend to hold
     arm_lock: threading.Lock = field(default_factory=threading.Lock)  # one arm move at a time, whatever the router
+    stopped: threading.Event = field(default_factory=threading.Event)  # the session is ending: no arm move starts
+    interrupted: threading.Event = field(default_factory=threading.Event)  # Ctrl-C: nothing's staged or flashed either
 
     def stop_arm(self) -> None:
-        """Cut every motor now, from any thread (Ctrl-C): a move running on a tool's thread stops at its next tick."""
+        """Ctrl-C: no arm move starts from now on, and every motor is cut, from any thread. A move running on a tool's
+        thread stops at its next tick, and a tool still on its way to the arm (locating, or opening the port) is
+        refused when it gets there. Nothing gets staged or flashed after it either."""
+        self.interrupted.set()
+        self.stopped.set()
         if self.hand is not None:
             self.hand.arm.cut()
 
-    def park(self) -> None:
-        """At exit: back to where the arm rested, then every motor off. It sat there unpowered before, so it stays
-        there when they let go."""
-        if self.hand is None:
-            return
-        arm = self.hand.arm
-        if len(arm.powered) == len(arm.joints.servos) and self.hand.rest is not None:
+    def can_go_home(self) -> bool:
+        """Whether park(home=True) would take the arm back to rest: it's open, every motor is on, and it has a rest."""
+        hand = self.hand
+        return hand is not None and len(hand.arm.powered) == len(hand.arm.joints.servos) and hand.rest is not None
+
+    def park(self, home: bool = True) -> None:
+        """At exit: no arm move starts from now on. Then, if the arm is open, back to where it rested when `home` (it
+        sat there unpowered before, so it stays there when the motors let go), and every motor off either way."""
+        self.stopped.set()
+        locked = self.arm_lock.acquire(timeout=5.0)  # a tool's move refuses at its next step and lets go
+        try:
+            if self.hand is None:
+                return
+            arm = self.hand.arm
             try:
-                with self.arm_lock:
+                if home and self.can_go_home():
+                    self.say("The arm is going back to rest, then its motors go off.")
                     self.hand.home()
             except Exception as e:  # noqa: BLE001 - parking is best effort: the motors go off either way
                 self.say(f"The arm couldn't go back to rest ({e}). Hold it: the motors are going off.")
-        arm.close()
+            finally:
+                arm.close()
+        finally:
+            if locked:
+                self.arm_lock.release()
 
 
 def key(thing: str) -> str:
@@ -144,7 +164,8 @@ def _locate_live(bench: Bench, thing: str, height_mm: float) -> dict:
     hits, view, seg = desk.locate(frame, fit, cfg, segment, thing, height_mm)
     out = bench.root / ".wbc" / "vision"
     out.mkdir(parents=True, exist_ok=True)
-    when = datetime.now().strftime("%Y%m%d-%H%M%S")
+    slug = "".join(c if c.isalnum() else "-" for c in key(thing))[:30]
+    when = f"{datetime.now():%Y%m%d-%H%M%S}-{next(LOCATES)}-{slug}"  # two locates at once mustn't share files
     photo = out / f"desk-{when}-photo.png"
     cv2.imwrite(str(photo), frame)
     (out / f"desk-{when}.json").write_text(json.dumps({"phrase": thing, "height_mm": height_mm, "photo": str(photo),
@@ -202,7 +223,7 @@ def build_toolbox(bench: Bench) -> Toolbox:
         if result.get("ok"):
             result["patch_id"] = next(patch_ids)
             bench.patches[result["patch_id"]] = result
-            if bench.models["coder"].get("auto_stage"):
+            if bench.models["coder"].get("auto_stage") and not bench.interrupted.is_set():  # not after Ctrl-C
                 # Staging a checked diff here saves the router a whole round spent calling propose_patch.
                 result["staged"] = coder.propose_patch(bench.root, result["diff"], result["why"])
         return result
@@ -285,6 +306,8 @@ def build_toolbox(bench: Bench) -> Toolbox:
         if bench.sim:
             bench.flashed_gpio = dut.firmware_gpio(bench.root)
             return {"ok": True, "sim": True, "seconds": 0.0, "firmware_gpio": bench.flashed_gpio}
+        if bench.interrupted.is_set():  # Ctrl-C
+            return {"ok": False, "error": "the session is ending, so nothing was flashed"}
         fw = bench.layout.get("firmware", {})
         result = dut.flash(bench.root, fw["upload_cmd"], dut.find_port(fw))
         if result.get("ok"):
@@ -312,14 +335,20 @@ def build_toolbox(bench: Bench) -> Toolbox:
         else:
             result = _locate_live(bench, thing, height_mm)
         if result["found"]:
-            bench.seen[key(thing)] = Thing.from_summary({**result["found"][0], "phrase": key(thing)})
+            bench.seen[key(thing)] = (Thing.from_summary({**result["found"][0], "phrase": key(thing)}),
+                                      time.monotonic())
+        else:
+            bench.seen.pop(key(thing), None)
         return {"ok": True, "thing": thing, **result}
 
     def target(thing: str, height_mm: float):
-        """(Thing, None) from what locate last found, locating it first if it hasn't; (None, error) when it can't."""
-        if key(thing) not in bench.seen and not locate(thing, height_mm)["found"]:
+        """(Thing, None) from what locate found, locating it again first if it hasn't in the last SEEN_S, or was
+        located at another height than one given now; (None, error) when it can't."""
+        last = bench.seen.get(key(thing))
+        stale = last is None or time.monotonic() - last[1] > SEEN_S or (height_mm > 0 and height_mm != last[0].height_mm)
+        if stale and not locate(thing, height_mm or (last[0].height_mm if last else 0))["found"]:
             return None, {"ok": False, "error": f"locate found no {thing} on the desk"}
-        return bench.seen[key(thing)], None
+        return bench.seen[key(thing)][0], None
 
     def move(question: str, run) -> dict:
         """run(hand) under the arm lock once the user presses Enter, powering the arm on first if it's off. The
@@ -330,19 +359,30 @@ def build_toolbox(bench: Bench) -> Toolbox:
             return {"ok": False, "error": "there's no keyboard to press Enter on, so the arm stays still"}
         from wbc.motion.arm import Refused, Tripped
 
-        with bench.arm_lock:
-            try:
-                hand = _open_hand(bench)
-                off = len(hand.arm.powered) < len(hand.arm.joints.servos)
-                if not bench.confirm(question + (" The motors come on first." if off else "")):
-                    return {"ok": False, "error": "the user didn't press Enter, so the arm didn't move"}
-                if off:
-                    hand.power_on()
-                return run(hand)
-            except Refused as e:
-                return {"ok": False, "error": f"refused, nothing moved for it: {e}"}
-            except Tripped as e:
-                return {"ok": False, "error": f"the motors were cut: {e}", "motors_cut": True}
+        ending = {"ok": False, "error": "the session is ending, so the arm didn't move"}
+        if not bench.arm_lock.acquire(blocking=False):  # two arm tools in one round would run in either order
+            return {"ok": False, "error": "another arm move is running: call arm tools one at a time"}
+        try:
+            if bench.stopped.is_set():
+                return ending
+            hand = _open_hand(bench)
+            if bench.stopped.is_set():
+                return ending
+            off = len(hand.arm.powered) < len(hand.arm.joints.servos)
+            answer = bench.confirm(question + (" The motors come on first." if off else ""))
+            if answer is None or bench.stopped.is_set():  # the keyboard closed: the session is ending
+                return ending
+            if not answer:
+                return {"ok": False, "error": "the user didn't press Enter, so the arm didn't move"}
+            if off:
+                hand.power_on()
+            return run(hand)
+        except Refused as e:
+            return {"ok": False, "error": f"refused, nothing moved for it: {e}"}
+        except Tripped as e:
+            return {"ok": False, "error": f"the motors were cut: {e}", "motors_cut": True}
+        finally:
+            bench.arm_lock.release()
 
     def check_over():
         """What pick_up and put_down ask over the thing before going down, while robot.yaml's hand.check_over is on."""
@@ -358,10 +398,17 @@ def build_toolbox(bench: Bench) -> Toolbox:
         if problem:
             return problem
         if bench.sim:
+            if bench.sim_held:
+                return {"ok": False, "error": f"refused, nothing moved for it: the jaws already hold the "
+                                              f"{bench.sim_held}: put it down first"}
             bench.sim_held = t.name
+            bench.seen.pop(key(thing), None)
             return {"ok": True, "sim": True, "holding": t.name, "x_mm": t.x, "y_mm": t.y}
-        return move(f"Pick up the {t.name} at x {t.x:.0f}, y {t.y:.0f} mm?",
-                    lambda hand: hand.pick_up(t, confirm=check_over()))
+        result = move(f"Pick up the {t.name} at x {t.x:.0f}, y {t.y:.0f} mm?",
+                      lambda hand: hand.pick_up(t, confirm=check_over()))
+        if result.get("ok") or "steps" in result or result.get("motors_cut"):  # the arm went to it
+            bench.seen.pop(key(thing), None)  # in the jaws now, or nudged trying: locate it again before the next move
+        return result
 
     @tb.register("put_down", (
         "Put what the arm holds down on or in a thing on the desk, such as a tray, where locate last found it "
