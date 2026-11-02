@@ -1,0 +1,1907 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Muse orb</title>
+<!-- The Muse orb, the HUD's face for the workbench copilot. One page with no build step and no packages: canvas, WebGL
+     and the saved Siri line (saved/siri-line.js, unchanged, only stretched). CREDITS.md beside it lists everything it
+     borrows; HOWTO.md says how to run it and drive it.
+     - The orb is a sphere of dots on a black sky, turning on the Siri line, which runs through its middle and out both
+       sides like a spear. The line is the brightest thing on the page. It's dimmed a little while it's inside the
+       sphere, a soft light shines from behind its waves with a little gold at its heart, and the voice light runs along
+       its waves.
+     - Each stage is its own sea on the sphere: a long swell at rest, a wind sea built by the voice while listening, a
+       swell from the spear's near end while speaking, a cross sea while Spark thinks, a long swell sweeping round the
+       spear while SAM looks at the board, a steep confused sea while Wonder writes code. The sea changes from one to
+       the next over a few seconds, the way weather does. Each is a handful of wave trains with deep water's dispersion,
+       ω² = g k, and Gerstner's orbits. The circle stays round: the waves carry the dots along the surface, bunching
+       them on the crests; a crest swells and brightens the dots it passes, a trough dims them, and the steepest crests
+       whitecap.
+     - The dots are clear light, the way the line glows: each its color laid on as light and edged in the line's liquid
+       metal, joined to its neighbours by faint white lines that stop at its edge. They part round the spear, more
+       while its waves are up. Their light streams outward like light through stained glass: a bloom and sun rays in
+       the dots' own colors (ported from PavelDoGreat's WebGL-Fluid-Simulation, MIT, notice at the end).
+     - The dots' colors come in sections by how squarely each faces you, rippling with the waves: face-on the deep
+       primary blue, then violet and the active model's color, and the contrast color (the primary's and the model's
+       hues averaged and turned half round) warming the rim. While it listens or talks, a voice glow in the orb's own
+       colors rises from the bottom through the dots. A dot a crest whitecaps or the voice reaches lights up as a
+       brighter, lighter version of its own color, not white.
+     - The model's name is white, edged in black liquid metal that glints in the model's colors, on a pane of glass;
+       "on Baseten" is bright green metal. The reply comes in a sentence at a time, white with a touch of light orange
+       and a glowing Meta-blue outline, in a glass bubble that grows to fit it, its outline faint like a shadow. The
+       metal is our own WebGL shader, after libraries.dev's Metal.
+     - The call bar at the bottom lists each model call with its time. A model comes in the moment it starts, its dot
+       a tiny orb in that model's colors, breathing until its time comes in.
+     - The typed way in is a text and file box with a beam of the orb's colors riding its border, a paperclip, and a
+       send button of live black metal that catches the beam and sinks in when pressed.
+     - The sky is a faint neural map: while the orb works, nodes fire in its colors and the signal runs along the links.
+     - Opened by the copilot (python -m wbc.agent --hud, at http://127.0.0.1:8766/), the page shows it live: each event
+       the agent sends over Server-Sent Events is a call to one of the functions in README.md, and the mocked Act 1
+       doesn't play. Opened on its own, it plays the mock.
+     Keys: A plays Act 1, H hides the controls, C opens the camera. -->
+<style>
+  :root { --ink: #f5f5f7; --muted: rgba(245, 245, 247, .62); --glass: rgba(255, 255, 255, .08); --edge: rgba(255, 255, 255, .18);
+          --m-warm: #ffd7b5; --m-cool: #95aed6; --m-tint: #c6b2e6; --m-pos: 0%; --b1: #3054C6; --b2: #E040FB; --b3: #62B4FF; --sheen: 50%; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; color: var(--ink); overflow: hidden;
+    font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Helvetica Neue", system-ui, sans-serif;
+    -webkit-font-smoothing: antialiased; }
+  /* black with a little depth: a faint blue haze round the orb over the dark falloff */
+  body { background: radial-gradient(55% 45% at 50% 30%, rgba(38, 62, 150, .1), rgba(22, 32, 86, .05) 45%, transparent 75%),
+                     radial-gradient(70% 70% at 50% 38%, #0c0e16 0%, #000 72%); }
+  #stars { position: fixed; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+  /* live liquid metal: a canvas over the words draws the name white, edged in black metal glinting in the model's
+     colors, and the reply white outlined in blue, where the page lays them out; the page's own text stays for
+     selecting and reading aloud, but invisible. The send button draws its own. Without WebGL the CSS metal below
+     stays */
+  #metalfx { position: fixed; left: 0; top: 0; z-index: 3; display: none; pointer-events: none; }
+  /* the live liquid glass on the panes behind the words: see liquidGlass */
+  #glassfx { position: fixed; inset: 0; width: 100%; height: 100%; z-index: 2; pointer-events: none; }
+  /* the dots' light (see the light section), laid over the orb and added to the page */
+  #lightfx { position: fixed; left: 0; top: 0; z-index: 1; pointer-events: none; mix-blend-mode: plus-lighter; }
+  body.live .metal, body.live .baseten { background: none; color: transparent; -webkit-text-fill-color: transparent; filter: none; }
+  /* the send button in live metal: it draws its body in black metal and its outline and arrow in silver, and presses
+     in without its outline moving */
+  .metalbtn { position: absolute; inset: 0; width: 100%; height: 100%; display: none; pointer-events: none; }
+  body.live .metalbtn { display: block; }
+  body.live #send { position: relative; background: #050608; overflow: hidden; }
+  body.live #send svg { visibility: hidden; }
+  body.live #send:active { transform: none; }
+  /* liquid metal, after libraries.dev's Liquid Metal (recreated in CSS): chrome whose reflections take the orb's colors; the script moves its sheen as the sphere turns */
+  .metal { background: linear-gradient(105deg, #8b929d 0%, #eef1f5 14%, #a2abb7 26%, var(--m-warm) 38%, #f4f6f9 47%,
+                                       var(--m-cool) 58%, #e9edf2 70%, var(--m-tint) 80%, #f5f7fa 90%, #8b929d 100%);
+           background-size: 300% 100%; background-position: var(--m-pos) 50%; -webkit-background-clip: text; background-clip: text;
+           color: transparent; -webkit-text-fill-color: transparent; filter: drop-shadow(0 1px 0 rgba(0, 0, 0, .35)); }
+  /* "on Baseten" in Baseten's green metal, its sheen moving with the orb like the other metal */
+  .baseten { background: linear-gradient(105deg, #1c8f4b 0%, #c6f7d8 18%, #31E572 34%, #0f6b36 48%, #e9fff1 62%, #31E572 78%,
+                                         #1c8f4b 100%);
+             background-size: 300% 100%; background-position: var(--m-pos) 50%; -webkit-background-clip: text; background-clip: text;
+             color: transparent; -webkit-text-fill-color: transparent; font-weight: 700; }
+  /* the typed way in: a text and file box with a beam of the orb's colors riding its border, after libraries.dev's
+     Border Beam (recreated in CSS) */
+  @property --beam { syntax: '<angle>'; initial-value: 0deg; inherits: true; }
+  #ask { position: fixed; z-index: 2; left: 50%; bottom: 7.5vh; transform: translateX(-50%); width: min(640px, 86vw);
+         display: flex; align-items: center; gap: 8px; padding: 8px; border-radius: 18px;
+         background: linear-gradient(105deg, transparent 38%, rgba(255, 255, 255, .06) 48%, transparent 58%) var(--sheen) 0 / 300% 100% no-repeat,
+                     rgba(14, 18, 34, .72); -webkit-backdrop-filter: blur(18px); backdrop-filter: blur(18px);
+         box-shadow: inset 0 0 0 1px rgba(255, 255, 255, .07), 0 12px 40px rgba(0, 0, 0, .35); }
+  #ask::before, #ask::after { content: ''; position: absolute; inset: 0; border-radius: inherit; pointer-events: none;
+         background: conic-gradient(from var(--beam), transparent 0deg 240deg, var(--b1) 285deg, var(--b2) 320deg, var(--b3) 345deg,
+                                    transparent 360deg); }
+  #ask::before { padding: 1.5px; -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+                 -webkit-mask-composite: xor; mask-composite: exclude; }
+  #ask::after { z-index: -1; inset: -2px; filter: blur(14px); opacity: .45; }
+  #ask input[type=text] { flex: 1; min-width: 0; background: none; border: 0; outline: 0; color: var(--ink); font: inherit;
+                          font-size: 16px; padding: 8px 4px; }
+  #ask input::placeholder { color: rgba(245, 245, 247, .4); }
+  #attach, #send { flex: none; width: 36px; height: 36px; border-radius: 12px; display: grid; place-items: center; cursor: pointer;
+                   color: rgba(245, 245, 247, .75); background: rgba(255, 255, 255, .06); border: 0; }
+  /* the send button in dark gunmetal liquid metal. The script sets the beam's light (--refl, and a white core --spec)
+     and where it falls (--rx --ry): the side of the button facing the beam's head */
+  #send { color: #e9edf2;
+          background: radial-gradient(38% 38% at var(--rx, 50%) var(--ry, 0%), var(--spec, transparent) 0%, transparent 100%),
+                      radial-gradient(95% 95% at var(--rx, 50%) var(--ry, 0%), var(--refl, transparent) 0%, transparent 62%),
+                      linear-gradient(160deg, #6b7380 0%, #2b3038 36%, #59616d 54%, #1b1f26 78%, #3a414c 100%);
+          box-shadow: inset 0 1px 0 rgba(255, 255, 255, .22), inset 0 -1px 0 rgba(0, 0, 0, .45), 0 2px 6px rgba(0, 0, 0, .45); }
+  /* the paperclip keeps its dark glass, with a small reflection of the beam */
+  #attach { background: linear-gradient(105deg, transparent 38%, rgba(255, 255, 255, .08) 48%, transparent 58%) var(--sheen) 0 / 300% 100% no-repeat, radial-gradient(90% 90% at var(--rx, 50%) var(--ry, 0%), var(--refl, transparent) 0%, transparent 68%), rgba(255, 255, 255, .06); }
+  #attach:hover { background: linear-gradient(105deg, transparent 38%, rgba(255, 255, 255, .08) 48%, transparent 58%) var(--sheen) 0 / 300% 100% no-repeat, radial-gradient(90% 90% at var(--rx, 50%) var(--ry, 0%), var(--refl, transparent) 0%, transparent 68%), rgba(255, 255, 255, .1); }
+  #attach:active, #send:active { transform: scale(.95); }
+  #chip { flex: none; max-width: 30%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px;
+          color: var(--ink); background: rgba(255, 255, 255, .08); border-radius: 8px; padding: 4px 8px; }
+  #grain { position: fixed; inset: 0; pointer-events: none; opacity: .08;
+    background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='180' height='180'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='2' stitchTiles='stitch'/></filter><rect width='100%' height='100%' filter='url(%23n)'/></svg>"); }
+  main { position: relative; z-index: 1; height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center;
+         padding-bottom: 12vh; }
+  #orb { width: 100vw; height: 56vh; display: block; }
+  #model { font-size: clamp(20px, 2.6vh, 30px); font-weight: 600; letter-spacing: -0.01em; }
+  /* the model's name and the reply sit on panes of glass with a soft top sheen, so their metal has something to stand
+     against; the reply's is a bubble that grows to fit each sentence as it comes in (see wrapReply) */
+  #model { position: relative; isolation: isolate; padding: .16em .8em .22em; }
+  #model::before { content: ''; position: absolute; inset: 0; z-index: -1; border-radius: 999px; }
+  #bubble { position: absolute; left: 0; top: 0; z-index: -1; width: 0; height: 0; opacity: 0; pointer-events: none; }
+  /* the reply bubble's outline: a faint, soft semi-translucent gradient, more a shadow than a line: barely light at the
+     top left where the lamp is, fading round the sides into a soft dark edge */
+  #bubble::before { content: ''; position: absolute; inset: -1px; border-radius: inherit; padding: 1.5px; pointer-events: none;
+                    background: linear-gradient(115deg, rgba(255, 255, 255, .16), rgba(255, 255, 255, .04) 40%, rgba(0, 0, 0, .22) 70%,
+                                                rgba(0, 0, 0, .34)); filter: blur(.5px);
+                    -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0); -webkit-mask-composite: xor;
+                    mask-composite: exclude; }
+  #model::before, #bubble { background: linear-gradient(105deg, transparent 38%, rgba(255, 255, 255, .08) 48%, transparent 58%) var(--sheen) 0 / 300% 100% no-repeat,
+                                        linear-gradient(180deg, rgba(255, 255, 255, .09), rgba(255, 255, 255, .02) 55%, rgba(255, 255, 255, .045));
+                            border: 1px solid rgba(255, 255, 255, .17);
+                            -webkit-backdrop-filter: blur(18px) saturate(160%); backdrop-filter: blur(18px) saturate(160%);
+                            box-shadow: inset 0 1px 0 rgba(255, 255, 255, .3), inset 0 -1px 0 rgba(0, 0, 0, .3), inset 0 0 14px rgba(255, 255, 255, .05),
+                                        0 10px 30px rgba(0, 0, 0, .45); }
+  #bubble { border-color: transparent;
+            box-shadow: inset 0 1px 0 rgba(255, 255, 255, .1), inset 0 -1px 0 rgba(0, 0, 0, .3), inset 0 0 14px rgba(255, 255, 255, .03),
+                        0 10px 30px rgba(0, 0, 0, .45); }
+  #role { font-size: clamp(14px, 1.8vh, 20px); color: var(--muted); margin-top: 2px; }
+  #you { font-size: clamp(15px, 2vh, 22px); color: var(--muted); margin-top: 2.4vh; min-height: 1.5em;
+         max-width: 80vw; text-align: center; }
+  #say { font-size: clamp(24px, 3.6vh, 44px); font-weight: 500; letter-spacing: -0.015em; line-height: 1.25;
+         margin-top: .6vh; min-height: 2.6em; max-width: min(84vw, 1100px); text-align: center; }
+  #say b { font-weight: 700; }
+  /* each sentence of the reply fades in quickly, one after another */
+  #say .arrive { opacity: 0; animation: arrive .3s ease-out forwards; }
+  @keyframes arrive { to { opacity: 1; } }
+  #calls { position: fixed; z-index: 1; left: 0; right: 0; bottom: 2.2vh; display: flex; justify-content: center; flex-wrap: wrap;
+           gap: 8px 22px; padding: 0 40px; font-size: clamp(14px, 1.8vh, 20px); color: var(--muted); }
+  #calls span { display: inline-flex; align-items: center; gap: 8px; animation: rise .5s ease both; }
+  #calls i { width: 11px; height: 11px; border-radius: 50%; }
+  /* a call still running: its dot breathes until its time comes in */
+  #calls span.pending i { animation: breathe 1.2s ease-in-out infinite; }
+  @keyframes breathe { 50% { transform: scale(.72); opacity: .55; } }
+  @keyframes rise { from { opacity: 0; transform: translateY(6px); } }
+  .glass { background: linear-gradient(105deg, transparent 38%, rgba(255, 255, 255, .1) 48%, transparent 58%) var(--sheen) 0 / 300% 100% no-repeat, var(--glass); border: 1px solid var(--edge); color: var(--ink);
+           -webkit-backdrop-filter: blur(20px) saturate(160%); backdrop-filter: blur(20px) saturate(160%);
+           box-shadow: inset 0 1px 0 rgba(255, 255, 255, .28), 0 10px 30px rgba(0, 0, 0, .3); }
+  #cam { position: fixed; z-index: 2; top: 22px; right: 26px; font: inherit; font-size: 15px; border-radius: 980px;
+         padding: 8px 18px; cursor: pointer; }
+  #cam:active, #dev button:active { transform: scale(.96); }
+  #panel { position: fixed; z-index: 2; top: 72px; right: 26px; width: min(40vw, 640px); aspect-ratio: 16 / 9; border-radius: 22px;
+           overflow: hidden; display: grid; place-items: center; color: var(--muted); font-size: 15px;
+           opacity: 0; transform: scale(.94); transform-origin: top right; filter: blur(8px); pointer-events: none;
+           transition: opacity .25s, transform .35s cubic-bezier(.2, .8, .2, 1), filter .35s; }
+  #panel.open { opacity: 1; transform: none; filter: none; pointer-events: auto; }
+  #panel video { width: 100%; height: 100%; object-fit: cover; }
+  #dev { position: fixed; z-index: 2; top: 18px; left: 18px; display: flex; flex-wrap: wrap; gap: 6px; max-width: 56vw;
+         opacity: .55; transition: opacity .2s; }
+  #dev:hover { opacity: 1; }
+  #dev button { font: inherit; font-size: 12px; border-radius: 8px; padding: 4px 9px; cursor: pointer; }
+  #dev button.on { border-color: rgba(255, 255, 255, .7); }
+  #dev .gap { width: 10px; }
+  body.clean #dev { display: none; }
+  @media (prefers-reduced-motion: reduce) {
+    #say .arrive { animation: none; opacity: 1; }
+    #calls span, #calls span.pending i { animation: none; }
+    #panel { transform: none; filter: none; transition: opacity .2s; }
+  }
+</style>
+</head>
+<body>
+<canvas id="stars"></canvas>
+<div id="grain"></div>
+<button id="cam" class="glass">Camera</button>
+<div id="panel" class="glass">Camera feed</div>
+<main>
+  <canvas id="orb"></canvas>
+  <div id="model" class="metal"></div>
+  <div id="role"></div>
+  <div id="you"></div>
+  <div id="bubble"></div>
+  <div id="say"></div>
+</main>
+<canvas id="lightfx"></canvas>
+<form id="ask" autocomplete="off">
+  <label id="attach" title="Add a file" aria-label="Add a file">
+    <input type="file" id="file" hidden>
+    <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"
+         stroke-linejoin="round" aria-hidden="true"><path d="M21 11.5l-8.6 8.6a5.5 5.5 0 0 1-7.8-7.8l8.6-8.6a3.7 3.7 0 0 1 5.2 5.2l-8.6 8.6a1.8 1.8 0 0 1-2.6-2.6l7.9-7.9"/></svg>
+  </label>
+  <input id="text" type="text" placeholder="Ask Muse, or add a file" aria-label="Ask Muse">
+  <span id="chip" hidden></span>
+  <button id="send" type="submit" aria-label="Send">
+    <canvas id="sendfx" class="metalbtn"></canvas>
+    <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"
+         stroke-linejoin="round" aria-hidden="true"><path d="M12 19V5M5 12l7-7 7 7"/></svg>
+  </button>
+</form>
+<div id="calls"></div>
+<div id="dev"></div>
+<canvas id="glassfx"></canvas>
+<canvas id="metalfx"></canvas>
+<script src="saved/siri-line.js"></script>
+<script>
+const MODELS = {
+  transcribe: { name: 'Voice Transcribe', short: 'Transcribe', role: 'hearing · Meta', color: '#FFFFFF' },
+  spark: { name: 'Muse Spark 1.3', short: 'Spark', role: 'router · Meta', color: '#E040FB' },
+  sam: { name: 'SAM 3.1', short: 'SAM', role: 'board reader · Meta', color: '#FF6B6B' },
+  wonder: { name: 'Muse Wonder 1.0', short: 'Wonder', role: 'coder · Meta', color: '#FF8A1F' },
+  open: { name: 'Muse Spark Open', short: 'Spark Open', role: 'open weights · <span class="baseten">on Baseten</span>', color: '#31E572' },
+};
+// the orb's colors: the primary blue (from the brand swatch), the active model's, and Muse's lighter blue (a stand-in)
+const NAVY = '#3054C6', MUSE = '#62B4FF';
+// wave: how much the voice lifts the line; voice: whether speech drives it. Listening, the line is the user's voice,
+// as tall as Muse's when it speaks
+const STATES = {
+  idle: { wave: 0.05, voice: 0 },
+  listening: { wave: 1, voice: 1 },
+  thinking: { wave: 0.12, voice: 0 },
+  speaking: { wave: 1, voice: 1 },
+};
+// the dots are always the one sea; what changes with the state is the sea state (see SEA_STATES), and this says which
+// goes with what the orb is doing
+function seaFor(state, model) {
+  if (state === 'thinking') return model === 'sam' ? 'sam' : model === 'wonder' ? 'wonder' : 'spark';
+  return state;
+}
+// the Siri line's angle: tilted on screen, and turned so its right end comes toward you. SPEAR stretches it
+// lengthwise so it runs through and out both sides like a spear; LIFT makes it a little taller and heavier
+// (LIFT is 15% less than the 1.25 it was tuned at, so the line is less pronounced)
+const ROLL = -0.32, YAW = 0.6, SPEAR = 1.6, LIFT = 1.25 * .85;
+const REDUCE = matchMedia('(prefers-reduced-motion: reduce)').matches;
+// opened by the copilot: "/" on its server sends the page here with ?live, and its events drive the page (at the end)
+const LIVE = new URLSearchParams(location.search).has('live');
+
+const TAU = Math.PI * 2;
+const hex = h => [1, 3, 5].map(i => parseInt(h.slice(i, i + 2), 16));
+const mix = (a, b, t) => a.map((v, i) => v + (b[i] - v) * t);
+const rgba = (c, a) => `rgba(${c[0] | 0},${c[1] | 0},${c[2] | 0},${a})`;
+const smooth = (a, b, v) => { const k = Math.min(1, Math.max(0, (v - a) / (b - a))); return k * k * (3 - 2 * k); };
+const WHITE = [255, 255, 255], NAVY_RGB = hex(NAVY), MUSE_RGB = hex(MUSE);
+const $ = id => document.getElementById(id);
+
+const canvas = $('orb'), g = canvas.getContext('2d'), sky = $('stars'), sk = sky.getContext('2d');
+// the soft light behind the waves, drawn at a quarter size, then blurred
+const back = document.createElement('canvas'), bk = back.getContext('2d'), BACK = 4;
+// the Siri line and its light, drawn into a layer of their own so the part inside the sphere can be dimmed
+const LINE_LAYER = document.createElement('canvas'), lc = LINE_LAYER.getContext('2d');
+// the coins past the rim, drawn at half size and blurred: depth of field
+const soft = document.createElement('canvas'), sf = soft.getContext('2d');
+const blurred = document.createElement('canvas'), sb = blurred.getContext('2d');
+let W = 0, H = 0, DPR = 1;
+function resize() {
+  DPR = window.devicePixelRatio || 1;
+  const r = canvas.getBoundingClientRect();
+  W = canvas.width = Math.round(r.width * DPR);
+  H = canvas.height = Math.round(r.height * DPR);
+  sky.width = Math.round(innerWidth * DPR);
+  sky.height = Math.round(innerHeight * DPR);
+  back.width = Math.ceil(W / BACK);
+  back.height = Math.ceil(H / BACK);
+  LINE_LAYER.width = W;
+  LINE_LAYER.height = H;
+  soft.width = blurred.width = Math.ceil(W / 2);
+  soft.height = blurred.height = Math.ceil(H / 2);
+}
+addEventListener('resize', resize);
+resize();
+
+// --- the dots, on thinking-orbs' lattice (adapted, notice at the end)
+
+const hashD = (i, s) => { const x = Math.sin(i * 127.1 + s * 311.7) * 43758.5453; return x - Math.floor(x); };
+function angleDelta(a, b) {
+  const d = (a - b) % TAU;
+  return d > Math.PI ? d - TAU : d < -Math.PI ? d + TAU : d;
+}
+
+
+// the dots: thinking-orbs' lat/long lattice on the unit sphere. at is where a dot is drawn now:
+// [x, y, z, size, lit, alpha] with x right, y up, z toward you, the sphere's radius 1
+const RINGS = 21, DOTS = [];
+for (let li = 0; li <= RINGS; li++) {
+  const cl = Math.cos(-Math.PI / 2 + li / RINGS * Math.PI);
+  const n = Math.max(1, Math.round(Math.abs(cl) * 55));
+  for (let lj = 0; lj < n; lj++) {
+    DOTS.push({ li, lon: lj / n * TAU, at: [0, 0, 1, 1, 0, 1] });
+  }
+}
+
+// the data grid: each dot links to the next one round its latitude ring and to the nearest one in the ring above
+const LINKS = [];
+{
+  const rings = [];
+  DOTS.forEach((d, i) => (rings[d.li] = rings[d.li] || []).push(i));
+  rings.forEach((ring, li) => ring.forEach((i, j) => {
+    if (ring.length > 1) LINKS.push([i, ring[(j + 1) % ring.length]]);
+    const up = rings[li + 1];
+    if (!up) return;
+    let best = up[0], gap = Infinity;
+    for (const k of up) {
+      const dd = Math.abs(angleDelta(DOTS[k].lon, DOTS[i].lon));
+      if (dd < gap) { gap = dd; best = k; }
+    }
+    LINKS.push([i, best]);
+  }));
+}
+
+// each dot's neighbours on the lattice (next and last round its ring, nearest above and below), to find which way the
+// surface faces there
+const AROUND = [];
+{
+  const rings = [];
+  DOTS.forEach((d, i) => (rings[d.li] = rings[d.li] || []).push(i));
+  const nearest = (ring, lon) => ring.reduce((b, k) => Math.abs(angleDelta(DOTS[k].lon, lon)) < Math.abs(angleDelta(DOTS[b].lon, lon)) ? k : b, ring[0]);
+  rings.forEach((ring, li) => ring.forEach((i, j) => {
+    const n = ring.length, up = rings[li + 1], down = rings[li - 1];
+    AROUND[i] = [ring[(j + 1) % n], ring[(j - 1 + n) % n], up ? nearest(up, DOTS[i].lon) : i, down ? nearest(down, DOTS[i].lon) : i];
+  }));
+}
+// the spear's axis in view space (x right, y up, z toward you), through the middle, and two directions across it
+const AXIS = [Math.cos(YAW) * Math.cos(ROLL), -Math.cos(YAW) * Math.sin(ROLL), Math.sin(YAW)];
+const E1 = (() => { const l = Math.hypot(AXIS[0], AXIS[2]); return [-AXIS[2] / l, 0, AXIS[0] / l]; })();
+const E2 = [E1[1] * AXIS[2] - E1[2] * AXIS[1], E1[2] * AXIS[0] - E1[0] * AXIS[2], E1[0] * AXIS[1] - E1[1] * AXIS[0]];
+// the dots make room for the spear and its waves: they part round its axis by room(along), which swells where the
+// line's lobes are tall and eases after them, so the dots part round the waves as they rise and fall. It's smooth, so
+// a dot near the axis moves out most and one far from it barely moves, and it fades out past the sphere's ends
+function clear(x, y, z, room) {
+  const along = x * AXIS[0] + y * AXIS[1] + z * AXIS[2];
+  const px = x - along * AXIS[0], py = y - along * AXIS[1], pz = z - along * AXIS[2], dist = Math.hypot(px, py, pz);
+  const w = 1 - Math.min(1, Math.max(0, (Math.abs(along) - .85) / .25));
+  if (w <= 0 || dist < 1e-6) return [x, y, z];
+  const r = room(along), k = (dist + (Math.sqrt(dist * dist + r * r) - dist) * w) / dist;
+  return [along * AXIS[0] + px * k, along * AXIS[1] + py * k, along * AXIS[2] + pz * k];
+}
+// the sphere turns on the spear as its axis: a dot's latitude runs along the spear and its longitude round it. The
+// pace eases toward the sea state's
+const view = { yaw: 0, spin: .06 };
+
+// --- the seas
+
+const latOf = d => -Math.PI / 2 + d.li / RINGS * Math.PI;
+// a point on the turning sphere: lat along the spear (its near end, coming toward you, at pi/2), lon round it
+function onSphere(lat, lon, r) {
+  const cl = Math.cos(lat) * r, sl = Math.sin(lat) * r, c = Math.cos(lon), s = Math.sin(lon);
+  return [0, 1, 2].map(j => E1[j] * cl * c + AXIS[j] * sl + E2[j] * cl * s);
+}
+// deep water: a wave's angular frequency from its wavenumber
+const dispersion = (g, k) => Math.sqrt(g * k);
+// the voice over the last five seconds, so a crest set off by what was said a moment ago still carries it
+const ECHO = new Float32Array(300), ECHO_HZ = 60;
+let echoAt = 0, echoTime = 0, echoLevel = 0;
+function remember(dt) {
+  echoLevel += (level - echoLevel) * (1 - Math.exp(-dt * 3));
+  for (echoTime += dt; echoTime >= 1 / ECHO_HZ; echoTime -= 1 / ECHO_HZ) ECHO[echoAt = (echoAt + 1) % ECHO.length] = echoLevel;
+}
+function voiceAgo(sec) {
+  const n = Math.min(ECHO.length - 2, Math.max(0, sec * ECHO_HZ)), i = Math.floor(n), f = n - i, L = ECHO.length;
+  return ECHO[(echoAt - i + L) % L] * (1 - f) + ECHO[(echoAt - i - 1 + L) % L] * f;
+}
+
+// the sea: every state is the same sphere of water in a different sea state, and it changes from one to the next the
+// way weather does, the new waves building as the old ones die down over a few seconds, so nothing jumps. A sea state
+// is a handful of wave trains with spread headings and lengths and random phases. Each crosses the sphere as a helix
+// (a whole number of waves round the spear, so it joins up), with deep water's dispersion and Gerstner's orbits, and
+// its height drifts slowly, so the sea rises and falls in groups. Where crests stack up steep, the dots at the top
+// light up like whitecaps
+const SEA_STATES = {
+  // idle: a long, low swell from the spear's near end, breathing slowly
+  idle: { n: 5, k: 3, spread: .7, heading: Math.PI, amp: .026, chop: .35, g: .45, spin: .06 },
+  // listening: the voice is the wind; the sea builds with it, its waves crossing from every side
+  listening: { n: 7, k: 4.6, spread: 2.6, heading: Math.PI, amp: .036, chop: .6, g: 1.3, spin: .15, voice: true },
+  // speaking: Muse's voice as a swell rolling from the spear's near end to its far end. Each crest keeps the height it
+  // set off with, so what was said rolls across in one piece
+  speaking: { n: 6, k: 3.4, spread: .5, heading: Math.PI, amp: .052, chop: .6, g: 1.1, spin: .15, voice: true },
+  // Spark thinking: a cross sea, two swells meeting at an angle, so peaks rise and fall where they cross
+  spark: { n: 8, k: 4, spread: .35, heading: Math.PI, cross: 1.9, amp: .042, chop: .5, g: 1, spin: .3 },
+  // SAM searching: a long swell sweeping round the spear, like the scan it replaces
+  sam: { n: 5, k: 3, spread: .35, heading: Math.PI / 2, amp: .05, chop: .45, g: 1.3, spin: .3 },
+  // Wonder composing: a steep, confused sea whose crests fold over and whitecap
+  wonder: { n: 8, k: 5.2, spread: 1.6, heading: Math.PI, amp: .046, chop: .9, g: 1.5, spin: .1 },
+};
+Object.entries(SEA_STATES).forEach(([name, s], si) => {
+  s.weight = name === 'idle' ? 1 : 0;
+  s.trains = Array.from({ length: s.n }, (_, i) => {
+    const r = .7 + .6 * hashD(i, 61.3 + si), k = s.k * r;
+    const heading = s.heading + (s.cross ? (i % 2 ? .5 : -.5) * s.cross : 0) + (hashD(i, 62.9 + si) - .5) * s.spread;
+    return { kl: k * Math.cos(heading), m: Math.round(k * Math.sin(heading)), k, w: dispersion(s.g, k),
+             a: Math.pow(r, -1.2) * Math.exp(-.35 / (r * r)), ph: hashD(i, 63.7 + si) * TAU, gp: hashD(i, 64.1 + si) * TAU,
+             gs: .1 + .12 * hashD(i, 65.3 + si) };
+  });
+  const norm = Math.sqrt(s.trains.reduce((q, tr) => q + tr.a * tr.a, 0));
+  for (const tr of s.trains) tr.a *= s.amp * Math.SQRT2 / norm;
+});
+// where the sea has a dot now: its latitude and longitude, its distance from the middle, and how steep the water is
+// there (for the whitecaps)
+function seaAt(d, t) {
+  const lat0 = latOf(d), cl = Math.max(.12, Math.cos(lat0)), far = Math.PI / 2 - lat0;
+  let heave = 0, dLat = 0, dLon = 0, crest = 0;
+  for (const s of Object.values(SEA_STATES)) {
+    if (s.weight < .002) continue;
+    const N = s.trains.length;
+    for (const tr of s.trains) {
+      // how much of its full height the train has now: its slow drift, and for a voice sea the voice when it set off
+      let q = s.weight * (.65 + .35 * Math.sin(t * tr.gs + tr.gp));
+      if (s.voice) q *= .2 + .8 * voiceAgo(far * tr.k / tr.w);
+      const ka = tr.m / cl, k = Math.hypot(tr.kl, ka) || 1e-6, th = tr.kl * lat0 + tr.m * d.lon - tr.w * t + tr.ph;
+      const sn = Math.sin(th), cs = Math.cos(th), h = s.chop * q / (k * N);
+      heave += tr.a * q * cs;
+      dLat -= tr.kl / k * h * sn;
+      dLon -= ka / k * h * sn / cl;
+      crest += s.chop * q / N * cs;
+    }
+  }
+  return [lat0 + dLat, d.lon - view.yaw + dLon, .95 * (1 + heave), crest];
+}
+// where the sea puts each dot: [x, y, z, size, lit, alpha]. The sphere stays round: the waves carry the dots only
+// along the surface (Gerstner's orbits, so they bunch on the crests and spread in the troughs), and their height shows
+// as the dots swelling and brightening, not as a bulge. It keeps the wave's height and steepness at the dot for the
+// light (in frame)
+const PLACE = {
+  sea(d) {
+    const [lat, lon, r, crest] = seaAt(d, clock), p = onSphere(lat, lon, .95), depth = (p[2] + 1) / 2;
+    d.heave = r / .95 - 1;
+    d.crest = crest;
+    return [p[0], p[1], p[2], (.6 + 1.7 * depth) * (1 + 3 * d.heave), 0, 1];
+  },
+};
+// --- the black background's sky: very light stars with a little depth. Each has a depth, z: most are far, so small,
+// faint and a touch bluer; a few near ones are larger and brighter, with a faint halo. The field drifts very slowly to
+// the left, the near stars faster than the far ones, so it reads as space rather than a flat sheet
+
+const STARS = Array.from({ length: 260 }, (_, i) => {
+  const z = hashD(i, 28.3) ** 2.2;
+  return { x: hashD(i, 21.1), y: hashD(i, 22.7), z, r: .3 + .55 * z + .6 * z ** 4, a: .12 + .55 * z + .1 * hashD(i, 24.9),
+           tw: hashD(i, 25.5) < .18 ? .5 + 1.2 * hashD(i, 26.1) : 0, ph: hashD(i, 27.7) * TAU };
+});
+const FAR_STAR = [170, 186, 255], NEAR_STAR = [236, 241, 255];
+function drawStars(t) {
+  const W2 = sky.width, H2 = sky.height;
+  sk.clearRect(0, 0, W2, H2);
+  for (const s of STARS) {
+    const x = ((s.x - t * (s.z > NODE_Z ? NODE_DRIFT : .0004 + .0026 * s.z)) % 1 + 1) % 1 * W2, y = s.y * H2, r = s.r * DPR;
+    const a = s.a * (s.tw ? .55 + .45 * Math.sin(t * s.tw + s.ph) : 1);
+    sk.fillStyle = rgba(mix(FAR_STAR, NEAR_STAR, s.z), 1);
+    if (s.z > .8) {
+      sk.globalAlpha = a * .12;
+      sk.beginPath();
+      sk.arc(x, y, r * 4, 0, TAU);
+      sk.fill();
+    }
+    sk.globalAlpha = a;
+    sk.beginPath();
+    sk.arc(x, y, r, 0, TAU);
+    sk.fill();
+  }
+  sk.globalAlpha = 1;
+  neuralSky(t);
+}
+
+// the sky's neural map: the nearer stars are nodes, each linked by straight lines to its two nearest, and they drift
+// together so the links hold. While the orb works, nodes fire in its colors (60-30-10, so mostly the primary blue) and
+// the signal runs along their links, which glow dimly as it passes, like an aurora, and fade slowly; a node it reaches
+// may fire in turn. At rest the map is all but invisible
+const NODE_Z = .42, NODE_DRIFT = .002;
+const NODES = STARS.flatMap((s, i) => s.z > NODE_Z ? [i] : []), SKY_LINKS = [];
+for (const i of NODES) {
+  const near = NODES.filter(j => j !== i).map(j => [j, Math.hypot((STARS[j].x - STARS[i].x) * 1.6, STARS[j].y - STARS[i].y)]).sort((a, b) => a[1] - b[1]);
+  for (const [j] of near.slice(0, 2)) if (!SKY_LINKS.some(([a, b]) => a === j && b === i)) SKY_LINKS.push([i, j]);
+}
+const sparks = [], firing = new Map();
+let skyBusy = 0, skyLast = 0;
+function fire(i, col, depth, t) {
+  firing.set(i, { k: 1, col });
+  if (depth > 0) for (const [a, b] of SKY_LINKS) {
+    const j = a === i ? b : b === i ? a : -1;
+    if (j >= 0 && Math.random() < .55) sparks.push({ i, j, col, depth: depth - 1, t0: t + Math.random() * .25 });
+  }
+}
+function neuralSky(t) {
+  const dt = Math.min(.1, Math.max(0, t - skyLast)), want = state === 'thinking' ? 1 : state === 'idle' ? .03 : .45;
+  skyLast = t;
+  skyBusy += (want - skyBusy) * (1 - Math.exp(-dt * 1.2));
+  // new signals start at random, about 1.6 a second while it thinks, fewer while it listens or talks
+  if (Math.random() < dt * 1.6 * skyBusy) {
+    const r = Math.random();
+    fire(NODES[Math.floor(Math.random() * NODES.length)], r < .6 ? beamRGB[0] : r < .9 ? cur.color : beamRGB[2], 3, t);
+  }
+  const W2 = sky.width, H2 = sky.height, at = i => [((STARS[i].x - t * NODE_DRIFT) % 1 + 1) % 1 * W2, STARS[i].y * H2];
+  sk.save();
+  sk.globalCompositeOperation = 'lighter';
+  sk.lineCap = 'round';
+  for (let n = sparks.length - 1; n >= 0; n--) {
+    const s = sparks[n], age = t - s.t0;
+    if (age > 6) { sparks.splice(n, 1); continue; }
+    if (age >= .6 && !s.done) { s.done = true; fire(s.j, s.col, s.depth, t); }
+    if (age <= 0) continue;
+    const [x1, y1] = at(s.i);
+    let [x2, y2] = at(s.j);
+    if (Math.abs(x2 - x1) > W2 / 2) x2 -= Math.sign(x2 - x1) * W2;
+    const run = Math.min(1, age / .6), k = (age < .6 ? 1 : Math.exp(-(age - .6) / 1.4)) * (.8 + .2 * Math.sin(t * 2.3 + n * 1.7));
+    sk.strokeStyle = rgba(s.col, 1);
+    for (const [w, a] of [[7, .05], [2.4, .1], [.7, .22]]) {
+      sk.globalAlpha = a * k;
+      sk.lineWidth = w * DPR;
+      sk.beginPath();
+      sk.moveTo(x1, y1);
+      sk.lineTo(x1 + (x2 - x1) * run, y1 + (y2 - y1) * run);
+      sk.stroke();
+    }
+  }
+  sk.globalAlpha = 1;
+  for (const [i, f] of firing) {
+    f.k *= Math.exp(-dt / .9);
+    if (f.k < .01) { firing.delete(i); continue; }
+    const [x, y] = at(i), r = 7 * DPR, halo = sk.createRadialGradient(x, y, 0, x, y, r);
+    halo.addColorStop(0, rgba(mix(f.col, WHITE, .35), .55 * f.k));
+    halo.addColorStop(1, rgba(f.col, 0));
+    sk.fillStyle = halo;
+    sk.beginPath();
+    sk.arc(x, y, r, 0, TAU);
+    sk.fill();
+  }
+  sk.restore();
+}
+
+// --- the voice glow, after libraries.dev's Voice Glow (recreated, not their code): a soft light in its
+// colorful palette that rises from the bottom with the voice, drifting from color to color across it
+
+// the voice light's colors: the orb's own, the primary blue, the model's color, Muse blue and the model's color again
+// lightened, kept up to date with the model (see dress)
+let VOICE = [NAVY_RGB, NAVY_RGB, MUSE_RGB, MUSE_RGB];
+const GREEN = hex(MODELS.open.color), SILVER = [232, 238, 247];
+
+// OKLCH, a color space whose hue angles are spaced the way the eye sees them, for the contrast color
+const lin = v => v <= .04045 ? v / 12.92 : ((v + .055) / 1.055) ** 2.4;
+const gam = v => v <= .0031308 ? 12.92 * v : 1.055 * v ** (1 / 2.4) - .055;
+function toOklch(rgb) {
+  const [r, g, b] = rgb.map(v => lin(v / 255));
+  const l = Math.cbrt(.4122214708 * r + .5363325363 * g + .0514459929 * b);
+  const m = Math.cbrt(.2119034982 * r + .6806995451 * g + .1073969566 * b);
+  const s = Math.cbrt(.0883024619 * r + .2817188376 * g + .6299787005 * b);
+  const A = 1.9779984951 * l - 2.428592205 * m + .4505937099 * s, B = .0259040371 * l + .7827717662 * m - .808675766 * s;
+  return [.2104542553 * l + .793617785 * m - .0040720468 * s, Math.hypot(A, B), Math.atan2(B, A)];
+}
+function fromOklch(L, C, H) {
+  const A = C * Math.cos(H), B = C * Math.sin(H);
+  const l = (L + .3963377774 * A + .2158037573 * B) ** 3, m = (L - .1055613458 * A - .0638541728 * B) ** 3;
+  const s = (L - .0894841775 * A - 1.291485548 * B) ** 3;
+  return [4.0767416621 * l - 3.3077115913 * m + .2309699292 * s, -1.2684380046 * l + 2.6097574011 * m - .3413193965 * s,
+          -.0041960863 * l - .7034186147 * m + 1.707614701 * s].map(v => Math.round(Math.max(0, Math.min(1, gam(Math.max(0, v)))) * 255));
+}
+
+
+// the contrast color: the hues of the primary blue and the active model as angles, averaged 60:30, turned half a
+// circle. When the two are already near opposite (Wonder's orange, over 120 to 150 degrees apart) it eases into a
+// silver-white, and a model with no hue (Transcribe's white) uses the opposite of the blue alone. Baseten keeps its
+// green: the caller mixes toward it as Baseten takes over
+function contrastOf(rgb) {
+  const [, , ph] = toOklch(NAVY_RGB), [, mc, mh] = toOklch(rgb);
+  let h = ph + Math.PI, apart = 0;
+  if (mc > .03) {
+    h = Math.atan2(2 * Math.sin(ph) + Math.sin(mh), 2 * Math.cos(ph) + Math.cos(mh)) + Math.PI;
+    apart = Math.abs(angleDelta(ph, mh)) * 180 / Math.PI;
+  }
+  const w = Math.min(1, Math.max(0, (apart - 120) / 30));
+  return mix(fromOklch(.78, .15, h), SILVER, w * w * (3 - 2 * w));
+}
+
+// how much of a dot's alpha is left at the very back
+const FAR = .2;
+// the saved line's liquid-metal stops, so the dots' edges match its outline
+const CHROME = [[0, 'rgba(255,255,255,0)'], [.18, 'rgba(215,228,255,.9)'], [.42, 'rgba(255,255,255,1)'],
+                [.6, 'rgba(140,165,225,.75)'], [.8, 'rgba(255,185,130,.9)'], [1, 'rgba(255,255,255,0)']];
+
+function voiceColor(x, t) {   // x from -1 to 1 across the sphere
+  const u = (((x * .5 + .5) * 3 + t * .25) % 4 + 4) % 4, i = Math.floor(u), f = u - i;
+  const c = mix(VOICE[i], VOICE[(i + 1) % 4], f * f * (3 - 2 * f));
+  return mix(c, GREEN, .55 * push);
+}
+// how far Baseten's green has taken over: the metal, the beam and the voice light lean green; and the contrast color,
+// kept up to date
+let rise = 0, push = 0, contrast = SILVER;
+
+// the metal words and the box's beam follow the orb: the metal's reflections take the orb's colors and its sheen moves
+// as the sphere turns, so it slows when the orb does; the beam runs in the orb's colors
+const rootStyle = document.documentElement.style;
+function dress() {
+  const blue = mix(NAVY_RGB, hex(MODELS.open.color), .45 * push), m = cur.color;
+  rootStyle.setProperty('--m-warm', rgba(mix(m, WHITE, .5 - .25 * push), 1));
+  rootStyle.setProperty('--m-cool', rgba(mix(blue, WHITE, .4), 1));
+  rootStyle.setProperty('--m-tint', rgba(mix(m, WHITE, .62 - .3 * push), 1));
+  rootStyle.setProperty('--m-pos', `${(50 + 50 * Math.sin(view.yaw * .5)).toFixed(2)}%`);
+  rootStyle.setProperty('--b1', rgba(blue, 1));
+  rootStyle.setProperty('--b2', rgba(m, 1));
+  rootStyle.setProperty('--b3', rgba(mix(MUSE_RGB, m, .4 * push), 1));
+  beamRGB = [blue, m, mix(MUSE_RGB, m, .4 * push)];
+  VOICE = [blue, m, beamRGB[2], mix(m, WHITE, .35)];
+}
+
+// the box's beam: it turns about 60 degrees a second, eased by paceAt (slower with reduced motion). Its head, the brightest part
+// of the border's gradient, sits HEAD degrees past the gradient's start. A button's reflection starts the moment the
+// head reaches the button's span of the border, then crosses that span a little slower than the head, so it falls
+// behind steadily: 0 degrees as it starts, LAG degrees as it leaves
+const askStyle = $('ask').style, sendStyle = $('send').style, attachStyle = $('attach').style;
+const HEAD = 332, LAG = 10;
+let beam = 0, beamRGB = [NAVY_RGB, NAVY_RGB, MUSE_RGB];
+// where the beam's light falls on the send button (across, down, 0 to 1), how strongly, and its color, for its metal
+let sendLight = [.5, 0, 0, NAVY_RGB];
+// a button's span of the border, as angles seen from the box's middle (0 at the top, clockwise); the buttons sit at
+// the box's ends, so their corners never straddle 0
+function spanOf(btn) {
+  const a = $('ask').getBoundingClientRect(), b = btn.getBoundingClientRect(), cx = a.left + a.width / 2, cy = a.top + a.height / 2;
+  const angles = [[b.left, b.top], [b.right, b.top], [b.left, b.bottom], [b.right, b.bottom]]
+    .map(([x, y]) => (Math.atan2(x - cx, cy - y) * 180 / Math.PI + 360) % 360);
+  const lo = Math.min(...angles), hi = Math.max(...angles);
+  return [(lo + hi) / 2, (hi - lo) / 2];
+}
+// where light from the border at angle `at` falls on a button: toward that point, seen from the button, as a spot on
+// the button's edge (percent across and down)
+function lightFrom(btn, at) {
+  const a = $('ask').getBoundingClientRect(), b = btn.getBoundingClientRect();
+  const th = at * Math.PI / 180, dx = Math.sin(th), dy = -Math.cos(th);
+  const reach = Math.min(a.width / 2 / Math.max(1e-6, Math.abs(dx)), a.height / 2 / Math.max(1e-6, Math.abs(dy)));
+  const vx = a.left + a.width / 2 + dx * reach - (b.left + b.width / 2), vy = a.top + a.height / 2 + dy * reach - (b.top + b.height / 2);
+  const l = Math.hypot(vx, vy) || 1;
+  return [50 + 48 * vx / l, 50 + 48 * vy / l];
+}
+// a button's reflection now: how bright it is, and how far round the border it has got. While the head runs its span
+// plus LAG, the reflection runs just the span, brightening and fading as it crosses
+function reflection(btn) {
+  const head = (beam + HEAD) % 360, [mid, half] = spanOf(btn), run = 2 * half + LAG;
+  const past = ((head - (mid - half)) % 360 + 360) % 360;
+  if (past >= run) return [0, head];
+  const p = past / run;
+  return [Math.sin(Math.PI * p), mid - half + 2 * half * p];
+}
+// the head's pace. Turning about the box's middle, the gradient's head would crawl along the middle of the long sides
+// and whip round the ends, over a hundred times faster. So the turn is eased by how fast the head is going along the
+// border: 15% quicker where it's slowest, 20% slower where it's fastest, blending in between
+function paceAt(head) {
+  const a = $('ask').getBoundingClientRect(), hw = a.width / 2, hh = a.height / 2, th = head * Math.PI / 180;
+  const s = Math.abs(Math.sin(th)), c = Math.abs(Math.cos(th));
+  // how far along the border the head goes per radian of turn: hh mid-side, up to (hw² + hh²) / hh at a corner
+  const along = s * hh <= c * hw ? hh / (c * c) : hw / (s * s);
+  const u = Math.log(along / hh) / Math.log((hw * hw + hh * hh) / (hh * hh));
+  return 1.15 - .35 * smooth(.12, .5, u);
+}
+function turnBeam(dt) {
+  beam = (beam + dt * 60 * paceAt((beam + HEAD) % 360)) % 360;
+  askStyle.setProperty('--beam', `${beam.toFixed(1)}deg`);
+  const col = mix(beamRGB[1], beamRGB[2], (HEAD - 320) / 25);
+  for (const [btn, style, strength] of [[$('send'), sendStyle, .95], [$('attach'), attachStyle, .45]]) {
+    const [k, at] = reflection(btn), [rx, ry] = lightFrom(btn, at);
+    style.setProperty('--refl', rgba(col, (strength * k).toFixed(3)));
+    style.setProperty('--spec', `rgba(255,255,255,${(.55 * strength * k).toFixed(3)})`);
+    style.setProperty('--rx', `${rx.toFixed(1)}%`);
+    style.setProperty('--ry', `${ry.toFixed(1)}%`);
+    if (style === sendStyle) sendLight = [rx / 100, ry / 100, strength * k, col];
+  }
+}
+
+// --- live liquid metal, after libraries.dev's Metal (written from scratch in WebGL, not their code): polished chrome
+// whose broad reflections flow, each color channel reading the bands a little apart so thin opal edges show where
+// they turn, with a few fine opal streaks and a thin thread of the model's color. The model's name is white,
+// edged in black metal glinting in the model's colors ("on Baseten" in bright green metal with a green glow); the
+// reply is drawn here too, white with a touch of light orange, outlined in a bright Meta blue with a soft glow. The
+// send button draws its body in black metal and its outline and arrow in silver, with the beam's light on it. Without
+// WebGL the CSS metal and the gunmetal button stay
+
+// the reply's outline and its glow: a bright Meta blue
+const TEXT_BLUE = [45, 108, 240];
+const METAL_GLSL = `
+precision highp float;
+uniform float uTime;
+float hash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+float noise(vec2 p) {
+  vec2 i = floor(p), f = fract(p);
+  f = f * f * (3. - 2. * f);
+  return mix(mix(hash(i), hash(i + vec2(1., 0.)), f.x), mix(hash(i + vec2(0., 1.)), hash(i + vec2(1., 1.)), f.x), f.y);
+}
+// the metal's bands at p, bent by a slow flow, for red, green and blue a little apart; and its opal streaks
+vec3 bands(vec2 p, out vec3 opal) {
+  vec2 q = p + .55 * vec2(noise(p * 1.3 + vec2(0., uTime * .2)), noise(p * 1.3 + vec2(4.3, -uTime * .16))) - .27;
+  float s = .55 * q.x - q.y + .18 * sin(1.9 * q.x - uTime * .4) + .06 * uTime;
+  vec3 d = (vec3(fract(s * 1.6 + .3 * noise(q * 2.3 - uTime * .08))) - vec3(.47, .5, .53)) / .026;
+  opal = exp(-d * d);
+  return pow(.5 + .5 * cos(6.2832 * (s + vec3(-.018, 0., .018))), vec3(1.7));
+}
+// four colors from dark to bright, read per channel so the channels' offsets show as color
+vec3 ramp4(vec3 v, vec3 c0, vec3 c1, vec3 c2, vec3 c3) {
+  return mix(mix(mix(c0, c1, clamp(v / .45, 0., 1.)), c2, clamp((v - .45) / .3, 0., 1.)), c3, clamp((v - .75) / .25, 0., 1.));
+}
+uniform vec3 uModel;
+// the model's color somewhere in all the metal: a thin colored reflection riding the flow where its bands pass one
+// level, as bright as the metal round it
+vec3 modelIn(vec3 c, vec3 v, float k) {
+  float b = exp(-(v.g - .62) * (v.g - .62) / .0035);
+  return mix(c, uModel * (.3 + .7 * max(c.r, max(c.g, c.b))), b * k);
+}
+`;
+const WORDS_GLSL = `
+uniform sampler2D uMask, uGlow;
+uniform vec2 uRes;
+uniform float uScale;
+uniform vec3 uGreen, uBlue;
+void main() {
+  vec2 f = gl_FragCoord.xy, uv = vec2(f.x / uRes.x, 1. - f.y / uRes.y);
+  vec4 m = texture2D(uMask, uv), s = texture2D(uMask, uv - vec2(0., uScale / uRes.y)), soft = texture2D(uGlow, uv);
+  float shade = max(max(s.r, s.g), s.b) * .4, glow = soft.r;
+  if (m.r + m.g + m.b + shade + glow < .004) { gl_FragColor = vec4(0.); return; }
+  // which words these are: 0 the reply, .5 the model's name, 1 "on Baseten"; and the same for the soft light round them
+  float kind = clamp(2. * m.b / max(.004, m.r + m.g), 0., 1.), named = smoothstep(.2, .4, kind);
+  float softKind = clamp(2. * soft.b / max(.004, soft.r + soft.g), 0., 1.), softNamed = smoothstep(.2, .4, softKind);
+  float green = smoothstep(.7, .9, kind), softGreen = smoothstep(.7, .9, softKind);
+  // the name: white, edged in black liquid metal whose highlights glint in the model's colors; "on Baseten" in
+  // bright, full green metal edged in deep green
+  vec3 o1, o2;
+  vec3 v1 = bands(f / (45. * uScale) + 3.1, o1), v2 = bands(f / (38. * uScale) + 7.7, o2);
+  vec3 fill = mix(vec3(1.), min(ramp4(v1, uGreen * .38, uGreen, mix(uGreen, vec3(1.), .55), vec3(1.)) + o1 * .25, vec3(1.)), green);
+  vec3 black = modelIn(ramp4(v2, vec3(.006, .007, .009), vec3(.025, .028, .035), mix(vec3(.09, .1, .12), uModel * .45, .6), uModel * .85 + .08) + o2 * .14, v2, .6);
+  black = mix(black, ramp4(v2, uGreen * .05, uGreen * .14, uGreen * .3, uGreen * .6) + o2 * .1, green);
+  // the reply: white with a touch (12%) of the light orange, outlined in a bright Meta blue. The outline goes under
+  // the letters, so it only shows outside them. Premultiplied, with a faint shadow under all of it
+  vec3 c = mix(uBlue, black, named) * m.g;
+  float a = m.g;
+  c = mix(vec3(1., .951, .913), fill, named) * m.r + c * (1. - m.r);
+  a = m.r + a * (1. - m.r);
+  // a soft light round the letters, under them: the blue outline's glow round the reply, a light in the model's
+  // colors round the name, and a fuller green one round "on Baseten"
+  float lit = mix(mix(.5, .3, softNamed), .75, softGreen) * glow;
+  c += mix(mix(uBlue, mix(vec3(.86, .9, .98), uModel, .35), softNamed), uGreen, softGreen) * lit * (1. - a);
+  a += lit * (1. - a);
+  gl_FragColor = vec4(c, a + shade * (1. - a));
+}
+`;
+const BUTTON_GLSL = `
+uniform vec2 uRes;
+uniform float uRadius, uPress;
+uniform vec3 uLight, uLightColor, uGlowColor;
+uniform sampler2D uIcon;
+float box(vec2 p, vec2 b, float r) { vec2 q = abs(p) - b + r; return length(max(q, 0.)) + min(max(q.x, q.y), 0.) - r; }
+void main() {
+  vec2 p = (gl_FragCoord.xy - .5 * uRes) / uRes.y, ext = vec2(.5 * uRes.x / uRes.y, .5);
+  float px = 1. / uRes.y;
+  float body = box(p, ext, uRadius), rim = abs(body + .03) - .014;
+  // pressed, the body and its icon sink in while the outline stays put: the icon shrinks a little
+  vec2 uv = p / (1. - .17 * uPress) / (2. * ext) + .5;
+  vec4 icon = texture2D(uIcon, vec2(uv.x, 1. - uv.y));
+  vec3 o1, o2;
+  vec3 v1 = bands(p * 1.9 + vec2(2.3, .7), o1), v2 = bands(p * 2.6 + vec2(5.1, 1.9), o2);
+  vec3 black = modelIn(ramp4(v1, vec3(.006, .007, .009), vec3(.025, .028, .035), vec3(.09, .1, .12), vec3(.3, .32, .37)) + o1 * .14, v1, .5);
+  vec3 silver = modelIn(ramp4(v2, vec3(.4, .42, .47), vec3(.72, .75, .8), vec3(.93, .94, .96), vec3(1.)) + o2 * .3, v2, .5);
+  vec2 lp = vec2(uLight.x - .5, .5 - uLight.y) * 2. * ext;
+  float l = exp(-dot(p - lp, p - lp) / .08) * uLight.z;
+  black += uLightColor * l * .8 + pow(l, 3.) * .45;
+  // pressed, the body dims a little, more toward its edge, as if it sank
+  black *= (1. - .2 * uPress) * (1. - .35 * uPress * smoothstep(-.09, 0., body));
+  // the icon's light: a soft glow round it, from the blurred mask, turning the orb's colors and brighter while pressed
+  black += mix(vec3(.8, .84, .93), uGlowColor, uPress) * (.38 + .55 * uPress) * icon.g;
+  float inside = 1. - smoothstep(-px, px, body);
+  vec3 col = mix(black, silver, 1. - smoothstep(-px, px, rim));
+  col = mix(col, mix(silver * (1. + .12 * (1. - uPress)), uGlowColor, .35 * uPress), icon.r);
+  gl_FragColor = vec4(min(col, vec3(1.)) * inside, inside);
+}
+`;
+// a full-canvas triangle drawn with one of the metal shaders; returns a lookup for its uniforms, with use() to switch
+// to it
+function metalProgram(gl, body) {
+  const shader = (type, src) => {
+    const s = gl.createShader(type);
+    gl.shaderSource(s, src);
+    gl.compileShader(s);
+    if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(s));
+    return s;
+  };
+  const p = gl.createProgram(), found = {};
+  gl.attachShader(p, shader(gl.VERTEX_SHADER, 'attribute vec2 a; void main() { gl_Position = vec4(a, 0., 1.); }'));
+  gl.attachShader(p, shader(gl.FRAGMENT_SHADER, METAL_GLSL + body));
+  gl.bindAttribLocation(p, 0, 'a');
+  gl.linkProgram(p);
+  if (!gl.getProgramParameter(p, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(p));
+  gl.useProgram(p);
+  gl.bindBuffer(gl.ARRAY_BUFFER, gl.createBuffer());
+  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
+  gl.enableVertexAttribArray(0);
+  gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
+  const look = name => found[name] || (found[name] = gl.getUniformLocation(p, name));
+  look.use = () => gl.useProgram(p);
+  return look;
+}
+// the words' mask, where the page lays the words out: red the letters, green their outline, and blue marking which
+// words they are, drawn in proportion to the red and green (none for the reply, a quarter for the model's name, a half
+// for "on Baseten") so it reads the same where the letters and their outline overlap and add up
+const MASK = document.createElement('canvas'), mk = MASK.getContext('2d', { alpha: false });
+// and the letters blurred, at a quarter of the size (the glow is soft anyway), for the soft light round them
+const GLOW = document.createElement('canvas'), gk = GLOW.getContext('2d', { alpha: false });
+let metal = null;
+// the buttons share one WebGL canvas off the page: each is drawn there in turn at its own size, then copied into the
+// canvas inside it
+const BUTTONS_GL = document.createElement('canvas');
+const textureFor = gl => {
+  const tex = gl.createTexture();
+  gl.bindTexture(gl.TEXTURE_2D, tex);
+  for (const [k, v] of [[gl.TEXTURE_MIN_FILTER, gl.LINEAR], [gl.TEXTURE_MAG_FILTER, gl.LINEAR],
+                        [gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE], [gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE]]) gl.texParameteri(gl.TEXTURE_2D, k, v);
+  return tex;
+};
+try {
+  const words = $('metalfx').getContext('webgl', { antialias: false });
+  const button = BUTTONS_GL.getContext('webgl', { antialias: false });
+  if (words && button) {
+    const wu = metalProgram(words, WORDS_GLSL), tex = textureFor(words);
+    words.activeTexture(words.TEXTURE1);
+    const glowTex = textureFor(words);
+    words.activeTexture(words.TEXTURE0);
+    words.bindTexture(words.TEXTURE_2D, tex);
+    const bu = metalProgram(button, BUTTON_GLSL), icons = textureFor(button);
+    metal = { words, button, wu, bu, tex, glowTex, icons, time: 0, btnTime: 0, at: '', sig: '' };
+    document.body.classList.add('live');
+  }
+} catch (e) {
+  metal = null;
+  console.warn('live metal off:', e.message);
+}
+// the live metal button: the send button, which catches the beam. It eases in and out as it's pressed
+const METAL_BUTTONS = [['send', 'arrow', () => sendLight]].map(([id, icon, light]) => {
+  const el = $(id), canvas = el.querySelector('canvas.metalbtn');
+  const b = { el, icon, light, canvas, ctx: canvas.getContext('2d'), mask: document.createElement('canvas'), key: '', press: 0, down: false };
+  el.addEventListener('pointerdown', () => { b.down = true; });
+  return b;
+});
+for (const ev of ['pointerup', 'pointercancel', 'blur']) addEventListener(ev, () => { for (const b of METAL_BUTTONS) b.down = false; });
+// the icons as the page draws them (24 units, drawn 18 px across), with their stroke widths
+const ICONS = { arrow: [new Path2D('M12 19V5M5 12l7-7 7 7'), 2] };
+// a button's mask: its icon or its label, sharp in red and blurred in green (for the light round it)
+function paintMask(b, w, h) {
+  const m = b.mask, c = m.getContext('2d');
+  m.width = w;
+  m.height = h;
+  c.fillStyle = '#000';
+  c.fillRect(0, 0, w, h);
+  c.globalCompositeOperation = 'lighter';
+  for (const [color, blur] of [['#f00', 0], ['#0f0', 4]]) {
+    c.save();
+    c.filter = blur ? `blur(${blur * DPR}px)` : 'none';
+    c.strokeStyle = c.fillStyle = color;
+    if (b.icon === 'label') {
+      const cs = getComputedStyle(b.el);
+      c.font = `${cs.fontWeight} ${parseFloat(cs.fontSize) * DPR}px ${cs.fontFamily}`;
+      c.textAlign = 'center';
+      c.textBaseline = 'middle';
+      c.fillText(b.el.textContent.trim(), w / 2, h / 2 + .5 * DPR);
+    } else {
+      const [path, width] = ICONS[b.icon], s = 18 / 24 * DPR;
+      c.translate((w - 24 * s) / 2, (h - 24 * s) / 2);
+      c.scale(s, s);
+      c.lineWidth = width;
+      c.lineCap = c.lineJoin = 'round';
+      c.stroke(path);
+    }
+    c.restore();
+  }
+}
+function liveMetal(dt) {
+  if (!metal) return;
+  // the metal flows with the orb: slowly while it rests, faster while it works. The send button's flows far slower,
+  // like silk, so it never races while Muse talks
+  metal.time += dt * (.35 + 2 * view.spin) * ORB_PACE;
+  metal.btnTime += dt * (.12 + .25 * view.spin) * ORB_PACE;
+  const { words: gw, wu } = metal, fx = $('metalfx');
+  // the words: the model's name, each sentence of the reply and "on Baseten", each word drawn into the mask where the
+  // page put it, at its sentence's opacity (so the fade-in still shows); the name's outline is wider, for its black
+  // metal. The mask is redrawn only when something about the words changes
+  const parts = [[$('model'), 2], ...[...$('say').children].map(s => [s, 0]), ...[...document.querySelectorAll('#role .baseten')].map(s => [s, 1])];
+  const runs = [];
+  for (const [el, kind] of parts) {
+    const alpha = +getComputedStyle(el).opacity, walk = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+    for (let n = walk.nextNode(); n; n = walk.nextNode()) {
+      const cs = getComputedStyle(n.parentElement);
+      for (const word of n.data.matchAll(/\S+/g)) {
+        const range = document.createRange();
+        range.setStart(n, word.index);
+        range.setEnd(n, word.index + word[0].length);
+        const r = range.getClientRects()[0];
+        if (r && r.width > 0) runs.push({ text: word[0], r, cs, kind, alpha });
+      }
+    }
+  }
+  if (!runs.length) fx.style.display = 'none';
+  else {
+    const pad = 8, left = Math.floor(Math.min(...runs.map(q => q.r.left)) - pad), top = Math.floor(Math.min(...runs.map(q => q.r.top)) - pad);
+    const w = Math.ceil(Math.max(...runs.map(q => q.r.right)) + pad - left), h = Math.ceil(Math.max(...runs.map(q => q.r.bottom)) + pad - top);
+    const at = `${left} ${top} ${w} ${h} ${DPR}`;
+    if (metal.at !== at) {
+      metal.at = at;
+      metal.sig = '';
+      Object.assign(fx.style, { display: 'block', left: `${left}px`, top: `${top}px`, width: `${w}px`, height: `${h}px` });
+      fx.width = MASK.width = Math.round(w * DPR);
+      fx.height = MASK.height = Math.round(h * DPR);
+      GLOW.width = Math.ceil(MASK.width / 4);
+      GLOW.height = Math.ceil(MASK.height / 4);
+    }
+    const sig = runs.map(q => `${q.text} ${Math.round(q.r.left)} ${Math.round(q.r.top)} ${Math.round(q.alpha * 12)} ${q.kind}`).join('|');
+    if (metal.sig !== sig) {
+      metal.sig = sig;
+      mk.globalCompositeOperation = 'source-over';
+      mk.globalAlpha = 1;
+      mk.fillStyle = '#000';
+      mk.fillRect(0, 0, MASK.width, MASK.height);
+      mk.globalCompositeOperation = 'lighter';
+      mk.lineJoin = 'round';
+      for (const run of runs) {
+        mk.font = `${run.cs.fontStyle} ${run.cs.fontWeight} ${parseFloat(run.cs.fontSize) * DPR}px ${run.cs.fontFamily}`;
+        mk.letterSpacing = `${(parseFloat(run.cs.letterSpacing) || 0) * DPR}px`;
+        const x = (run.r.left - left) * DPR, y = (run.r.top - top) * DPR + mk.measureText(run.text).fontBoundingBoxAscent;
+        mk.globalAlpha = run.alpha;
+        mk.lineWidth = [2, 2, 4][run.kind] * DPR;
+        mk.strokeStyle = ['rgb(0,255,0)', 'rgb(0,255,127)', 'rgb(0,255,64)'][run.kind];
+        mk.strokeText(run.text, x, y);
+        mk.fillStyle = ['rgb(255,0,0)', 'rgb(255,0,127)', 'rgb(255,0,64)'][run.kind];
+        mk.fillText(run.text, x, y);
+      }
+      gw.bindTexture(gw.TEXTURE_2D, metal.tex);
+      gw.texImage2D(gw.TEXTURE_2D, 0, gw.RGBA, gw.RGBA, gw.UNSIGNED_BYTE, MASK);
+      gk.filter = 'none';
+      gk.fillStyle = '#000';
+      gk.fillRect(0, 0, GLOW.width, GLOW.height);
+      gk.filter = `blur(${5 * DPR / 4}px)`;
+      gk.drawImage(MASK, 0, 0, GLOW.width, GLOW.height);
+      gk.filter = 'none';
+      gw.activeTexture(gw.TEXTURE1);
+      gw.bindTexture(gw.TEXTURE_2D, metal.glowTex);
+      gw.texImage2D(gw.TEXTURE_2D, 0, gw.RGBA, gw.RGBA, gw.UNSIGNED_BYTE, GLOW);
+      gw.activeTexture(gw.TEXTURE0);
+    }
+    gw.viewport(0, 0, fx.width, fx.height);
+    gw.uniform1f(wu('uTime'), metal.time);
+    gw.uniform2f(wu('uRes'), fx.width, fx.height);
+    gw.uniform1f(wu('uScale'), DPR);
+    gw.uniform1i(wu('uGlow'), 1);
+    gw.uniform3fv(wu('uModel'), beamRGB[1].map(c => c / 255));
+    gw.uniform3fv(wu('uBlue'), TEXT_BLUE.map(c => c / 255));
+    gw.uniform3fv(wu('uGreen'), GREEN.map(c => c / 255));
+    gw.drawArrays(gw.TRIANGLES, 0, 3);
+  }
+  // the buttons
+  const { button: gl, bu } = metal;
+  bu.use();
+  for (const b of METAL_BUTTONS) {
+    const w = Math.round(b.el.clientWidth * DPR), h = Math.round(b.el.clientHeight * DPR);
+    if (!w || !h) continue;
+    if (b.canvas.width !== w || b.canvas.height !== h) {
+      b.canvas.width = w;
+      b.canvas.height = h;
+    }
+    const key = `${w} ${h} ${DPR} ${b.el.textContent}`;
+    if (b.key !== key) {
+      b.key = key;
+      paintMask(b, w, h);
+    }
+    if (BUTTONS_GL.width < w || BUTTONS_GL.height < h) {
+      BUTTONS_GL.width = Math.max(BUTTONS_GL.width, w);
+      BUTTONS_GL.height = Math.max(BUTTONS_GL.height, h);
+    }
+    b.press += ((b.down ? 1 : 0) - b.press) * (1 - Math.exp(-dt * 22));
+    const light = b.light() || [.5, 0, 0, WHITE];
+    gl.viewport(0, 0, w, h);
+    gl.bindTexture(gl.TEXTURE_2D, metal.icons);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, b.mask);
+    gl.uniform1f(bu('uTime'), metal.btnTime);
+    gl.uniform3fv(bu('uModel'), beamRGB[1].map(c => c / 255));
+    gl.uniform3fv(bu('uGlowColor'), mix(mix(beamRGB[1], beamRGB[2], .35), WHITE, .2).map(c => c / 255));
+    gl.uniform2f(bu('uRes'), w, h);
+    gl.uniform1f(bu('uRadius'), b.icon === 'label' ? .5 : 12 / 36);
+    gl.uniform1f(bu('uPress'), b.press);
+    gl.uniform3f(bu('uLight'), light[0], light[1], light[2]);
+    gl.uniform3fv(bu('uLightColor'), light[3].map(c => c / 255));
+    gl.clearColor(0, 0, 0, 0);
+    gl.clear(gl.COLOR_BUFFER_BIT);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+    b.ctx.clearRect(0, 0, w, h);
+    b.ctx.drawImage(BUTTONS_GL, 0, BUTTONS_GL.height - h, w, h, 0, 0, w, h);
+  }
+}
+
+// the reply's bubble: it wraps the sentences that have come in so far and eases to fit them, so it grows as each one
+// arrives, and shrinks away when the reply clears
+const bubble = { x: 0, y: 0, w: 0, h: 0, o: 0 };
+function wrapReply(dt) {
+  const el = $('bubble'), host = el.parentElement.getBoundingClientRect();
+  let l = Infinity, t = Infinity, r = -Infinity, b = -Infinity;
+  for (const s of $('say').children) {
+    if (+getComputedStyle(s).opacity < .05) continue;
+    for (const q of s.getClientRects()) {
+      l = Math.min(l, q.left);
+      t = Math.min(t, q.top);
+      r = Math.max(r, q.right);
+      b = Math.max(b, q.bottom);
+    }
+  }
+  const k = 1 - Math.exp(-dt * 7), shown = r > l;
+  if (shown) {
+    const want = [l - 24 - host.left, t - 10 - host.top, r - l + 48, b - t + 20];
+    if (bubble.o < .02) Object.assign(bubble, { x: want[0] + want[2] / 2, y: want[1], w: 0, h: want[3] });
+    bubble.x += (want[0] - bubble.x) * k;
+    bubble.y += (want[1] - bubble.y) * k;
+    bubble.w += (want[2] - bubble.w) * k;
+    bubble.h += (want[3] - bubble.h) * k;
+  } else {
+    bubble.x += bubble.w * k / 2;
+    bubble.w -= bubble.w * k;
+  }
+  bubble.o += ((shown ? 1 : 0) - bubble.o) * k;
+  Object.assign(el.style, { transform: `translate(${bubble.x.toFixed(1)}px, ${bubble.y.toFixed(1)}px)`, width: `${bubble.w.toFixed(1)}px`,
+                            height: `${bubble.h.toFixed(1)}px`, opacity: bubble.o.toFixed(3), borderRadius: `${Math.min(40, bubble.h / 2).toFixed(1)}px` });
+}
+
+// --- live liquid glass: the panes behind the model's name and the reply are glossy and see-through, and the lamp at the
+// upper left shows in them as a soft highlight drifting along the top. The page's other glass carries a slow sheen
+// (--sheen) that sweeps across it
+const glassFx = $('glassfx'), gx = glassFx.getContext('2d');
+function liquidGlass(t) {
+  rootStyle.setProperty('--sheen', `${(50 + 50 * Math.sin(t * .3)).toFixed(2)}%`);
+  const W2 = Math.round(innerWidth * DPR), H2 = Math.round(innerHeight * DPR);
+  if (glassFx.width !== W2 || glassFx.height !== H2) {
+    glassFx.width = W2;
+    glassFx.height = H2;
+  }
+  gx.clearRect(0, 0, W2, H2);
+  // [pane, its corner radius, how bright the lamp is in it, how far it spreads]: the reply bubble's is smaller and dimmer
+  for (const [p, radius, bright, spread] of [[$('model').getBoundingClientRect(), 999, .3, 1],
+                                             [$('bubble').getBoundingClientRect(), parseFloat($('bubble').style.borderRadius) || 0, .13, .45]]) {
+    if (p.width < 8 || p.height < 8) continue;
+    const x = p.left * DPR, y = p.top * DPR, w = Math.ceil(p.width * DPR), h = Math.ceil(p.height * DPR), rr = Math.min(radius * DPR, h / 2);
+    gx.save();
+    gx.beginPath();
+    gx.roundRect(x, y, w, h, rr);
+    gx.clip();
+    // the lamp, drifting along the top
+    gx.globalAlpha = 1;
+    gx.translate(x + w * (.25 + .14 * Math.sin(t * .35)), y + h * .2);
+    gx.scale(Math.max(1, w / h * .45 * spread), 1);
+    const lamp = gx.createRadialGradient(0, 0, 0, 0, 0, h * .42);
+    lamp.addColorStop(0, `rgba(255,255,255,${bright})`);
+    lamp.addColorStop(1, 'rgba(255,255,255,0)');
+    gx.fillStyle = lamp;
+    gx.beginPath();
+    gx.arc(0, 0, h * .42, 0, TAU);
+    gx.fill();
+    gx.restore();
+  }
+}
+
+// --- real light, after PavelDoGreat's WebGL-Fluid-Simulation (MIT, notice at the end): its bloom (the bright parts
+// thresholded with a soft knee, blurred down a chain of ever smaller copies and added back up) and its sun rays (light
+// streaked along lines from the middle, the way light pours through a window), turned here so the bright dots make
+// the rays and they stream outward from the orb's middle, each in the color of the dot it comes from, like light through
+// stained glass. The dots' glow is drawn into LIGHT_SRC at half size (see glowUp in frame); this lights it in a WebGL
+// canvas over the orb, added to the page
+const LIGHT_SRC = document.createElement('canvas'), lsc = LIGHT_SRC.getContext('2d', { alpha: false });
+const lightFx = $('lightfx');
+const lightGL = (() => {
+  const gl = lightFx.getContext('webgl', { alpha: true, premultipliedAlpha: true, antialias: false, depth: false, stencil: false });
+  if (!gl) return null;
+  try {
+    const compile = (type, src) => {
+      const s = gl.createShader(type);
+      gl.shaderSource(s, src);
+      gl.compileShader(s);
+      if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(s));
+      return s;
+    };
+    const program = (vs, src) => {
+      const p = gl.createProgram();
+      gl.attachShader(p, vs);
+      gl.attachShader(p, compile(gl.FRAGMENT_SHADER, src));
+      gl.bindAttribLocation(p, 0, 'aPosition');
+      gl.linkProgram(p);
+      if (!gl.getProgramParameter(p, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(p));
+      const u = {};
+      for (let i = 0; i < gl.getProgramParameter(p, gl.ACTIVE_UNIFORMS); i++) {
+        const name = gl.getActiveUniform(p, i).name;
+        u[name] = gl.getUniformLocation(p, name);
+      }
+      return { bind: () => gl.useProgram(p), u };
+    };
+    // the original's vertex shaders: the quad, with neighbouring texels for the blurs
+    const BASE = compile(gl.VERTEX_SHADER, `
+      precision highp float;
+      attribute vec2 aPosition;
+      varying vec2 vUv, vL, vR, vT, vB;
+      uniform vec2 texelSize;
+      void main () {
+        vUv = aPosition * 0.5 + 0.5;
+        vL = vUv - vec2(texelSize.x, 0.0);
+        vR = vUv + vec2(texelSize.x, 0.0);
+        vT = vUv + vec2(0.0, texelSize.y);
+        vB = vUv - vec2(0.0, texelSize.y);
+        gl_Position = vec4(aPosition, 0.0, 1.0);
+      }`);
+    const BLUR_VS = compile(gl.VERTEX_SHADER, `
+      precision highp float;
+      attribute vec2 aPosition;
+      varying vec2 vUv, vL, vR;
+      uniform vec2 texelSize;
+      void main () {
+        vUv = aPosition * 0.5 + 0.5;
+        float offset = 1.33333333;
+        vL = vUv - texelSize * offset;
+        vR = vUv + texelSize * offset;
+        gl_Position = vec4(aPosition, 0.0, 1.0);
+      }`);
+    // the original's bloom: a soft-knee threshold, a four-tap blur down the chain and back up, and the final pass
+    const prefilter = program(BASE, `
+      precision mediump float;
+      precision mediump sampler2D;
+      varying vec2 vUv;
+      uniform sampler2D uTexture;
+      uniform vec3 curve;
+      uniform float threshold;
+      void main () {
+        vec3 c = texture2D(uTexture, vUv).rgb;
+        float br = max(c.r, max(c.g, c.b));
+        float rq = clamp(br - curve.x, 0.0, curve.y);
+        rq = curve.z * rq * rq;
+        c *= max(rq, br - threshold) / max(br, 0.0001);
+        gl_FragColor = vec4(c, 0.0);
+      }`);
+    const bloomBlur = program(BASE, `
+      precision mediump float;
+      precision mediump sampler2D;
+      varying vec2 vL, vR, vT, vB;
+      uniform sampler2D uTexture;
+      void main () {
+        vec4 sum = vec4(0.0);
+        sum += texture2D(uTexture, vL);
+        sum += texture2D(uTexture, vR);
+        sum += texture2D(uTexture, vT);
+        sum += texture2D(uTexture, vB);
+        sum *= 0.25;
+        gl_FragColor = sum;
+      }`);
+    const bloomFinal = program(BASE, `
+      precision mediump float;
+      precision mediump sampler2D;
+      varying vec2 vL, vR, vT, vB;
+      uniform sampler2D uTexture;
+      uniform float intensity;
+      void main () {
+        vec4 sum = vec4(0.0);
+        sum += texture2D(uTexture, vL);
+        sum += texture2D(uTexture, vR);
+        sum += texture2D(uTexture, vT);
+        sum += texture2D(uTexture, vB);
+        sum *= 0.25;
+        gl_FragColor = sum * intensity;
+      }`);
+    // the sun rays. The original's mask lets light through where the scene is dark; here the bright dots are the
+    // light, so the mask is the dots themselves, brightened, in their own colors, the way stained glass colors the
+    // light through it
+    const raysMask = program(BASE, `
+      precision highp float;
+      precision highp sampler2D;
+      varying vec2 vUv;
+      uniform sampler2D uTexture;
+      void main () {
+        vec3 c = texture2D(uTexture, vUv).rgb;
+        float br = max(c.r, max(c.g, c.b));
+        gl_FragColor = vec4(c * min(br * 2.5, 1.0) / max(br, 0.0001), 1.0);
+      }`);
+    // the original's rays: each point gathers the mask along the line to the middle, fading as it goes (here in
+    // color, and without the point's own light, which the bloom already carries)
+    const rays = program(BASE, `
+      precision highp float;
+      precision highp sampler2D;
+      varying vec2 vUv;
+      uniform sampler2D uTexture;
+      uniform float weight;
+      #define ITERATIONS 16
+      void main () {
+        float Density = 0.3;
+        float Decay = 0.95;
+        float Exposure = 0.7;
+        vec2 coord = vUv;
+        vec2 dir = vUv - 0.5;
+        dir *= 1.0 / float(ITERATIONS) * Density;
+        float illuminationDecay = 1.0;
+        vec3 color = vec3(0.0);
+        for (int i = 0; i < ITERATIONS; i++) {
+          coord -= dir;
+          vec3 col = texture2D(uTexture, coord).rgb;
+          color += col * illuminationDecay * weight;
+          illuminationDecay *= Decay;
+        }
+        gl_FragColor = vec4(color * Exposure, 1.0);
+      }`);
+    const blur = program(BLUR_VS, `
+      precision mediump float;
+      precision mediump sampler2D;
+      varying vec2 vUv, vL, vR;
+      uniform sampler2D uTexture;
+      void main () {
+        vec4 sum = texture2D(uTexture, vUv) * 0.29411764;
+        sum += texture2D(uTexture, vL) * 0.35294117;
+        sum += texture2D(uTexture, vR) * 0.35294117;
+        gl_FragColor = sum;
+      }`);
+    // ours: the points' bloom and their colored rays together, premultiplied for adding to the page (the points
+    // themselves are drawn on the orb). The rays' colors are made a little richer, like light through stained glass
+    const display = program(BASE, `
+      precision highp float;
+      precision highp sampler2D;
+      varying vec2 vUv;
+      uniform sampler2D uBloom, uRays;
+      void main () {
+        vec3 rays = texture2D(uRays, vUv).rgb;
+        rays = max(mix(vec3(dot(rays, vec3(0.299, 0.587, 0.114))), rays, 1.3), 0.0);
+        vec3 c = texture2D(uBloom, vUv).rgb + rays * 0.32;
+        c = min(c, vec3(1.0));
+        gl_FragColor = vec4(c, max(c.r, max(c.g, c.b)));
+      }`);
+    // the original's quad and blit
+    gl.bindBuffer(gl.ARRAY_BUFFER, gl.createBuffer());
+    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, -1, 1, 1, 1, 1, -1]), gl.STATIC_DRAW);
+    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, gl.createBuffer());
+    gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, new Uint16Array([0, 1, 2, 0, 2, 3]), gl.STATIC_DRAW);
+    gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
+    gl.enableVertexAttribArray(0);
+    const blit = target => {
+      if (target) {
+        gl.viewport(0, 0, target.width, target.height);
+        gl.bindFramebuffer(gl.FRAMEBUFFER, target.fbo);
+      } else {
+        gl.viewport(0, 0, gl.drawingBufferWidth, gl.drawingBufferHeight);
+        gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+      }
+      gl.drawElements(gl.TRIANGLES, 6, gl.UNSIGNED_SHORT, 0);
+    };
+    const texture = () => {
+      const tex = gl.createTexture();
+      gl.bindTexture(gl.TEXTURE_2D, tex);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+      return tex;
+    };
+    // a framebuffer with its texture, as the original's createFBO (in plain 8-bit color)
+    const fbo = (w, h) => {
+      gl.activeTexture(gl.TEXTURE0);
+      const tex = texture();
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, w, h, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+      const fb = gl.createFramebuffer();
+      gl.bindFramebuffer(gl.FRAMEBUFFER, fb);
+      gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, tex, 0);
+      gl.viewport(0, 0, w, h);
+      gl.clearColor(0, 0, 0, 0);
+      gl.clear(gl.COLOR_BUFFER_BIT);
+      return { fbo: fb, width: w, height: h, texelSizeX: 1 / w, texelSizeY: 1 / h,
+               attach(id) { gl.activeTexture(gl.TEXTURE0 + id); gl.bindTexture(gl.TEXTURE_2D, tex); return id; } };
+    };
+    const sceneTex = texture();
+    const scene = { attach(id) { gl.activeTexture(gl.TEXTURE0 + id); gl.bindTexture(gl.TEXTURE_2D, sceneTex); return id; } };
+    let bloom = null, levels = [], mask = null, raysFbo = null, raysTemp = null, sizeFor = '';
+    const BLOOM = { threshold: .5, knee: .7, intensity: .6 }, RAY_WEIGHT = .27;
+    return {
+      render() {
+        const w = LIGHT_SRC.width, h = LIGHT_SRC.height;
+        if (sizeFor !== `${w}x${h}`) {
+          sizeFor = `${w}x${h}`;
+          lightFx.width = w;
+          lightFx.height = h;
+          let bw = w >> 1, bh = h >> 1;
+          bloom = fbo(bw, bh);
+          levels = [];
+          for (let i = 0; i < 6; i++) {
+            bw >>= 1;
+            bh >>= 1;
+            if (bw < 4 || bh < 4) break;
+            levels.push(fbo(bw, bh));
+          }
+          mask = fbo(w >> 2, h >> 2);
+          raysFbo = fbo(w >> 2, h >> 2);
+          raysTemp = fbo(w >> 2, h >> 2);
+        }
+        // the scene, the points of light drawn this frame
+        gl.activeTexture(gl.TEXTURE0);
+        gl.bindTexture(gl.TEXTURE_2D, sceneTex);
+        gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, LIGHT_SRC);
+        // the bloom, as the original's applyBloom
+        if (levels.length >= 2) {
+          let last = bloom;
+          gl.disable(gl.BLEND);
+          prefilter.bind();
+          const knee = BLOOM.threshold * BLOOM.knee + .0001;
+          gl.uniform3f(prefilter.u.curve, BLOOM.threshold - knee, knee * 2, .25 / knee);
+          gl.uniform1f(prefilter.u.threshold, BLOOM.threshold);
+          gl.uniform1i(prefilter.u.uTexture, scene.attach(0));
+          blit(last);
+          bloomBlur.bind();
+          for (const dest of levels) {
+            gl.uniform2f(bloomBlur.u.texelSize, last.texelSizeX, last.texelSizeY);
+            gl.uniform1i(bloomBlur.u.uTexture, last.attach(0));
+            blit(dest);
+            last = dest;
+          }
+          gl.blendFunc(gl.ONE, gl.ONE);
+          gl.enable(gl.BLEND);
+          for (let i = levels.length - 2; i >= 0; i--) {
+            gl.uniform2f(bloomBlur.u.texelSize, last.texelSizeX, last.texelSizeY);
+            gl.uniform1i(bloomBlur.u.uTexture, last.attach(0));
+            blit(levels[i]);
+            last = levels[i];
+          }
+          gl.disable(gl.BLEND);
+          bloomFinal.bind();
+          gl.uniform2f(bloomFinal.u.texelSize, last.texelSizeX, last.texelSizeY);
+          gl.uniform1i(bloomFinal.u.uTexture, last.attach(0));
+          gl.uniform1f(bloomFinal.u.intensity, BLOOM.intensity);
+          blit(bloom);
+        }
+        // the rays, as the original's applySunrays, then softened with its blur
+        raysMask.bind();
+        gl.uniform1i(raysMask.u.uTexture, scene.attach(0));
+        blit(mask);
+        rays.bind();
+        gl.uniform1f(rays.u.weight, RAY_WEIGHT);
+        gl.uniform1i(rays.u.uTexture, mask.attach(0));
+        blit(raysFbo);
+        blur.bind();
+        gl.uniform2f(blur.u.texelSize, raysFbo.texelSizeX, 0);
+        gl.uniform1i(blur.u.uTexture, raysFbo.attach(0));
+        blit(raysTemp);
+        gl.uniform2f(blur.u.texelSize, 0, raysFbo.texelSizeY);
+        gl.uniform1i(blur.u.uTexture, raysTemp.attach(0));
+        blit(raysFbo);
+        // all of it, onto the page
+        display.bind();
+        gl.uniform1i(display.u.uBloom, bloom.attach(1));
+        gl.uniform1i(display.u.uRays, raysFbo.attach(2));
+        blit(null);
+      },
+    };
+  } catch (e) {
+    console.warn('light off:', e.message);
+    return null;
+  }
+})();
+// the light canvas sits over the orb's; without WebGL the dots' soft glow goes straight onto the orb, unlit
+function lightUp() {
+  const o = $('orb').getBoundingClientRect(), at = `${o.left} ${o.top} ${o.width} ${o.height}`;
+  if (lightFx.dataset.at !== at) {
+    lightFx.dataset.at = at;
+    Object.assign(lightFx.style, { left: `${o.left}px`, top: `${o.top}px`, width: `${o.width}px`, height: `${o.height}px` });
+  }
+  if (lightGL) lightGL.render();
+  else {
+    g.save();
+    g.globalCompositeOperation = 'lighter';
+    g.drawImage(LIGHT_SRC, 0, 0, W, H);
+    g.restore();
+  }
+}
+
+// --- the page around it
+
+let model = 'spark', state = 'idle', mic = null;
+const cur = { ...STATES.idle, color: hex(MODELS.spark.color) };
+let goal = { ...STATES.idle }, goalColor = cur.color.slice();
+let level = 0, last = performance.now(), clock = 0;
+// how far the dots are parting for the line's waves, easing after the waves themselves
+let wayAmp = 0;
+const line = SiriLine();
+// the Siri line and the orb run at 85% of the pace they were tuned at
+const LINE_PACE = .85, ORB_PACE = .85;
+
+function speech(t) {
+  if (mic && state === 'listening') {
+    mic.an.getByteTimeDomainData(mic.buf);
+    let s = 0;
+    for (const v of mic.buf) s += (v - 128) * (v - 128);
+    return Math.min(1, Math.sqrt(s / mic.buf.length) / 28);
+  }
+  const e = Math.sin(t * 7.1) * 0.55 + Math.sin(t * 2.9 + 1.3) * 0.45 + Math.sin(t * 13.3) * 0.2;
+  return Math.max(0, Math.min(1, e));
+}
+
+function frame(now) {
+  const dt = Math.max(0, Math.min(0.05, (now - last) / 1000)), t = now / 1000;
+  last = now;
+  const k = 1 - Math.exp(-dt * 3.5), calm = REDUCE ? 1 / 3 : 1, ease = 1 - Math.exp(-dt * 2);
+  for (const key of ['wave', 'voice']) cur[key] += (goal[key] - cur[key]) * k;
+  cur.color = mix(cur.color, goalColor, k);
+  level += (speech(t) * cur.voice - level) * (1 - Math.exp(-dt * 14));
+  // the glow comes up quickly with the voice and settles back slowly
+  const want = cur.voice * Math.min(1, .2 + 1.3 * level);
+  rise += (want - rise) * (1 - Math.exp(-dt * (want > rise ? 10 : 2.5)));
+  push += ((model === 'open' ? 1 : 0) - push) * (1 - Math.exp(-dt * 2.5));
+  contrast = mix(contrastOf(cur.color), GREEN, push);
+  dress();
+  turnBeam(dt * calm);
+  liveMetal(dt * calm);
+  wrapReply(dt);
+  // the sea state eases toward the one for what the orb is doing, and the sphere's turn with it
+  const seaNow = seaFor(state, model);
+  for (const [name, s] of Object.entries(SEA_STATES)) s.weight += ((name === seaNow ? 1 : 0) - s.weight) * (1 - Math.exp(-dt * .9 * calm));
+  view.spin += (SEA_STATES[seaNow].spin - view.spin) * ease;
+  view.yaw += dt * view.spin * calm * ORB_PACE;
+  clock += dt * calm * ORB_PACE;
+  remember(dt * calm);
+  line.step(dt * LINE_PACE, cur.wave, level);
+
+  // every dot where the sea puts it now
+  for (const d of DOTS) d.at = PLACE.sea(d);
+
+  drawStars(t);
+  g.clearRect(0, 0, W, H);
+  const ox = W / 2, oy = H / 2, R = Math.min(H * .31, W * .2) * (1 + .015 * Math.sin(t * 1.7 * ORB_PACE));
+  const rs = Math.pow(2 * R / DPR / .82 / 64, .6) * DPR * .8;
+  // the channel round the spear: a little always, and wider where the line's lobes are tall, its height easing after
+  // the line's so the dots part and close gradually. along runs the spear's length in the sphere's units; u is the same
+  // point in the line's own frame
+  wayAmp += (1.35 * .42 * (.03 + line.wave * (.25 + .75 * line.level)) * LIFT - wayAmp) * (1 - Math.exp(-dt * 1.8));
+  const room = along => {
+    const u = along * 2 / (SPEAR * 1.242), att = Math.pow(4 / (4 + u ** 4), 4);
+    let h = 0;
+    for (const [a, fr, off] of line.HARMONICS) h = Math.max(h, Math.abs(a * att * Math.sin(fr * 3.2 * u - line.phase * (.7 + .35 * fr) + off)));
+    return Math.min(.55, .1 + .05 * cur.wave + .8 * wayAmp * h);
+  };
+  const placed = DOTS.map(d => {
+    const [x, y, z] = clear(d.at[0], d.at[1], d.at[2], room), [, , , size, lit, a] = d.at, depth = Math.min(1, Math.max(0, (z + 1) / 2));
+    const l = Math.hypot(x, y, z) || 1, n = [x / l, y / l, z / l];
+    // the front half solid, the back falling away fast past the rim
+    return { X: ox + x * R, Y: oy - y * R, z, depth, n, r: Math.max(.3 * rs, size * rs * (.55 + .45 * depth)), lit,
+             a: Math.min(1, a * (FAR + (1 - FAR) * smooth(-.55, .05, n[2]))) };
+  });
+  const items = placed.slice().sort((a, b) => a.z - b.z);
+
+  // the voice glow: its top edge rises with the voice and bends down toward the sides; a dot under it takes
+  // its colors, more the lower it sits. The light is only ever on the dots and on the line's harmonics
+  const top = oy + R - 2.1 * R * rise;
+  const voiceAt = (X, Y) => {
+    if (rise < .01) return 0;
+    const xn = (X - ox) / R, edge = top + .35 * R * xn * xn;
+    const k = Math.min(1, Math.max(0, (Y - edge + .25 * R) / (.5 * R)));
+    return rise * k * k * (3 - 2 * k) * (.6 + .4 * Math.min(1, Math.max(0, (Y - edge) / (.9 * R))));
+  };
+  // the harmonics: the voice light also runs along the line's lobes, lighting the dots on their edges and the
+  // edges themselves, in the line's own frame
+  const Rd = R * 1.35, half = Rd * .92, amp = Rd * .42 * (.03 + line.wave * (.25 + .75 * line.level));
+  const cR = Math.cos(ROLL), sR = Math.sin(ROLL), stretch = Math.cos(YAW) * SPEAR;
+  const harmonicAt = (X, Y) => {
+    if (rise < .01) return 0;
+    const u = ((X - ox) * cR + (Y - oy) * sR) / stretch / (half / 2);
+    if (Math.abs(u) >= 2) return 0;
+    const ly = Math.abs((-(X - ox) * sR + (Y - oy) * cR) / LIFT), att = Math.pow(4 / (4 + u ** 4), 4);
+    let best = 0;
+    for (const [a, fr, off] of line.HARMONICS) {
+      const h = Math.abs(amp * a * att * Math.sin(fr * 3.2 * u - line.phase * (.7 + .35 * fr) + off)), d = (ly - h) / (R * .07 + h * .25);
+      best = Math.max(best, Math.exp(-d * d));
+    }
+    return best * rise * .8;
+  };
+  const harmonicLight = c => {
+    if (rise < .02) return;
+    c.save();
+    c.translate(ox, oy);
+    c.rotate(ROLL);
+    c.scale(stretch, LIFT);
+    const along = c.createLinearGradient(-half, 0, half, 0);
+    for (let k = 0; k <= 6; k++) along.addColorStop(k / 6, rgba(voiceColor(k / 3 - 1, t), k % 6 ? .48 * .85 * rise : 0));
+    c.globalCompositeOperation = 'lighter';
+    c.strokeStyle = along;
+    c.lineWidth = 2.4 * DPR;
+    c.lineJoin = 'round';
+    for (const [a, fr, off] of line.HARMONICS) {
+      const pts = line.lobes(0, half, amp * a, fr, off);
+      for (const side of [-1, 1]) {
+        c.beginPath();
+        pts.forEach(([x, h], j) => j ? c.lineTo(x, side * h) : c.moveTo(x, side * h));
+        c.stroke();
+      }
+    }
+    c.restore();
+  };
+
+  // a soft light shining from behind the waves: their shapes in their own colors, lightened, drawn small,
+  // blurred and laid under the line, so the light seems to come through the area under each wave
+  const backlight = c => {
+    bk.setTransform(1, 0, 0, 1, 0, 0);
+    bk.clearRect(0, 0, back.width, back.height);
+    bk.setTransform(1 / BACK, 0, 0, 1 / BACK, 0, 0);
+    bk.translate(ox, oy);
+    bk.rotate(ROLL);
+    bk.scale(stretch, LIFT);
+    bk.globalCompositeOperation = 'lighter';
+    line.HARMONICS.forEach(([a, fr, off], i) => {
+      const pts = line.lobes(0, half, amp * a, fr, off);
+      bk.beginPath();
+      bk.moveTo(pts[0][0], 0);
+      for (const [x, h] of pts) bk.lineTo(x, -h);
+      for (let j = pts.length - 1; j >= 0; j--) bk.lineTo(pts[j][0], pts[j][1]);
+      bk.closePath();
+      bk.fillStyle = rgba(mix([NAVY_RGB, MUSE_RGB, cur.color][i], WHITE, .5), .7);
+      bk.fill();
+    });
+    // a little gold at its heart
+    bk.globalCompositeOperation = 'source-atop';
+    const gold = bk.createRadialGradient(0, 0, 0, 0, 0, half * .55);
+    gold.addColorStop(0, 'rgba(255, 196, 110, .65)');
+    gold.addColorStop(1, 'rgba(255, 200, 120, 0)');
+    bk.fillStyle = gold;
+    bk.fillRect(-half, -half, 2 * half, 2 * half);
+    c.save();
+    c.globalCompositeOperation = 'lighter';
+    c.globalAlpha = (.44 + .24 * rise) * .85;
+    c.filter = `blur(${Math.round(9 * DPR)}px)`;
+    c.drawImage(back, 0, 0, W, H);
+    c.restore();
+  };
+
+  // the dots behind the line's tilted plane first, then the line, then the rest
+  const cr = Math.cos(ROLL), sr = Math.sin(ROLL), slope = Math.tan(YAW) / R;
+  const behindAt = (X, Y, z) => z < ((X - ox) * cr + (Y - oy) * sr) * slope, behind = it => behindAt(it.X, it.Y, it.z);
+  // each dot's color, in sections by how squarely it faces you: face-on the deep primary blue, then violet and the
+  // model's color as the surface turns away, and the contrast color warming the rim. Which way it faces comes from its
+  // neighbours, placed as if the waves stood up off the sphere (six times as high as the light shows them), so the
+  // sections ripple with the waves. One the voice glow rises through leans toward its colors. A dot a crest
+  // whitecaps or the voice reaches lights up as a brighter, lighter version of its own color (its strongest channel
+  // raised to full, a little white let in), not white. Its brightness comes from the waves too (bright on their
+  // crests, dim in their troughs) and the voice, and it's dimmer behind the sphere
+  const voiceOn = it => Math.max(voiceAt(it.X, it.Y), harmonicAt(it.X, it.Y));
+  const swellOf = Object.values(SEA_STATES).reduce((q, s) => q + s.weight * s.amp, 0) * 1.5 + 1e-6;
+  const deep = mix(beamRGB[0], [4, 6, 20], .45), violet = mix(beamRGB[0], cur.color, .5);
+  const lighten = c => mix(c.map(x => x * 255 / Math.max(1, ...c)), WHITE, .18);
+  const section = f => f > .82 ? mix(deep, beamRGB[0], (1 - f) / .18)
+    : f > .58 ? mix(beamRGB[0], violet, (.82 - f) / .24)
+    : f > .34 ? mix(violet, cur.color, (.58 - f) / .24)
+    : f > .14 ? mix(cur.color, contrast, (.34 - f) / .2)
+    : mix(contrast, mix(contrast, WHITE, .45), (.14 - f) / .14);
+  const stood = placed.map((it, i) => {
+    const k = 1 + 6 * DOTS[i].heave;
+    return [(it.X - ox) / R * k, (oy - it.Y) / R * k, it.z * k];
+  });
+  placed.forEach((it, i) => {
+    const d = DOTS[i], swell = Math.max(-1, Math.min(1, d.heave / swellOf)), cap = Math.max(it.lit, smooth(.12, .22, d.crest)), v = voiceOn(it);
+    const [p1, p2, p3, p4] = AROUND[i].map(j => stood[j]), u = p1.map((x, k) => x - p2[k]), w = p3.map((x, k) => x - p4[k]);
+    const n = [u[1] * w[2] - u[2] * w[1], u[2] * w[0] - u[0] * w[2], u[0] * w[1] - u[1] * w[0]], l = Math.hypot(...n);
+    it.col = section(l > 1e-9 ? Math.abs(n[2] / l) : Math.abs(it.n[2]));
+    if (v > .01) it.col = mix(it.col, voiceColor((it.X - ox) / R, t), v * .5);
+    it.on = Math.min(1, Math.max(cap, v));
+    it.lightCol = lighten(it.col);
+    it.col = mix(it.col, it.lightCol, it.on);
+    it.bright = Math.min(1, (.38 + .32 * (.5 + .5 * swell) + .5 * it.on) * (.3 + .7 * smooth(-.4, .5, it.n[2])) * it.a);
+    // a third dimmer at their brightest, less so the dimmer they are, so the line is what stands out
+    it.bright *= 1 - .33 * it.bright;
+    // the two dots at the poles sit on the spear's axis, where it comes through, so they're left out
+    if (d.li === 0 || d.li === RINGS) it.bright = 0;
+  });
+  // each dot as clear light, the way the line glows: its color laid over the dark as light (.42, added, as the line's
+  // lobes are), and edged in the line's liquid metal (the same stops, laid along the line, so dots near it match it)
+  const chrome = g.createLinearGradient(ox - half * stretch * cR, oy - half * stretch * sR, ox + half * stretch * cR, oy + half * stretch * sR);
+  for (const [o, col] of CHROME) chrome.addColorStop(o, col);
+  const sizeOf = it => it.r * .85 * (1 + .3 * it.on);
+  // the faint white lines and the dots on one side of the line's plane, on the orb
+  const shine = front => {
+    const paths = [new Path2D(), new Path2D(), new Path2D()], longest = (.32 * R) ** 2;
+    for (const [i, k] of LINKS) {
+      const p = placed[i], q = placed[k];
+      if (p.bright < .01 || q.bright < .01 || (p.X - q.X) ** 2 + (p.Y - q.Y) ** 2 > longest) continue;
+      if (behindAt((p.X + q.X) / 2, (p.Y + q.Y) / 2, (p.z + q.z) / 2) === front) continue;
+      const near = (smooth(-.4, .5, p.n[2]) + smooth(-.4, .5, q.n[2])) / 2, path = paths[near > .66 ? 2 : near > .33 ? 1 : 0];
+      // each line stops at the dots' edges, so none shows inside the clear dots
+      const dx = q.X - p.X, dy = q.Y - p.Y, len = Math.hypot(dx, dy), rp = sizeOf(p) + .5 * DPR, rq = sizeOf(q) + .5 * DPR;
+      if (len <= rp + rq) continue;
+      path.moveTo(p.X + dx * rp / len, p.Y + dy * rp / len);
+      path.lineTo(q.X - dx * rq / len, q.Y - dy * rq / len);
+    }
+    const these = items.filter(it => behind(it) !== front && it.bright >= .01);
+    g.save();
+    g.globalCompositeOperation = 'lighter';
+    g.lineWidth = .6 * DPR;
+    g.strokeStyle = '#fff';
+    paths.forEach((path, b) => { g.globalAlpha = .05 + .06 * b; g.stroke(path); });
+    for (const it of these) {
+      g.globalAlpha = Math.min(1, it.bright * (1 + .15 * it.on)) * .78;
+      g.fillStyle = rgba(it.col, .42);
+      g.beginPath();
+      g.arc(it.X, it.Y, sizeOf(it), 0, TAU);
+      g.fill();
+    }
+    g.globalCompositeOperation = 'source-over';
+    g.lineWidth = .8 * DPR;
+    for (const it of these) {
+      // a lit dot's edge turns from the line's white metal to its own bright color
+      g.strokeStyle = chrome;
+      g.globalAlpha = it.bright * .5 * (1 - .75 * it.on);
+      g.beginPath();
+      g.arc(it.X, it.Y, sizeOf(it), 0, TAU);
+      g.stroke();
+      if (it.on < .05) continue;
+      g.strokeStyle = rgba(it.lightCol, 1);
+      g.globalAlpha = it.bright * .5 * it.on;
+      g.stroke();
+    }
+    g.restore();
+  };
+  // the Siri line and its light go into their own layer, where the part of the spear inside the sphere is dimmed: it
+  // reads as running through the planet's middle, bright where it comes out of the near side, fainter inside, and
+  // faintest where it's behind the planet
+  lc.setTransform(1, 0, 0, 1, 0, 0);
+  lc.clearRect(0, 0, W, H);
+  backlight(lc);
+  lc.save();
+  lc.translate(ox, oy);
+  lc.rotate(ROLL);
+  lc.scale(Math.cos(YAW) * SPEAR, LIFT);
+  line.draw(lc, 0, 0, R * 1.35, R * 1.45, [NAVY_RGB, MUSE_RGB, cur.color], DPR);
+  lc.restore();
+  harmonicLight(lc);
+  const pole = Math.cos(YAW) * R * .95, span = R * 1.05, along = u => Math.min(1, Math.max(0, (u / span + 1) / 2));
+  const inside = lc.createLinearGradient(ox - cR * span, oy - sR * span, ox + cR * span, oy + sR * span);
+  inside.addColorStop(0, rgba([0, 0, 0], .45));
+  inside.addColorStop(along(-pole), rgba([0, 0, 0], .36));
+  inside.addColorStop(along(pole * .82), rgba([0, 0, 0], .28));
+  inside.addColorStop(along(pole * 1.04), 'rgba(0,0,0,0)');
+  inside.addColorStop(1, 'rgba(0,0,0,0)');
+  lc.save();
+  lc.globalCompositeOperation = 'destination-out';
+  lc.fillStyle = inside;
+  lc.beginPath();
+  lc.arc(ox, oy, R, 0, TAU);
+  lc.fill();
+  lc.restore();
+  // the glow: the dots again, in their colors, at half size into the light canvas; the bloom softens them and the rays
+  // carry their colors out
+  const glowUp = () => {
+    const lw = Math.ceil(W / 2), lh = Math.ceil(H / 2);
+    if (LIGHT_SRC.width !== lw || LIGHT_SRC.height !== lh) {
+      LIGHT_SRC.width = lw;
+      LIGHT_SRC.height = lh;
+    }
+    lsc.setTransform(1, 0, 0, 1, 0, 0);
+    lsc.globalCompositeOperation = 'source-over';
+    lsc.globalAlpha = 1;
+    lsc.fillStyle = '#000';
+    lsc.fillRect(0, 0, lw, lh);
+    lsc.setTransform(.5, 0, 0, .5, 0, 0);
+    lsc.globalCompositeOperation = 'lighter';
+    for (const it of placed) {
+      if (it.bright < .01) continue;
+      lsc.globalAlpha = it.bright * (.4 + .3 * it.on);
+      lsc.fillStyle = rgba(it.col, 1);
+      lsc.beginPath();
+      lsc.arc(it.X, it.Y, it.r * (1.3 + .6 * it.on), 0, TAU);
+      lsc.fill();
+    }
+    lsc.globalAlpha = 1;
+    lightUp();
+  };
+  shine(false);
+  g.save();
+  g.globalCompositeOperation = 'lighter';
+  g.drawImage(LINE_LAYER, 0, 0);
+  // a little gold light at the heart of the line's light, laid along it, on top of the dimming so it shows
+  g.translate(ox, oy);
+  g.rotate(ROLL);
+  g.scale(Math.cos(YAW) * SPEAR * 1.6, .45);
+  const heart = g.createRadialGradient(0, 0, 0, 0, 0, R * .32);
+  heart.addColorStop(0, `rgba(255, 200, 120, ${(.32 + .15 * rise).toFixed(3)})`);
+  heart.addColorStop(.45, 'rgba(255, 190, 110, .11)');
+  heart.addColorStop(1, 'rgba(255, 190, 110, 0)');
+  g.fillStyle = heart;
+  g.beginPath();
+  g.arc(0, 0, R * .32, 0, TAU);
+  g.fill();
+  g.restore();
+  shine(true);
+  glowUp();
+  liquidGlass(t);
+  requestAnimationFrame(frame);
+}
+
+function setModel(m) {
+  model = m;
+  goalColor = hex(MODELS[m].color);
+  $('model').textContent = MODELS[m].name;
+  $('role').innerHTML = MODELS[m].role;
+  mark();
+}
+function setState(s) { state = s; goal = { ...STATES[s] }; mark(); }
+
+// the reply comes in a sentence at a time, each fading in quickly; a full stop only ends a sentence before a space
+// or the end, so "pins.h" stays whole. Each sentence is metal on its own
+function say(html, reveal = !REDUCE) {
+  const parts = html.match(/.+?[.!?](?=\s|$)\s*|.+$/g) || [];
+  $('say').innerHTML = parts.map((s, i) => reveal
+    ? `<span class="metal arrive" style="animation-delay:${(i * .38).toFixed(2)}s">${s}</span>`
+    : `<span class="metal">${s}</span>`).join('');
+}
+function you(text) { $('you').textContent = text ? `“${text}”` : ''; }
+// the call bar. Each dot is a tiny orb in that model's colors as the orb shows them: deep blue in the middle, then
+// violet, the model's color, and its contrast color at the rim (so Spark reads violet-blue, as on the orb, not pink).
+// A model's entry comes in the moment it starts working, its dot breathing, and its time fills in when it's done, so
+// the newest dot is always the model the orb is showing
+function dotFor(m) {
+  const c = hex(MODELS[m].color), green = m === 'open' ? 1 : 0, blue = mix(NAVY_RGB, GREEN, .45 * green);
+  const stops = [[mix(blue, [4, 6, 20], .45), 0], [mix(blue, c, .5), 42], [c, 74], [mix(contrastOf(c), GREEN, green), 100]];
+  return `background:radial-gradient(circle, ${stops.map(([s, at]) => `${rgba(s, 1)} ${at}%`).join(', ')});box-shadow:0 0 7px ${rgba(mix(blue, c, .5), .6)}`;
+}
+function begin(m) {
+  const el = document.createElement('span');
+  el.className = 'pending';
+  el.dataset.model = m;
+  el.innerHTML = `<i style="${dotFor(m)}"></i>${MODELS[m].short} …`;
+  $('calls').append(el);
+}
+function call(m, seconds) {
+  const el = [...$('calls').querySelectorAll('span.pending')].filter(s => s.dataset.model === m).pop() || $('calls').appendChild(document.createElement('span'));
+  el.className = '';
+  el.innerHTML = `<i style="${dotFor(m)}"></i>${MODELS[m].short} ${seconds.toFixed(1)} s`;
+}
+function total(text) {
+  const el = document.createElement('span');
+  el.textContent = text;
+  el.style.color = 'var(--ink)';
+  $('calls').append(el);
+}
+
+// Act 1's beats with made-up times, to see the transitions
+const ACT1 = [
+  [0, () => { $('calls').innerHTML = ''; setModel('transcribe'); begin('transcribe'); setState('listening');
+              you('Copilot, the sensor doesn’t answer a press.'); say('', false); }],
+  [3.6, () => { call('transcribe', 0.7); setModel('spark'); begin('spark'); setState('thinking'); say('Reading the sensor.'); }],
+  [6.4, () => { call('spark', 1.3); setModel('sam'); begin('sam'); say('It reads flat. Looking at the board.'); }],
+  [9.8, () => { call('sam', 4.1); setModel('wonder'); begin('wonder'); say('It’s wired to GPIO 4, but pins.h says 15. Writing the fix.'); }],
+  [13.6, () => { call('wonder', 6.2); setModel('spark'); begin('spark'); setState('speaking');
+                 say('Fix staged. <b>Your turn:</b> flash the board.'); }],
+  [16.8, () => setState('idle')],
+  [19.5, () => { call('spark', 0.9); you(''); setState('speaking'); say('Fixed. It answers your press now.'); }],
+  [22.5, () => { setState('idle'); total('Act 1 · 21 s · $0.03'); }],
+];
+let timers = [];
+function playAct1() { timers.forEach(clearTimeout); timers = ACT1.map(([s, fn]) => setTimeout(fn, s * 1000)); }
+
+const panel = $('panel');
+let camTried = false;
+async function toggleCam() {
+  panel.classList.toggle('open');
+  if (camTried || !panel.classList.contains('open')) return;
+  camTried = true;
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+    const v = document.createElement('video');
+    v.autoplay = v.muted = v.playsInline = true;
+    v.srcObject = stream;
+    panel.textContent = '';
+    panel.append(v);
+  } catch {
+    panel.textContent = 'Camera feed (no camera access here)';
+  }
+}
+$('cam').onclick = toggleCam;
+
+async function useMic() {
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    const ac = new AudioContext(), an = ac.createAnalyser();
+    an.fftSize = 1024;
+    ac.createMediaStreamSource(stream).connect(an);
+    mic = { an, buf: new Uint8Array(an.fftSize) };
+    setState('listening');
+  } catch {}
+}
+
+const dev = $('dev');
+function button(label, fn, key = '') {
+  const b = document.createElement('button');
+  b.className = 'glass';
+  b.textContent = label;
+  b.dataset.key = key;
+  b.onclick = fn;
+  dev.append(b);
+}
+const gap = () => dev.append(Object.assign(document.createElement('span'), { className: 'gap' }));
+for (const s of Object.keys(STATES)) button(s, () => setState(s), 's:' + s);
+gap();
+for (const m of Object.keys(MODELS)) button(m === 'open' ? 'Spark Open (Baseten)' : MODELS[m].short, () => setModel(m), 'm:' + m);
+gap();
+button('Play Act 1 (A)', playAct1);
+button('Mic', useMic);
+button('Hide (H)', () => document.body.classList.add('clean'));
+function mark() {
+  const on = ['s:' + state, 'm:' + model];
+  for (const b of dev.querySelectorAll('button')) b.classList.toggle('on', on.includes(b.dataset.key));
+}
+addEventListener('keydown', e => {
+  if (e.target.closest('#ask')) return;
+  if (e.key === 'h') document.body.classList.toggle('clean');
+  if (e.key === 'a') playAct1();
+  if (e.key === 'c') toggleCam();
+});
+
+// the typed way in: the text, or the added file's name, shows as the request, then a stand-in reply. Live, it doesn't
+// reach the copilot yet, so it does nothing rather than show a made-up reply
+let attached = null;
+$('file').addEventListener('change', e => {
+  attached = e.target.files[0] || null;
+  $('chip').textContent = attached ? attached.name : '';
+  $('chip').hidden = !attached;
+});
+$('ask').addEventListener('submit', e => {
+  e.preventDefault();
+  const text = $('text').value.trim();
+  if (LIVE || (!text && !attached)) return;
+  timers.forEach(clearTimeout);
+  $('calls').innerHTML = '';
+  you(text || attached.name);
+  $('text').value = '';
+  $('file').value = '';
+  attached = null;
+  $('chip').hidden = true;
+  setModel('spark');
+  begin('spark');
+  setState('thinking');
+  say('Reading it.');
+  timers = [setTimeout(() => { call('spark', 1.1); setState('speaking'); say('Here’s where the reply goes.'); }, 2200),
+            setTimeout(() => setState('idle'), 5200)];
+});
+
+// start settled in the sea
+for (const d of DOTS) d.at = PLACE.sea(d);
+setModel('spark');
+setState('idle');
+say('Say “Copilot” to start.', false);
+requestAnimationFrame(frame);
+// live, each event from the copilot is [function, ...arguments] for one of the functions above, or clear, which empties
+// the call bar for a new turn. On its own, the page plays the mocked Act 1
+if (LIVE) {
+  const live = { setState, setModel, you, say, begin, call, total, clear: () => { $('calls').innerHTML = ''; } };
+  new EventSource('events').onmessage = e => { const [fn, ...args] = JSON.parse(e.data); live[fn]?.(...args); };
+} else setTimeout(playAct1, 1500);
+</script>
+<!-- The dot lattice is adapted from thinking-orbs:
+
+MIT License
+
+Copyright (c) 2026 Jakub Antalik
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+-->
+<!-- The bloom and the sun rays in the light section are adapted from WebGL-Fluid-Simulation
+     (https://github.com/PavelDoGreat/WebGL-Fluid-Simulation):
+
+MIT License
+
+Copyright (c) 2017 Pavel Dobryakov
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+-->
+</body>
+</html>

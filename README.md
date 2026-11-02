@@ -8,11 +8,12 @@ Built for the Meta Global AI Developer Hackathon (Indie track, Push the Frontier
 
 ## Built during the hackathon, and what it builds on
 
-Everything in this repository was written during the hackathon, starting Oct 26, 2026, and the commit history dates every change. The one exception is the vendored URDF listed below.
+Everything in this repository was written during the hackathon, starting Oct 26, 2026, and the commit history dates every change. The exceptions are the vendored URDF and the two pieces of MIT-licensed code the HUD's page adapts, all listed below.
 
 | Built here | What it does |
 |---|---|
 | `wbc/agent/` | Router loop, tool registry, `ask_coder`, voice front end, spoken replies, budget guard, console HUD |
+| `hud/`, `wbc/agent/web_hud.py` | The HUD's orb page (canvas and WebGL, no packages), and the agent's live feed to it with `--hud`, over Server-Sent Events from the standard library: the mic listening, each request, every model call with its time, the reply and its speech, and each turn's time and spend. `hud/CREDITS.md` lists what the page borrows |
 | `wbc/agent/memory.py` | The session record that survives restarts and a full context (a summary plus a record of each turn), and the `remember` / `recall` / `forget` notebook |
 | `wbc/motion/kinematics.py` | URDF chain loader, forward kinematics, damped least-squares IK, the (x, y, z, pitch, roll) grasp frame |
 | `wbc/motion/sts.py`, `wbc/motion/probe.py` | A small STS3215 servo client and the gripper feedback probe |
@@ -27,7 +28,7 @@ Everything in this repository was written during the hackathon, starting Oct 26,
 | `wbc/reflex/fsr_link.py`, `wbc/reflex/fsr_cal.py` | The force sensor link (500 Hz frames with a CRC), per-sensor calibration fit and creep analysis |
 | `wbc/perception/` | The SAM 3.1 client (one noun phrase per request, sent in parallel; masks decoded and drawn), camera capture, and the board reader: the carrier's tags, the top-down board view, the hole grid fit, wire tracing, the netlist and its check against `pins.h` |
 | `scripts/sam_probe.py`, `scripts/read_board.py`, `scripts/make_carrier.py` | What SAM 3.1 finds in a still; the board reader on a still; the printable carrier sheet |
-| `config/`, `fixtures/`, `scripts/`, `tests/` | Model routing config, the recorded bench for `--sim`, the smoke test, gripper probe and force sensor tools, 709 tests |
+| `config/`, `fixtures/`, `scripts/`, `tests/` | Model routing config, the recorded bench for `--sim`, the smoke test, gripper probe and force sensor tools, 734 tests |
 | `firmware/dut_demo/` | The Act 1 demo board firmware, with the wiring bug planted on purpose |
 | `firmware/fsr_sampler/` | ESP32 firmware that samples the four jaw sensors at 500 Hz and streams them over USB |
 
@@ -35,6 +36,8 @@ Everything in this repository was written during the hackathon, starting Oct 26,
 |---|---|---|
 | `hardware/so101_new_calib.urdf`, from [TheRobotStudio/SO-ARM100](https://github.com/TheRobotStudio/SO-ARM100) | Apache-2.0 | The arm's kinematic chain (unchanged copy) |
 | [LeRobot](https://github.com/huggingface/lerobot) | Apache-2.0 | Servo calibration and the Feetech bus (from Oct 27) |
+| The dot lattice from [thinking-orbs](https://github.com/Jakubantalik/thinking-orbs) | MIT | The orb's rings of dots in `hud/orb-light.html`, adapted to turn on the Siri line and ride our own waves (the notice is at the end of the page) |
+| The bloom and sun rays from [WebGL-Fluid-Simulation](https://github.com/PavelDoGreat/WebGL-Fluid-Simulation) | MIT | The light streaming from the orb's dots in `hud/orb-light.html`, adapted to carry the dots' colors (the notice is at the end of the page) |
 | Muse Spark, Muse Wonder, Muse Voice Transcribe, SAM 3.1 on the Meta Model API | Meta API terms | Routing, coding, speech, segmentation |
 | [meta-sam-parser](https://pypi.org/project/meta-sam-parser/) 0.1, from Meta | SAM License | Reading SAM 3.1's replies: the token grammar and the mask codec (installed from PyPI, not vendored) |
 | [AprilTag](https://april.eecs.umich.edu/software/apriltag)'s tag36h11 family, as built into OpenCV's ArUco module | BSD-2-Clause | The carrier's tags |
@@ -90,6 +93,7 @@ Then type `My force sensor isn't reading anything. Check my wiring against the f
 - With `--voice`, replies are also said out loud with macOS `say`: the first sentence or two of each, while the HUD shows all of it. The mic drops what it hears while the co-pilot speaks, so it doesn't answer itself. `--no-speak` keeps replies on the HUD, and `--speak` says them without `--voice`. `mouth:` in `config/models.yaml` picks the voice (`say -v '?'` lists them) and the rate.
 - `--backup` routes with Muse Glimmer on your own machine. Serve it with any OpenAI-compatible server that supports tool calls (llama.cpp's `llama-server`, LM Studio or Ollama), then set `backup.base_url` and `backup.model` in `config/models.yaml`. The 4-bit build fits easily in 64 GB.
 - Every turn is recorded in `.wbc/session.json`, with the tools it ran, however it ends (a failure, the budget's stop, Ctrl-C). Each run starts a new session and moves the last one to `.wbc/sessions/` at its first turn; `--resume` picks the last one up instead. `--sim` runs keep their own (`.wbc/session-sim.json`), so a rehearsal never becomes the session a real run picks up. Within a run, Spark chains each turn onto the last. When the conversation gets too long (`memory.compact_at_tokens` or `memory.keep_turns`) or two turns in a row fail, its turns become a summary and a new conversation starts from it. Picked-up turns and summaries reach the router as reference only, with a rule to ask what's still to do rather than redo anything. Where code decides, it never runs a tool twice: a context that fills up after a tool has run ends the turn with that question instead of running it again.
+- `--hud` shows each turn live on the HUD's orb page: open <http://127.0.0.1:8766/> in Chrome (`--hud 8800` picks another port). The page shows the mic listening, the request, the model at work under its own name, each model call's time, the reply as it's said, and the turn's time and spend. `hud/README.md` has the details, and how to open the page on its own.
 - The router keeps a notebook in `.wbc/notebook.jsonl` with its `remember`, `recall` and `forget` tools, and the newest 20 notes go into every call, in every session, `--sim` or not. A note can say where a thing goes on the desk, with the short name `locate` should look for in quotes (The screwdriver goes on the "sticky note" in the long recess of the bit case), so "put the screwdriver away" works in a later session. A note never moves the arm: the arm's tools take only names, which the desk camera turns into places, and every move waits for Enter. Move the notebook aside for a run that shouldn't see it, such as a timed Act 1.
 
 ## Servo ids on an assembled arm

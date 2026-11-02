@@ -51,7 +51,8 @@ def spoken(text: str, sentences: int = 2, limit: int = 240) -> str:
 
 
 class Mouth:
-    def __init__(self, cfg: dict, command: str | None = None, popen=subprocess.Popen, clock=time.monotonic):
+    def __init__(self, cfg: dict, command: str | None = None, popen=subprocess.Popen, clock=time.monotonic,
+                 hud=None):
         self.command = command or shutil.which("say")  # None off macOS: replies stay on the HUD
         self.voice = cfg.get("voice")
         self.rate = cfg.get("rate")
@@ -59,6 +60,7 @@ class Mouth:
         self.tail_s = cfg.get("tail_s", 0.4)
         self.popen = popen
         self.clock = clock
+        self.hud = hud  # told when speech starts and when the last of it ends, for the web HUD's orb
         self._lock = threading.Lock()
         self._proc = None
         self._spans = collections.deque(maxlen=8)  # [start, end] of recent speech; end is None while it lasts
@@ -85,6 +87,8 @@ class Mouth:
             span = [self.clock(), None]
             self._proc = proc
             self._spans.append(span)
+        if self.hud is not None:
+            self.hud.speaking(True)
         self.waiter = threading.Thread(target=self._ended, args=(proc, span), daemon=True)
         self.waiter.start()
 
@@ -92,6 +96,9 @@ class Mouth:
         proc.wait()
         with self._lock:
             span[1] = self.clock()
+            over = self._proc is proc or self._proc is None  # not cut off by a newer reply, which goes on
+        if over and self.hud is not None:
+            self.hud.speaking(False)
 
     def busy(self, at: float | None = None) -> bool:
         """Whether sound recorded at `at` (now if None) may hold its voice: while it spoke, or `tail_s` after."""

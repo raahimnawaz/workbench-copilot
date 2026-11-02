@@ -91,6 +91,11 @@ class Segmenter:
     def threshold(self) -> float:
         return max(self.min_rms, (self.floor or 0.0) * self.ratio)
 
+    @property
+    def hearing(self) -> bool:
+        """Whether an utterance is in progress: it has started and not yet ended."""
+        return self._speech is not None
+
     def reset(self) -> bytes | None:
         """Stop listening mid-stream, keeping the room's noise floor.
 
@@ -189,6 +194,8 @@ def listen_forever(on_text, cfg: dict, api_key: str, budget, hud, mic=None, tran
 
     Audio for which `muted(t)` is true, t being when it was recorded (the co-pilot speaking), is dropped, along with
     any utterance it cut into. One that had already gone quiet when the co-pilot started is still heard.
+
+    The HUD hears about each utterance from its start until it's transcribed, and about each request heard.
     """
     try:
         mic = mic or Microphone(cfg.get("sample_rate", 16000), cfg.get("input_device"))
@@ -199,7 +206,7 @@ def listen_forever(on_text, cfg: dict, api_key: str, budget, hud, mic=None, tran
     phrase = cfg.get("wake_phrase", "copilot")
     gate = Segmenter(mic.rate)
     hud.note(f'voice on {mic.name}: say "{phrase.capitalize()}," and your request')
-    listened, checked, awake_until = 0.0, False, 0.0
+    listened, checked, awake_until, hearing = 0.0, False, 0.0, False
     for t, chunk in mic.chunks():
         if muted is not None and muted(t):
             heard = [pcm for pcm in [gate.reset()] if pcm]  # only a request that ended before the co-pilot spoke
@@ -210,7 +217,8 @@ def listen_forever(on_text, cfg: dict, api_key: str, budget, hud, mic=None, tran
         for pcm in heard:
             seconds = len(pcm) / 2 / mic.rate
             try:
-                text = transcriber.transcribe(pcm_to_wav(pcm, mic.rate), seconds)
+                with hud.calling(cfg.get("model")):
+                    text = transcriber.transcribe(pcm_to_wav(pcm, mic.rate), seconds)
             except Exception as e:
                 hud.note(f"transcription failed ({type(e).__name__}: {e}); type the request instead")
                 continue
@@ -225,7 +233,11 @@ def listen_forever(on_text, cfg: dict, api_key: str, budget, hud, mic=None, tran
             else:
                 awake_until = 0.0
                 hud.note(f"heard ({seconds:.1f} s): {request}")
+                hud.heard(request)
                 on_text(request)
+        if gate.hearing != hearing:  # after any transcription, so an utterance counts as heard until it's read
+            hearing = gate.hearing
+            hud.hearing(hearing)
         if not checked and listened >= 2.0:
             checked = True
             if gate.floor == 0:  # a mic macOS hasn't allowed records exact zeros

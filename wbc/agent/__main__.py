@@ -12,6 +12,9 @@ its motors go off; any other exit asks before moving it.
 
 Every turn is recorded in .wbc/session.json (wbc/agent/memory.py), however it ends. Each run starts a new session, and
 --resume picks up the last one instead; the notebook the router keeps with `remember` carries over either way.
+
+With --hud, the HUD's orb page shows each turn live at http://127.0.0.1:8766/ (wbc/agent/web_hud.py): the mic
+listening, the request, every model call with its time, the reply and its speech, and the turn's time and spend.
 """
 from __future__ import annotations
 
@@ -31,16 +34,19 @@ from wbc.agent.loop import ChatRouter, Router
 from wbc.agent.memory import Memory
 from wbc.agent.mouth import Mouth
 from wbc.agent.tools import Bench, add_memory_tools, build_toolbox
+from wbc.agent.web_hud import WebHud
 
 SYSTEM = (Path(__file__).parent / "prompts" / "system.md").read_text(encoding="utf-8")
+FAILED = "That turn failed. The error is on the screen."
 
 
 def build(sim: bool, backup: bool, router_model: str | None = None, arm: bool = False,
-          calibration_dir: str | None = None, prefetch: bool = True, resume: bool = False):
+          calibration_dir: str | None = None, prefetch: bool = True, resume: bool = False,
+          hud_port: int | None = None):
     models = config.load_yaml("models.yaml")
     budget = Budget.from_config(models, config.ROOT)
-    hud = ConsoleHud()
-    meta = config.meta_client(models)  # the coder always runs on the Meta Model API
+    hud = ConsoleHud() if hud_port is None else WebHud(models, budget, hud_port, backup=backup)
+    meta = hud.watch(config.meta_client(models))  # the coder always runs on the Meta Model API
     robot_cfg = config.load_yaml("robot.yaml")
     keyboard = Keyboard(say=hud.note)
     bench = Bench(config.ROOT, models, meta, budget, sim=sim, say=hud.note, layout=config.load_yaml("bench.yaml"),
@@ -54,7 +60,7 @@ def build(sim: bool, backup: bool, router_model: str | None = None, arm: bool = 
     add_memory_tools(toolbox, memory.notebook)
     if backup:
         b = models["backup"]
-        router = ChatRouter(config.backup_client(models), b["model"], toolbox, budget, hud, SYSTEM,
+        router = ChatRouter(hud.watch(config.backup_client(models)), b["model"], toolbox, budget, hud, SYSTEM,
                             max_steps=max_steps, prefetch=prefetch, memory=memory, reasoning=b.get("reasoning"))
     else:
         r = models["router"]
@@ -82,11 +88,14 @@ def main(argv=None) -> int:
                     help="skip the bench facts fetched before each turn (Act 1's board read, pins.h and the sensor)")
     ap.add_argument("--resume", action="store_true",
                     help="pick up the last session (.wbc/session.json) instead of starting a new one")
+    ap.add_argument("--hud", nargs="?", const=8766, type=int, metavar="PORT",
+                    help="show each turn live on the HUD's orb page, at http://127.0.0.1:8766/ (or PORT)")
     args = ap.parse_args(argv)
 
     try:
         models, budget, hud, router, bench, keyboard = build(args.sim, args.backup, args.router_model, args.arm,
-                                                             args.calibration_dir, not args.no_prefetch, args.resume)
+                                                             args.calibration_dir, not args.no_prefetch, args.resume,
+                                                             args.hud)
     except RuntimeError as e:  # missing key or voice extras
         print(e, file=sys.stderr)
         return 2
@@ -105,7 +114,7 @@ def main(argv=None) -> int:
         hud.note(warning)
     mouth = None
     if (args.voice if args.speak is None else args.speak) and not args.hear:
-        mouth = Mouth(models.get("mouth") or {})
+        mouth = Mouth(models.get("mouth") or {}, hud=hud)
         if mouth.command is None:
             hud.note("spoken replies off: macOS say isn't on this machine")
             mouth = None
@@ -140,12 +149,15 @@ def main(argv=None) -> int:
                 return 0
             if args.hear:
                 continue
+            hud.turn(text)
             try:
                 reply = router.run_turn(text)
                 if mouth:
                     mouth.speak(reply)
+                hud.turn_over()
             except BudgetExceeded as e:
                 hud.note(str(e))
+                hud.turn_over(str(e))
                 # An exit nobody typed: the arm moves home only on Enter, and holds where it is until there's an
                 # answer. Once the input has ended (Ctrl-D), before the question or during it, it goes home as ever
                 home = bench.can_go_home()
@@ -158,8 +170,9 @@ def main(argv=None) -> int:
                 return 1
             except Exception as e:
                 hud.note(f"turn failed: {type(e).__name__}: {e}")
+                hud.turn_over(FAILED)
                 if mouth:
-                    mouth.speak("That turn failed. The error is on the screen.")
+                    mouth.speak(FAILED)
     except KeyboardInterrupt:
         home = False
         keyboard.close()  # a move waiting for Enter gets a no, and so does any that asks later

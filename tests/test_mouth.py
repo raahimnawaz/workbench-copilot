@@ -126,6 +126,22 @@ def test_a_new_reply_cuts_off_the_last_one():
     assert second.terminated
 
 
+def test_the_hud_hears_when_speech_starts_and_when_the_last_of_it_ends():
+    say, hud = FakeSay(), SilentHud()
+    mouth = Mouth({}, command="say", popen=say, clock=lambda: 0.0, hud=hud)
+    mouth.speak("First reply.")
+    first = mouth.waiter
+    mouth.speak("Second reply.")
+    first.join(1)
+    assert hud.shown == [("speaking", True), ("speaking", True)], "cut off by the second, which goes on"
+    say.runs[1].finish()
+    mouth.waiter.join(1)
+    mouth.speak("Third reply.")
+    mouth.stop()
+    mouth.waiter.join(1)
+    assert hud.shown[2:] == [("speaking", False), ("speaking", True), ("speaking", False)]
+
+
 def test_a_say_that_wont_run_leaves_replies_on_the_hud():
     def broken(args, **kwargs):
         raise FileNotFoundError(args[0])
@@ -151,7 +167,7 @@ def test_flags_choose_when_it_speaks_and_the_mic_waits_for_it(monkeypatch, flags
                can_go_home=lambda: False)
     monkeypatch.setattr(agent, "build", lambda *a: ({"ears": {}, "coder": {}, "mouth": {}}, budget, SilentHud(), router,
                                                     bench, NS(offer=lambda line: False, close=lambda: None)))
-    monkeypatch.setattr(agent, "Mouth", lambda cfg: Mouth(cfg, command="say", popen=say))
+    monkeypatch.setattr(agent, "Mouth", lambda cfg, **kw: Mouth(cfg, command="say", popen=say, **kw))
     monkeypatch.setattr(agent.coder, "compile_in_sandbox", lambda *a: None)
     monkeypatch.setattr(agent.config, "api_key", lambda: "key")
     monkeypatch.setattr(agent.ears, "listen_forever", lambda *a, **kw: (heard.update(kw), started.set()))

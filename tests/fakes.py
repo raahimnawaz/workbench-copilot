@@ -1,5 +1,8 @@
 """Stand-ins for the OpenAI SDK's response objects, so tests run offline."""
+import contextlib
 from types import SimpleNamespace as NS
+
+from wbc.agent.hud import ConsoleHud
 
 
 def usage(tokens_in=1000, tokens_out=100):
@@ -49,9 +52,12 @@ class FakeChatClient:
         self.chat = NS(completions=FakeChatCompletions(scripted))
 
 
-class SilentHud:
+class SilentHud(ConsoleHud):
+    """Records what the console would print in `events`, and what only the web HUD shows in `shown`."""
+
     def __init__(self):
         self.events = []
+        self.shown = []
 
     def call(self, label, name, arguments):
         self.events.append(("call", label, name))
@@ -64,6 +70,29 @@ class SilentHud:
 
     def reply(self, label, text):
         self.events.append(("reply", label, text))
+
+    @contextlib.contextmanager
+    def calling(self, model):
+        self.shown.append(("calling", model))
+        try:
+            yield
+        finally:
+            self.shown.append(("called", model))
+
+    def hearing(self, on):
+        self.shown.append(("hearing", on))
+
+    def heard(self, request):
+        self.shown.append(("heard", request))
+
+    def turn(self, text):
+        self.shown.append(("turn", text))
+
+    def turn_over(self, failure=""):
+        self.shown.append(("turn_over", failure))
+
+    def speaking(self, on):
+        self.shown.append(("speaking", on))
 
 
 class FakeSam:

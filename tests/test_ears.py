@@ -186,3 +186,24 @@ def test_a_request_that_ended_just_before_the_reply_is_still_heard():
     hud, sent, t = SilentHud(), [], FakeTranscriber("Copilot, flash it.")
     listen_forever(sent.append, {"wake_phrase": "copilot"}, "key", None, hud, mic=mic, transcriber=t, muted=speaking)
     assert sent == ["flash it."]
+
+
+def test_the_hud_hears_each_utterance_until_it_is_read_and_each_request():
+    mic = FakeMic(quiet(2.5), voice(1), quiet(1.5), voice(1), quiet(1.5))
+    hud, sent = SilentHud(), []
+    listen_forever(sent.append, {"wake_phrase": "copilot", "model": "ears"}, "key", None, hud, mic=mic,
+                   transcriber=FakeTranscriber("Copilot, check my wiring.", "pass me the solder"))
+    assert hud.shown == [("hearing", True), ("calling", "ears"), ("called", "ears"), ("heard", "check my wiring."),
+                         ("hearing", False),
+                         ("hearing", True), ("calling", "ears"), ("called", "ears"), ("hearing", False)]
+
+
+def test_the_hud_stops_listening_when_the_copilots_voice_cuts_an_utterance_off():
+    mic = FakeMic(quiet(2.5), voice(2), quiet(1.5))
+    speaking = lambda t: 3.0 <= t < 3.5  # in the middle of the voice
+    hud, sent, t = SilentHud(), [], FakeTranscriber("Copilot, flash it.")
+    listen_forever(sent.append, {"wake_phrase": "copilot", "model": "ears"}, "key", None, hud, mic=mic,
+                   transcriber=t, muted=speaking)
+    assert hud.shown == [("hearing", True), ("hearing", False),  # cut off, and never transcribed
+                         ("hearing", True), ("calling", "ears"), ("called", "ears"), ("heard", "flash it."),
+                         ("hearing", False)]
