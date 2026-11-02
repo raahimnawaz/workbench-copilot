@@ -13,7 +13,7 @@ FIX = """Here's the fix.
 ```diff
 --- firmware/dut_demo/include/pins.h
 +++ firmware/dut_demo/include/pins.h
-@@ -6,2 +6,2 @@
+@@ -5,2 +5,2 @@
 -#define SENSOR_PIN 15    // the sensor's divider, through its jumper
 +#define SENSOR_PIN 4     // the sensor's divider, through its jumper
  #define SAMPLE_MS  20    // one reading every 20 ms, printed over serial
@@ -122,7 +122,7 @@ def test_auto_stage_puts_a_checked_patch_in_the_working_tree(tmp_path):
     root = project(tmp_path)
     tb = build_toolbox(Bench(root, {"coder": cfg(auto_stage=True)}, wonder_says(FIX), budget()))
     out = tb.dispatch("ask_coder", {"task": "Fix the sensor pin", "files": [PINS]})
-    assert out["ok"] and out["staged"]["ok"] and out["staged"]["line"] == 6
+    assert out["ok"] and out["staged"]["ok"] and out["staged"]["line"] == 5
     assert "#define SENSOR_PIN 4 " in (root / PINS).read_text()
     again = tb.dispatch("propose_patch", {"patch_id": out["patch_id"]})
     assert again["ok"] and again["already_staged"]
@@ -141,6 +141,6 @@ def test_propose_patch_applies_to_the_working_tree(tmp_path):
     root = project(tmp_path)
     diff, why = coder.split_diff(FIX)
     out = coder.propose_patch(root, diff, why)
-    assert out["ok"] and out["files"] == [PINS] and out["line"] == 6
+    assert out["ok"] and out["files"] == [PINS] and out["line"] == 5
     assert "#define SENSOR_PIN 4 " in (root / PINS).read_text()
     assert coder.propose_patch(root, diff, why)["ok"] is False, "a second apply must fail cleanly"

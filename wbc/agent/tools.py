@@ -3,8 +3,8 @@
 read_breadboard photographs the board and reads it with SAM 3.1 (wbc/perception). locate finds things on the desk
 with the desk camera, and pick_up, put_down and arm_home move them with the arm (wbc/motion/hand.py), only with the
 agent started with --arm: at once, the request being the go-ahead, or each only after the user presses Enter, as
-robot.yaml's hand.go_ahead says. The spoken stop (Bench.halt) holds the arm where it got to. look and point_at are
-still stubs. With --sim,
+robot.yaml's hand.go_ahead says. The spoken stop (Bench.halt) holds the arm where it got to. look is still a
+stub. With --sim,
 read_breadboard and locate return recorded scenes and the arm's tools pretend to move, so the router and coder can be
 tested with no hardware. remember, recall and forget keep the router's notebook (wbc/agent/memory.py).
 """
@@ -249,7 +249,7 @@ def build_toolbox(bench: Bench) -> Toolbox:
             "task": {"type": "string", "description": "What to change and why, in one or two sentences"},
             "files": {"type": "array", "items": {"type": "string"}, "maxItems": 4,
                       "description": "Repo-relative paths the change may touch"},
-            "facts": {"type": "object", "description": "Measured facts, e.g. the mismatch from read_breadboard"}},
+            "facts": {"type": "object", "description": "Measured facts, e.g. from read_breadboard and read_sensor"}},
         "required": ["task", "files"]}, label="Wonder")
     def ask_coder(task: str, files: list, facts: dict | None = None) -> dict:
         result = coder.ask_coder(bench.client, bench.models["coder"], bench.budget, bench.root, task, files, facts)
@@ -302,18 +302,6 @@ def build_toolbox(bench: Bench) -> Toolbox:
         "required": ["question"]}, label="SAM")
     def look(question: str, camera: str = "overhead") -> dict:
         return _not_wired("look", "D3")
-
-    @tb.register("point_at", (
-        "Hover the lit stylus over a breadboard hole, row or wire id from read_breadboard. Returns the tip "
-        "error measured by the wrist camera."), {
-        "type": "object",
-        "properties": {"target": {"type": "string", "description": "e.g. 'a5', 'row:5', 'wire:2'"},
-                       "hover_mm": {"type": "number", "minimum": 4, "maximum": 30, "default": 8}},
-        "required": ["target"]}, label="arm")
-    def point_at(target: str, hover_mm: float = 8) -> dict:
-        if bench.sim:
-            return {"ok": True, "sim": True, "target": target, "hover_mm": hover_mm, "tip_error_mm": 0.0}
-        return _not_wired("point_at", "D5")
 
     @tb.register("read_sensor", (
         "Read the demo board's force sensor live over serial for a few seconds. Returns the readings in "

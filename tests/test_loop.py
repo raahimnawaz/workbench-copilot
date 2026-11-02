@@ -305,10 +305,23 @@ def test_sim_bench_tools():
     tb = build_toolbox(Bench(ROOT, models, client=None, budget=Budget(10, {}), sim=True))
     scene = tb.dispatch("read_breadboard", {})
     assert scene["ok"] and scene["mismatches"][0]["signal"] == "SENSOR_PIN"
-    assert tb.dispatch("point_at", {"target": "row:5"})["sim"] is True
+    assert "point_at" not in tb.names(), "Act 1 has no arm step: live, the stub only said it wasn't wired"
     assert "call ask_coder first" in tb.dispatch("propose_patch", {"patch_id": "p9"})["error"]
-    assert set(tb.names()) >= {"read_file", "ask_coder", "propose_patch", "read_breadboard", "look", "point_at"}
+    assert set(tb.names()) >= {"read_file", "ask_coder", "propose_patch", "read_breadboard", "look"}
 
+
+def test_nothing_the_agent_reads_by_default_says_where_the_bug_is():
+    """Nov 1: pins.h said "the sensor's jumper goes to GPIO 4, but this file says 15", and Spark quoted it, so a
+    diagnosis proved nothing. The board read and the live readings have to find it."""
+    tb = build_toolbox(Bench(ROOT, load_yaml("models.yaml"), client=None, budget=Budget(10, {}), sim=True))
+    seen = {name: (ROOT / "wbc/agent/prompts" / name).read_text(encoding="utf-8") for name in ("system.md", "coder.md")}
+    seen["the tools"] = json.dumps(tb.schemas())
+    seen["the recording's note"] = tb.dispatch("read_breadboard", {})["note"]
+    for path in ("firmware/dut_demo/include/pins.h", "firmware/dut_demo/src/main.cpp"):
+        seen[path] = tb.dispatch("read_file", {"path": path})["text"]
+    for name, text in seen.items():
+        for hint in ("planted", "bug", "gpio 4", "gpio4", "says 15", "wrong pin", "wrong gpio"):
+            assert hint not in text.lower(), f"{name} says {hint!r}"
 
 def test_read_file_refuses_paths_outside_the_repo():
     tb = build_toolbox(Bench(ROOT, load_yaml("models.yaml"), None, Budget(10, {})))

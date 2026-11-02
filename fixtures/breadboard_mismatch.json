@@ -1,7 +1,7 @@
 {
  "ok": true,
  "sim": true,
- "note": "Recorded scene for --sim runs: the Act 1 board, with the force sensor's jumper on GPIO 4 while pins.h says 15.",
+ "note": "Recorded scene for --sim runs: the Act 1 board.",
  "wires": [
   {"id": "wire:1", "color": "orange", "ends": ["a5", "a26"], "residual_mm": [0.3, 0.4]},
   {"id": "wire:2", "color": "white", "ends": ["b26", "b30"], "residual_mm": [0.5, 0.4]},
@@ -18,7 +18,7 @@
    "wired_to": 4,
    "wire": "wire:1",
    "file": "firmware/dut_demo/include/pins.h",
-   "line": 6,
+   "line": 5,
    "problem": "wired to a different GPIO",
    "hole": "a5",
    "row": "row:5"

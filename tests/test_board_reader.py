@@ -169,7 +169,7 @@ def test_color_names(bgr, name):
 
 def test_pins_h_defines():
     defines = netlist.read_defines(ROOT / "firmware/dut_demo/include/pins.h")
-    assert defines["SENSOR_PIN"] == (15, 6) and defines["SAMPLE_MS"] == (20, 7)
+    assert defines["SENSOR_PIN"] == (15, 5) and defines["SAMPLE_MS"] == (20, 6)
 
 
 def test_module_pins_follow_their_headers():
@@ -198,7 +198,7 @@ def test_check_follows_each_signal_to_the_gpio_its_net_reaches():
     assert miss["wired_to"] == [2, 4] and miss["problem"] == "wired to several GPIOs"
     _, (miss,) = check()
     assert miss == {"signal": "SENSOR_PIN", "pins_h": 15, "wired_to": None, "wire": None, "file": "pins.h",
-                    "line": 6, "problem": "not wired to any GPIO"}
+                    "line": 5, "problem": "not wired to any GPIO"}
 
 
 # --- the whole read ---
@@ -214,7 +214,7 @@ def test_reader_finds_the_planted_sensor_bug(tmp_path):
     (miss,) = result["mismatches"]
     assert {k: miss[k] for k in ("signal", "pins_h", "wired_to", "hole", "row", "file", "line")} == {
         "signal": "SENSOR_PIN", "pins_h": 15, "wired_to": 4, "hole": "a5", "row": "row:5",
-        "file": "firmware/dut_demo/include/pins.h", "line": 6}
+        "file": "firmware/dut_demo/include/pins.h", "line": 5}
     assert result["endpoint_residual_mm"]["max"] < 0.6
     assert len(client.requests) == 1 and b.spent == pytest.approx(0.0025)
     assert result["_image"][:8] == b"\x89PNG\r\n\x1a\n" and set(result["_timing"]) == {"tags", "sam", "trace"}
@@ -307,5 +307,5 @@ def test_read_board_script_checks_and_reads_a_saved_photo(tmp_path, monkeypatch,
 
     assert script.main(["read", "--photo", str(path)]) == 0
     out = capsys.readouterr().out
-    assert "MISMATCH SENSOR_PIN: wired to a different GPIO, wired to 4, pins.h line 6 says 15 (at a5)" in out
+    assert "MISMATCH SENSOR_PIN: wired to a different GPIO, wired to 4, pins.h line 5 says 15 (at a5)" in out
     assert len(client.requests) == 1 and b.spent == pytest.approx(0.0025)
