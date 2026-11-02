@@ -2,9 +2,11 @@
 
 The mic stays open while voice is on. A loudness gate cuts the stream into utterances, Muse Voice Transcribe
 transcribes each one, and only those that start with the wake phrase ("Copilot, check my wiring") go to the
-router. The wake phrase alone ("Copilot.") makes the next utterance the request. While the co-pilot speaks a reply
-(`mouth.py`), what the mic picks up is dropped. Streaming partial transcripts over the realtime socket is the v2
-upgrade (sheet 08).
+router. The wake phrase alone ("Copilot.") makes the next utterance the request, and after a reply that asks
+something, so does a short answer ("Yes.") for ANSWER_S seconds. While the co-pilot speaks a reply (`mouth.py`), what
+the mic picks up is dropped, except the stop. "Copilot, stop", or "Stop!" on its own, never becomes a request: it goes
+straight to the stop, which holds the arm where it is, even while a turn runs. Streaming partial transcripts over the
+realtime socket is the v2 upgrade (sheet 08).
 
 The request format was checked against the live API on 2026-10-26: a multipart upload with a JSON
 `request` part (model, audioEncoding, keywords) and an `audio` part, answered with {"transcript": ...}.
@@ -24,6 +26,11 @@ import numpy as np
 FRAME_S = 0.03  # the loudness gate works on 30 ms frames
 FILLERS = ("hey", "ok", "okay", "um", "uh", "so", "and")  # allowed before the wake phrase
 AWAKE_S = 8.0  # after the wake phrase alone, how long the next utterance counts as the request
+ANSWER_S = 8.0  # after a reply that asks something, how long a short answer counts without the wake phrase
+ANSWER_WORDS = 5  # the most words such an answer has, as in "yes, go ahead and flash"
+STOPS = ("stop", "halt", "freeze")  # the stop's words: after the wake phrase, or a whole utterance on their own
+STOP_ALSO = ("it", "now", "please", "the", "arm", "copilot")  # what "Stop!" on its own may come with ("stop it now")
+STOP_PIECE_S = 2.0  # while the co-pilot speaks, the mic is cut into pieces this long, each heard only for the stop
 
 
 def pcm_to_wav(pcm: bytes, rate: int) -> bytes:
@@ -53,14 +60,63 @@ def dbfs(rms: float) -> float:
     return 20 * float(np.log10(rms / 32768)) if rms > 0 else float("-inf")
 
 
+def _letters(phrase: str) -> str:
+    """A pattern for the wake phrase, which may come split or hyphenated ("co-pilot", "Co pilot")."""
+    return r"[\W_]*".join(re.escape(c) for c in phrase.lower() if c.isalnum())
+
+
 def wake_request(text: str, phrase: str) -> str | None:
     """What follows the wake phrase at the start of `text` ("" for the phrase alone), or None if it isn't there.
 
     The phrase may come split or hyphenated ("co-pilot", "Co pilot") and after a filler ("Hey, copilot").
     """
-    letters = r"[\W_]*".join(re.escape(c) for c in phrase.lower() if c.isalnum())
-    m = re.match(rf"\W*(?:(?:{'|'.join(FILLERS)})\W+)?{letters}\b\W*", text, flags=re.IGNORECASE)
+    m = re.match(rf"\W*(?:(?:{'|'.join(FILLERS)})\W+)?{_letters(phrase)}\b\W*", text, flags=re.IGNORECASE)
     return text[m.end():].strip() if m else None
+
+
+def is_stop(request: str) -> bool:
+    """Whether a request is the stop: "stop", "stop it", "please stop the arm", "halt"."""
+    return re.match(rf"\W*(?:please\W+)?(?:{'|'.join(STOPS)})\b", request, flags=re.IGNORECASE) is not None
+
+
+def bare_stop(text: str) -> bool:
+    """Whether a whole utterance is the stop without the wake phrase: "Stop!", "Stop it, stop."."""
+    words = re.findall(r"[a-z]+", text.lower())
+    return any(w in STOPS for w in words) and all(w in STOPS or w in STOP_ALSO for w in words)
+
+
+def said_stop(text: str, phrase: str) -> bool:
+    """Whether "Copilot, stop" is anywhere in `text`, which may be the co-pilot's own words heard by the mic: they never
+    name it."""
+    return re.search(rf"\b{_letters(phrase)}\W+(?:please\W+)?(?:{'|'.join(STOPS)})\b", text,
+                     flags=re.IGNORECASE) is not None
+
+
+def asks(reply: str) -> bool:
+    """Whether a reply ends asking something."""
+    return re.search(r"\?[\"')\]]*\s*$", reply) is not None
+
+
+class Question:
+    """Whether the co-pilot's last reply asked something: for ANSWER_S seconds after it was given, or after its speech
+    ended, a short answer without the wake phrase ("Yes.") is the request. main() sets it at the end of each turn, and
+    the ears close it once they've passed on a request."""
+
+    def __init__(self):
+        self.at = None  # when the last reply was given, if it asked something
+
+    def asked(self, reply: str, at: float) -> None:
+        self.at = at if asks(reply) else None
+
+    def close(self) -> None:
+        self.at = None
+
+    def answer(self, text: str, now: float, spoke: float) -> bool:
+        """Whether `text`, heard `now`, answers it: short, and within ANSWER_S of the reply or of its speech's end
+        (`spoke`, when the mic last heard it)."""
+        at = self.at
+        return (at is not None and now < max(at, spoke) + ANSWER_S
+                and 0 < len(re.findall(r"[\w']+", text)) <= ANSWER_WORDS)
 
 
 class Segmenter:
@@ -189,11 +245,16 @@ class Microphone:
 
 
 def listen_forever(on_text, cfg: dict, api_key: str, budget, hud, mic=None, transcriber=None,
-                   clock=time.monotonic, muted=None) -> None:
+                   clock=time.monotonic, muted=None, on_stop=None, question=None) -> None:
     """Loop: cut the mic stream into utterances, transcribe each, and hand on the ones addressed to the co-pilot.
 
     Audio for which `muted(t)` is true, t being when it was recorded (the co-pilot speaking), is dropped, along with
     any utterance it cut into. One that had already gone quiet when the co-pilot started is still heard.
+
+    With `on_stop`, the stop ("Copilot, stop", or "Stop!" on its own) calls on_stop() at once instead of becoming a
+    request, and it's heard over the co-pilot's voice too: while it speaks, the mic is cut into STOP_PIECE_S pieces,
+    each transcribed only to look for "Copilot, stop". With `question` (a Question), a short answer without the wake
+    phrase is the request while the co-pilot's last reply waits for one.
 
     The HUD hears about each utterance from its start until it's transcribed, and about each request heard.
     """
@@ -205,33 +266,65 @@ def listen_forever(on_text, cfg: dict, api_key: str, budget, hud, mic=None, tran
     transcriber = transcriber or Transcriber(cfg, api_key, budget)
     phrase = cfg.get("wake_phrase", "copilot")
     gate = Segmenter(mic.rate)
+    under = Segmenter(mic.rate, max_s=STOP_PIECE_S) if on_stop is not None else None  # over its voice: the stop only
     hud.note(f'voice on {mic.name}: say "{phrase.capitalize()}," and your request')
-    listened, checked, awake_until, hearing = 0.0, False, 0.0, False
+    listened, checked, awake_until, hearing, spoke, before = 0.0, False, 0.0, False, 0.0, ""
+
+    def transcribe(pcm: bytes, seconds: float, then: str = "; type the request instead") -> str | None:
+        try:
+            with hud.calling(cfg.get("model")):
+                return transcriber.transcribe(pcm_to_wav(pcm, mic.rate), seconds)
+        except Exception as e:
+            hud.note(f"transcription failed ({type(e).__name__}: {e}){then}")
+            return None
+
     for t, chunk in mic.chunks():
         if muted is not None and muted(t):
+            spoke = t
             heard = [pcm for pcm in [gate.reset()] if pcm]  # only a request that ended before the co-pilot spoke
-        else:
+            over = []
+            if under is not None:
+                if not under.hearing:  # judged against the room, not its voice, so that's cut into pieces too
+                    under.floor = gate.floor
+                over = under.feed(chunk)
+        else:  # a piece started over its voice runs on to its end, so a stop said as it finished is heard whole
+            over = under.feed(chunk) if under is not None and under.hearing else []
             heard = gate.feed(chunk)
             if not checked:
                 listened += len(chunk) / 2 / mic.rate
+        for pcm in over:
+            text = transcribe(pcm, len(pcm) / 2 / mic.rate, then=" over its voice; Ctrl-C stops the arm")
+            if text is None:
+                continue
+            if said_stop(f"{before} {text}", phrase):  # with the piece before, for a stop cut in two
+                before = ""
+                hud.note(f"heard over its voice: {text}")
+                on_stop()
+            else:
+                before = text
         for pcm in heard:
             seconds = len(pcm) / 2 / mic.rate
-            try:
-                with hud.calling(cfg.get("model")):
-                    text = transcriber.transcribe(pcm_to_wav(pcm, mic.rate), seconds)
-            except Exception as e:
-                hud.note(f"transcription failed ({type(e).__name__}: {e}); type the request instead")
+            text = transcribe(pcm, seconds)
+            if text is None:
                 continue
             request = wake_request(text, phrase)
             if request is None and clock() < awake_until:
                 request = text  # the request after the wake phrase alone
-            if request is None:
+            if request is None and question is not None and question.answer(text, clock(), spoke):
+                request = text  # the answer to what the co-pilot just asked
+            if on_stop is not None and (is_stop(request) if request is not None else bare_stop(text)):
+                awake_until = 0.0
+                hud.note(f"heard ({seconds:.1f} s): {text}")
+                on_stop()
+            elif request is None:
                 hud.note(f"heard, not for me ({seconds:.1f} s): {text or '(no words)'}")
             elif not request:
                 awake_until = clock() + AWAKE_S
                 hud.note("yes? listening for your request")
             else:
                 awake_until = 0.0
+                if question is not None:
+                    question.close()
                 hud.note(f"heard ({seconds:.1f} s): {request}")
                 hud.heard(request)
                 on_text(request)

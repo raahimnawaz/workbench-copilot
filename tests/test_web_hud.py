@@ -211,7 +211,7 @@ def test_each_turn_and_how_it_ended_go_to_the_hud(monkeypatch, flags, port):
 
     router = NS(label="Spark", model="spark", run_turn=run_turn)
     bench = NS(park=lambda home=True: None, stop_arm=lambda: None, hand=None, stopped=threading.Event(),
-               can_go_home=lambda: False)
+               can_go_home=lambda: False, resume=lambda: None)
     budget = NS(spent=0.0, limit=5.0, check=lambda: None, pop_warning=lambda: None)
     parts = ({"ears": {}, "coder": {}, "mouth": {}}, budget, hud, router, bench,
              NS(offer=lambda line: False, close=lambda: None))

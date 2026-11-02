@@ -8,7 +8,8 @@ import pytest
 from fakes import SilentHud
 
 from wbc.agent.budget import Budget
-from wbc.agent.ears import Segmenter, Transcriber, listen_forever, parse_transcript, pcm_to_wav, wake_request
+from wbc.agent.ears import (Question, Segmenter, Transcriber, asks, bare_stop, is_stop, listen_forever,
+                            parse_transcript, pcm_to_wav, said_stop, wake_request)
 
 CFG = {"model": "ears", "url": "https://example.invalid/asr", "keywords": ["GPIO", "SPI"]}
 RATE = 16000
@@ -207,3 +208,88 @@ def test_the_hud_stops_listening_when_the_copilots_voice_cuts_an_utterance_off()
     assert hud.shown == [("hearing", True), ("hearing", False),  # cut off, and never transcribed
                          ("hearing", True), ("calling", "ears"), ("called", "ears"), ("heard", "flash it."),
                          ("hearing", False)]
+
+
+# The stop, and answering without the wake phrase
+
+
+@pytest.mark.parametrize("request_, stop", [
+    ("stop", True), ("Stop it now.", True), ("please stop the arm", True), ("halt!", True),
+    ("stop reading the sensor", True),  # it stops: the arm holds, and the request isn't routed
+    ("don't stop", False), ("check the bus stop", False), ("", False),
+])
+def test_a_request_that_starts_with_stop_is_the_stop(request_, stop):
+    assert is_stop(request_) is stop
+
+
+@pytest.mark.parametrize("text, stop", [
+    ("Stop!", True), ("Stop, stop.", True), ("Stop it now.", True), ("stop the arm", True),
+    ("Don't stop.", False), ("Pass me the stop watch.", False), ("It.", False), ("", False),
+])
+def test_stop_on_its_own_needs_no_wake_phrase(text, stop):
+    assert bare_stop(text) is stop
+
+
+@pytest.mark.parametrize("text, stop", [
+    ("It's on the sticky note. Copilot, stop.", True), ("co-pilot stop", True), ("Copilot please stop", True),
+    ("I'll stop the arm over the tray.", False), ("Copilot, put it down", False),
+])
+def test_copilot_stop_is_found_anywhere_in_what_was_heard_over_its_voice(text, stop):
+    assert said_stop(text, "copilot") is stop
+
+
+@pytest.mark.parametrize("reply, asking", [
+    ("Want me to flash it?", True), ('Should I say "yes?"', True), ("Flashed. It reads 1.9 V.", False),
+    ("Is it? No.", False),
+])
+def test_a_reply_asks_when_it_ends_with_a_question(reply, asking):
+    assert asks(reply) is asking
+
+
+def hear(mic, transcriber, muted=None, clock=lambda: 0.0, question=None):
+    hud, sent, stops = SilentHud(), [], []
+    listen_forever(sent.append, {"wake_phrase": "copilot"}, "key", None, hud, mic=mic, transcriber=transcriber,
+                   clock=clock, muted=muted, on_stop=lambda: stops.append("stop"), question=question)
+    return sent, stops
+
+
+@pytest.mark.parametrize("texts", [("Copilot, stop.",), ("Stop!",), ("Copilot.", "stop")])
+def test_the_stop_goes_straight_to_on_stop_and_never_to_the_router(texts):
+    mic = FakeMic(quiet(2.5), *[piece for _ in texts for piece in (voice(0.6), quiet(1.5))])
+    assert hear(mic, FakeTranscriber(*texts)) == ([], ["stop"])
+
+
+@pytest.mark.parametrize("texts, stops", [
+    (("I'll put the screwdriver on the sticky", "note. Copilot, stop."), ["stop"]),
+    (("I'll put the screwdriver on the sticky note. Copilot,", "stop."), ["stop"]),  # cut in two
+    (("I'll stop the arm over the tray, then", "let go."), []),  # its own words
+])
+def test_copilot_stop_is_heard_over_its_voice_and_its_own_words_never_stop_it(texts, stops):
+    mic = FakeMic(quiet(2.5), voice(3), quiet(1.5))
+    speaking = lambda t: 2.5 <= t < 5.5  # all of the voice: the co-pilot talking, and you over it
+    t = FakeTranscriber(*texts)
+    assert hear(mic, t, muted=speaking) == ([], stops)
+    assert len(t.seconds) == 2 and t.seconds[0] == pytest.approx(2.0, abs=0.05)  # in pieces of STOP_PIECE_S
+
+
+@pytest.mark.parametrize("now, text, routed", [
+    (3.0, "Yes.", ["Yes."]),
+    (3.0, "Yes, go ahead and flash.", ["Yes, go ahead and flash."]),
+    (3.0, "I think it's the wrong pin though", []),  # too long for an answer: someone talking
+    (20.0, "Yes.", []),  # too late
+])
+def test_a_short_answer_to_a_question_needs_no_wake_phrase(now, text, routed):
+    question = Question()
+    question.asked("Want me to flash it?", at=0.0)
+    mic = FakeMic(quiet(2.5), voice(0.6), quiet(1.5))
+    assert hear(mic, FakeTranscriber(text), clock=lambda: now, question=question) == (routed, [])
+    assert (question.at is None) is bool(routed)  # answered, so closed
+
+
+def test_the_answer_may_come_until_some_seconds_after_the_question_was_said():
+    question = Question()
+    question.asked("I've staged the fix. Want me to flash it?", at=0.0)
+    mic = FakeMic(quiet(2.5), voice(1), quiet(1), voice(0.6), quiet(1.5))
+    speaking = lambda t: 2.5 <= t < 3.5  # the question, said over the first voice
+    t = FakeTranscriber("Want me to flash it?", "Yes.")  # its own voice, heard only for the stop; then you
+    assert hear(mic, t, muted=speaking, clock=lambda: 10.0, question=question) == (["Yes."], [])  # 8 s after 3.5 s

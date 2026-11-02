@@ -54,8 +54,13 @@ hand:
   # picks are refused. Left: on Oct 30, in the gripper's standard upright pose (the wrist roll at about 0° since its
   # zero went back half a turn), the jaw that moved was on the arm's left.
   moving_jaw: left
-  # Ask again over the thing with the jaws open, before they go down, so a spot, a jaw line or a fixed jaw over the
-  # thing instead of beside it stops there. Turn it off once picks land where they should.
+  # What lets an arm move go. request: the request itself, spoken or typed ("Copilot, put the screwdriver away"), so the
+  # arm moves at once; "Copilot, stop" (or "Stop!" on its own) holds it where it is, and Ctrl-C or the strip cuts it.
+  # enter: each move also waits for Enter at the keyboard, with check_over's second question, for bench tests
+  # (python -m wbc.agent --enter does the same for one run).
+  go_ahead: request
+  # With go_ahead enter, ask again over the thing with the jaws open, before they go down, so a spot, a jaw line or a
+  # fixed jaw over the thing instead of beside it stops there. Turn it off once picks land where they should.
   check_over: true
 
 # Servo ids, and the signs wbc/motion/joints.py maps raw ticks with: q = sign * (raw - 2047) * 2 pi / 4096 radians.

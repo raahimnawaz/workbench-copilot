@@ -16,7 +16,7 @@ import yaml
 from test_joints import CALIBRATION
 from wbc.config import ROOT
 from wbc.motion import arm as driver
-from wbc.motion.arm import Arm, Refused, Tripped
+from wbc.motion.arm import Arm, Halted, Refused, Tripped
 from wbc.motion.joints import ARM, JOINTS, JointMap
 from wbc.motion.kinematics import load_chain
 from wbc.motion.trajectory import joint_path, lowest, min_seconds
@@ -1073,6 +1073,45 @@ def test_a_cut_from_another_thread_stops_a_move_at_its_next_tick():
     cutter.join(timeout=2)
     assert not cutter.is_alive() and len(robot.sent) == 10
     assert not any(robot.torque.values()) and arm.powered == set()
+
+
+def test_a_halt_stops_a_move_at_its_next_tick_and_the_arm_holds_there_with_its_motors_on():
+    arm, robot, said = powered()
+    at_the_tenth_goal(robot, arm.halt)  # "Copilot, stop", from the ears' thread
+    with pytest.raises(Halted, match="stopped partway through a move: the arm holds where it is, its motors on"):
+        arm.move_to(np.radians(TARGET))
+    where, goal = robot.sent[-1]
+    assert len(robot.sent) == 10 and {m: robot.goal[m] for m in ARM} == goal  # it keeps the tenth goal
+    assert all(robot.torque.values()) and arm.powered == set(JOINTS) and "all torque off" not in robot.events
+
+
+def test_after_a_halt_moves_and_the_jaws_are_refused_writing_nothing_until_resume():
+    arm, robot, said = powered()
+    arm.halt()
+    for go in (lambda: arm.move_to(np.radians(TARGET)), arm.grip, arm.release):
+        with pytest.raises(Halted, match="stopped before"):
+            go()
+    assert robot.sent == [] and arm.halted and arm.jaw().opening > 0  # the jaws can still be read
+    arm.resume()
+    arm.move_to(np.radians(TARGET))
+    assert not arm.halted and robot.sent
+
+
+def test_a_halt_during_a_grip_stops_the_jaws_where_they_are_squeezing_nothing():
+    arm, robot, said = powered()
+    robot.between["gripper"] = (1400, math.inf)
+    write = robot.bus.sync_write
+
+    def sync_write(name, values, **kwargs):
+        write(name, values, **kwargs)
+        if name == "Goal_Position" and len(robot.sent) == 5:  # partway through closing
+            arm.halt()
+    robot.bus.sync_write = sync_write
+    with pytest.raises(Halted, match="stopped while the jaws were moving"):
+        arm.grip()
+    where, goal = robot.sent[-1]
+    assert len(robot.sent) == 6 and set(goal) == {"gripper"} and goal == where and all(robot.torque.values())
+    assert not arm.jaw().holding
 
 
 def test_a_power_on_queued_behind_a_stop_is_refused():

@@ -733,7 +733,7 @@ def test_resume_is_off_unless_asked_and_the_hud_says_what_memory_holds(monkeypat
     router = NS(label="Spark", model="spark", run_turn=lambda text: "Done.",
                 memory=NS(describe=lambda: "memory: new session · 1 note in the notebook"))
     bench = NS(park=lambda home=True: None, stop_arm=lambda: None, hand=None, stopped=threading.Event(),
-               can_go_home=lambda: False)
+               can_go_home=lambda: False, resume=lambda: None)
     budget = NS(spent=0.0, limit=5.0, check=lambda: None, pop_warning=lambda: None)
     parts = ({"ears": {}, "coder": {}, "mouth": {}}, budget, hud, router, bench, Keyboard(say=lambda s: None))
     monkeypatch.setattr(agent, "build", lambda *a: built.append(a) or parts)
@@ -763,7 +763,7 @@ def test_ctrl_c_records_the_turn_it_stopped_once_the_motors_are_cut(tmp_path, mo
                                 response("r2", [function_call("c2", "pick_up", PICK)])]),
                     "spark", tb, Budget(10, PRICES), hud, "system", memory=memory)
     bench = NS(park=lambda home=True: order.append(f"parked, home {home}"), stop_arm=lambda: order.append("cut"),
-               hand=object(), stopped=threading.Event(), can_go_home=lambda: True)
+               hand=object(), stopped=threading.Event(), can_go_home=lambda: True, resume=lambda: None)
     budget = NS(spent=0.0, limit=5.0, check=lambda: None, pop_warning=lambda: None)
     monkeypatch.setattr(agent, "build", lambda *a: ({"ears": {}, "coder": {}, "mouth": {}}, budget, hud, router, bench,
                                                     Keyboard(say=lambda s: None)))

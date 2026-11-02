@@ -1,8 +1,10 @@
 """Tools the router can call. Each returns a dict with "ok"; failures come back as data, never as exceptions.
 
 read_breadboard photographs the board and reads it with SAM 3.1 (wbc/perception). locate finds things on the desk
-with the desk camera, and pick_up, put_down and arm_home move them with the arm (wbc/motion/hand.py), each only after
-the user presses Enter, and only with the agent started with --arm. look and point_at are still stubs. With --sim,
+with the desk camera, and pick_up, put_down and arm_home move them with the arm (wbc/motion/hand.py), only with the
+agent started with --arm: at once, the request being the go-ahead, or each only after the user presses Enter, as
+robot.yaml's hand.go_ahead says. The spoken stop (Bench.halt) holds the arm where it got to. look and point_at are
+still stubs. With --sim,
 read_breadboard and locate return recorded scenes and the arm's tools pretend to move, so the router and coder can be
 tested with no hardware. remember, recall and forget keep the router's notebook (wbc/agent/memory.py).
 """
@@ -21,6 +23,7 @@ from . import coder, dut
 
 MAX_READ = 64_000
 SEEN_S = 60.0  # seconds a thing stays where locate found it: after that, or once the arm has moved it, locate again
+SAID_STOP = {"ok": False, "halted": True, "error": "the user said stop, so the arm didn't move"}
 LOCATES = itertools.count(1)  # each locate's files get the next number, so two at once never share one
 
 
@@ -91,12 +94,27 @@ class Bench:
     arm_port: str | None = None  # the arm's servo adapter; None keeps the arm's tools off (python -m wbc.agent --arm)
     calibration_dir: str | None = None  # lerobot-calibrate's folder when it's another account's
     confirm: Callable | None = None  # asks the user and waits: True only for Enter at the keyboard
+    go_ahead: str = "enter"  # robot.yaml's hand.go_ahead: "request" moves the arm at once, "enter" asks confirm first
     hand: object = None  # wbc.motion.hand.Hand, opened at the first arm move
     seen: dict = field(default_factory=dict)  # what locate last found, by name: (wbc.motion.hand.Thing, when)
     sim_held: str | None = None  # --sim only: what the jaws pretend to hold
     arm_lock: threading.Lock = field(default_factory=threading.Lock)  # one arm move at a time, whatever the router
     stopped: threading.Event = field(default_factory=threading.Event)  # the session is ending: no arm move starts
     interrupted: threading.Event = field(default_factory=threading.Event)  # Ctrl-C: nothing's staged or flashed either
+    halted: threading.Event = field(default_factory=threading.Event)  # the spoken stop: no arm move until resume()
+
+    def halt(self) -> None:
+        """The spoken stop, from any thread: a move running stops at its next tick and the arm holds where it got to,
+        its motors on, and no arm move starts until resume(), when the next request comes."""
+        self.halted.set()  # first: a tool opening the hand right now checks this once it has
+        if self.hand is not None:
+            self.hand.arm.halt()
+
+    def resume(self) -> None:
+        """A new request after a spoken stop: the arm's tools may move it again."""
+        self.halted.clear()
+        if self.hand is not None:
+            self.hand.arm.resume()
 
     def stop_arm(self) -> None:
         """Ctrl-C: no arm move starts from now on, and every motor is cut, from any thread. A move running on a tool's
@@ -114,7 +132,8 @@ class Bench:
 
     def park(self, home: bool = True) -> None:
         """At exit: no arm move starts from now on. Then, if the arm is open, back to where it rested when `home` (it
-        sat there unpowered before, so it stays there when the motors let go), and every motor off either way."""
+        sat there unpowered before, so it stays there when the motors let go) and it wasn't told to stop since the last
+        request, and every motor off either way."""
         self.stopped.set()
         locked = self.arm_lock.acquire(timeout=5.0)  # a tool's move refuses at its next step and lets go
         try:
@@ -122,7 +141,9 @@ class Bench:
                 return
             arm = self.hand.arm
             try:
-                if home and self.can_go_home():
+                if home and self.can_go_home() and self.halted.is_set():
+                    self.say("The arm was told to stop, so it stays where it is. Hold it: its motors are going off.")
+                elif home and self.can_go_home():
                     self.say("The arm is going back to rest, then its motors go off.")
                     self.hand.home()
             except Exception as e:  # noqa: BLE001 - parking is best effort: the motors go off either way
@@ -386,15 +407,17 @@ def build_toolbox(bench: Bench) -> Toolbox:
         return (found[0] if found else None), problem
 
     def move(question: str, run, plan=None) -> dict:
-        """run(hand) under the arm lock once the user presses Enter, powering the arm on first if it's off. Before
-        asking, the arm is checked (with its motors off, past an end of a range or too hot) and plan(hand) runs, so
-        what the driver or IK would refuse is refused before anything is asked or written. The driver's refusals and
-        trips come back as errors."""
+        """run(hand) under the arm lock, powering the arm on first if it's off: at once with hand.go_ahead "request",
+        the request itself being the go-ahead, and once the user presses Enter with "enter". Before that, the arm is
+        checked (with its motors off, past an end of a range or too hot) and plan(hand) runs, so what the driver or IK
+        would refuse is refused before anything is asked or written. The driver's refusals and trips, and the spoken
+        stop, come back as errors."""
         if not bench.arm_port:
             return {"ok": False, "error": "the arm's tools are off: start the agent with --arm"}
-        if bench.confirm is None:
+        asking = bench.go_ahead == "enter"
+        if asking and bench.confirm is None:
             return {"ok": False, "error": "there's no keyboard to press Enter on, so the arm stays still"}
-        from wbc.motion.arm import Refused, Tripped
+        from wbc.motion.arm import Halted, Refused, Tripped
 
         ending = {"ok": False, "error": "the session is ending, so the arm didn't move"}
         if not bench.arm_lock.acquire(blocking=False):  # two arm tools in one round would run in either order
@@ -402,6 +425,8 @@ def build_toolbox(bench: Bench) -> Toolbox:
         try:
             if bench.stopped.is_set():
                 return ending
+            if bench.halted.is_set():
+                return dict(SAID_STOP)
             hand = _open_hand(bench)
             if bench.stopped.is_set():
                 return ending
@@ -410,11 +435,14 @@ def build_toolbox(bench: Bench) -> Toolbox:
                 hand.arm.check()  # what power_on would refuse, refused before the question
             if plan is not None:
                 plan(hand)
-            answer = bench.confirm(question + (" The motors come on first." if off else ""))
-            if answer is None or bench.stopped.is_set():  # the keyboard closed: the session is ending
-                return ending
-            if not answer:
-                return {"ok": False, "error": "the user didn't press Enter, so the arm didn't move"}
+            if asking:
+                answer = bench.confirm(question + (" The motors come on first." if off else ""))
+                if answer is None or bench.stopped.is_set():  # the keyboard closed: the session is ending
+                    return ending
+                if not answer:
+                    return {"ok": False, "error": "the user didn't press Enter, so the arm didn't move"}
+            if bench.halted.is_set():  # said while the hand opened, the plan ran or the question waited
+                return dict(SAID_STOP)
             if off:
                 hand.power_on()
             return run(hand)
@@ -422,20 +450,29 @@ def build_toolbox(bench: Bench) -> Toolbox:
             return {"ok": False, "error": f"refused, nothing moved for it: {e}"}
         except Tripped as e:
             return {"ok": False, "error": f"the motors were cut: {e}", "motors_cut": True}
+        except Halted as e:
+            held = bench.hand.held if bench.hand is not None else None
+            return {"ok": False, "halted": True, "error": f"the user said stop, so it {e}",
+                    **({"holding": held} if held else {})}
         finally:
             bench.arm_lock.release()
 
     def check_over():
-        """What pick_up and put_down ask over the thing before going down (a pick with its jaws open), while
-        robot.yaml's hand.check_over is on."""
+        """What pick_up and put_down ask over the thing before going down (a pick with its jaws open), while each move
+        waits for Enter and robot.yaml's hand.check_over is on."""
+        if bench.go_ahead != "enter":
+            return None
         return bench.confirm if (bench.robot_cfg.get("hand") or {}).get("check_over", True) else None
 
+    go = " The user presses Enter before the arm moves." if bench.go_ahead == "enter" else " The arm moves at once."
+
     @tb.register("pick_up", (
-        "Pick a thing up off the desk with the arm, where locate last found it (locating it first if it hasn't). The "
-        "user presses Enter before the arm moves. Returns what the jaws hold, or an error if the user said no, the arm "
-        "can't reach it, or the jaws came up empty. Call arm tools one at a time, never two in one round."),
-        thing_params, label="arm")
+        f"Pick a thing up off the desk with the arm, where locate last found it (locating it first if it hasn't).{go} "
+        "Returns what the jaws hold, or an error if the user said no or stop, the arm can't reach it, or the jaws came "
+        "up empty. Call arm tools one at a time, never two in one round."), thing_params, label="arm")
     def pick_up(thing: str, height_mm: float = 0) -> dict:
+        if bench.halted.is_set():
+            return dict(SAID_STOP)
         t, problem = target(thing, height_mm)
         if problem:
             return problem
@@ -448,15 +485,17 @@ def build_toolbox(bench: Bench) -> Toolbox:
             return {"ok": True, "sim": True, "holding": t.name, "x_mm": t.x, "y_mm": t.y}
         result = move(f"Pick up the {t.name} at x {t.x:.0f}, y {t.y:.0f} mm?",
                       lambda hand: hand.pick_up(t, confirm=check_over()), plan=lambda hand: hand.plan_pick(t))
-        if result.get("ok") or "steps" in result or result.get("motors_cut"):  # the arm went to it
+        if result.get("ok") or "steps" in result or result.get("motors_cut") or result.get("halted"):  # it went to it
             bench.seen.pop(key(thing), None)  # in the jaws now, or nudged trying: locate it again before the next move
         return result
 
     @tb.register("put_down", (
         "Put what the arm holds down on or in a thing on the desk, such as a tray, where locate last found it "
-        "(locating it first if it hasn't). The user presses Enter before the arm moves. Call it only after pick_up "
-        "returned what the jaws hold."), thing_params, label="arm")
+        f"(locating it first if it hasn't).{go} Call it only after pick_up returned what the jaws hold."),
+        thing_params, label="arm")
     def put_down(thing: str, height_mm: float = 0) -> dict:
+        if bench.halted.is_set():
+            return dict(SAID_STOP)
         t, problem = target(thing, height_mm)
         if problem:
             return problem
@@ -470,10 +509,10 @@ def build_toolbox(bench: Bench) -> Toolbox:
 
     @tb.register("move_thing", (
         "Move a thing on the desk onto or into a place, such as a screwdriver onto a tray, in one call: one desk photo "
-        "finds both (about $0.005), then the arm picks the thing up and puts it down there. The user presses Enter "
-        "before the arm moves. Use it whenever something goes somewhere, rather than locate, pick_up and put_down one "
-        "at a time. Name each with a short noun phrase the camera can see, such as 'screwdriver' or 'sticky note', "
-        "not where it is, and give heights for anything standing up."), {
+        f"finds both (about $0.005), then the arm picks the thing up and puts it down there.{go} Use it whenever "
+        "something goes somewhere, rather than locate, pick_up and put_down one at a time. Name each with a short noun "
+        "phrase the camera can see, such as 'screwdriver' or 'sticky note', not where it is, and give heights for "
+        "anything standing up."), {
         "type": "object",
         "properties": {
             "thing": {"type": "string", "description": "what to pick up, a short noun phrase, e.g. 'screwdriver'"},
@@ -486,6 +525,8 @@ def build_toolbox(bench: Bench) -> Toolbox:
                                                "in; 0 for something flat on the desk"}},
         "required": ["thing", "place"]}, label="arm")
     def move_thing(thing: str, place: str, thing_height_mm: float = 0, place_height_mm: float = 0) -> dict:
+        if bench.halted.is_set():
+            return dict(SAID_STOP)
         found, problem = targets([(thing, thing_height_mm), (place, place_height_mm)])
         if problem:
             return problem
@@ -515,13 +556,15 @@ def build_toolbox(bench: Bench) -> Toolbox:
 
         result = move(f"Pick up the {t.name} at x {t.x:.0f}, y {t.y:.0f} mm and put it on the {p.name} at x {p.x:.0f}, "
                       f"y {p.y:.0f} mm?", run, plan=lambda hand: (hand.plan_pick(t), hand.plan_put(p)))
-        if result.get("ok") or "steps" in result or result.get("motors_cut"):  # the arm went to it
+        if result.get("ok") or "steps" in result or result.get("motors_cut") or result.get("halted"):  # it went to it
             bench.seen.pop(key(thing), None)
         return result
 
-    @tb.register("arm_home", "Move the arm back to where it rested when its motors came on. The user presses Enter "
-                             "first.", {"type": "object", "properties": {}}, label="arm")
+    @tb.register("arm_home", f"Move the arm back to where it rested when its motors came on.{go}",
+                 {"type": "object", "properties": {}}, label="arm")
     def arm_home() -> dict:
+        if bench.halted.is_set():
+            return dict(SAID_STOP)
         if bench.sim:
             return {"ok": True, "sim": True, "home": True}
 
@@ -537,7 +580,7 @@ def build_toolbox(bench: Bench) -> Toolbox:
 def add_memory_tools(tb: Toolbox, notebook) -> None:
     """remember, recall and forget: the router's notebook of facts worth keeping across sessions
     (wbc/agent/memory.py), such as where a thing goes on the desk. A note never moves the arm: pick_up and put_down
-    take only names, which locate turns into coordinates, and each move still waits for Enter."""
+    take only names, which locate turns into coordinates, and only a request moves it."""
 
     @tb.register("remember", (
         "Keep a fact for later sessions: a preference, a decision and its reason, a fix that worked, or where a thing "

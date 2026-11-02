@@ -3,6 +3,7 @@ arm tests' fake follower."""
 import dataclasses
 import io
 import math
+import queue
 import threading
 import time
 from types import SimpleNamespace as NS
@@ -752,6 +753,94 @@ def test_saying_no_over_the_place_says_the_jaws_still_hold_the_thing_not_that_it
     assert b.hand.held == "screwdriver"
 
 
+def test_with_go_ahead_request_the_request_moves_the_arm_without_a_question():
+    arm, robot, _ = make(FakeFollower(start=pose(REST)), table=TABLE)
+    b, tb, asked = bench(arm_port="fake", go_ahead="request")
+    b.robot_cfg, b.confirm = {"hand": {"check_over": True}}, None  # no keyboard, and no check-over: neither is asked
+    b.hand = Hand(arm, HAND)
+    b.seen.update(screwdriver=(SCREWDRIVER, time.monotonic()), tray=(TRAY, time.monotonic()))
+    robot.between["gripper"] = (1400, math.inf)
+    result = tb.dispatch("move_thing", {"thing": "screwdriver", "place": "tray"})
+    assert result["ok"] and result["moved"] == "screwdriver" and b.hand.held is None and len(arm.powered) == 6
+
+
+@pytest.mark.parametrize("go_ahead, says", [("enter", "The user presses Enter before the arm moves."),
+                                            ("request", "The arm moves at once.")])
+def test_the_arm_tools_tell_the_router_what_lets_the_arm_go(go_ahead, says):
+    b, tb, _ = bench(go_ahead=go_ahead)
+    told = {s["name"]: s["description"] for s in tb.schemas()}
+    assert all(says in told[name] for name in ("pick_up", "put_down", "move_thing", "arm_home"))
+
+
+@pytest.mark.parametrize("sim", [False, True])
+def test_after_a_stop_no_arm_tool_moves_or_even_opens_the_arm_until_the_next_request(sim):
+    b, tb, asked = bench(sim=sim, arm_port="fake", go_ahead="request")
+    b.seen.update(screwdriver=(SCREWDRIVER, time.monotonic()), tray=(TRAY, time.monotonic()))
+    b.halt()  # "Copilot, stop" before the arm was ever opened
+    for name, args in (("pick_up", {"thing": "screwdriver"}), ("put_down", {"thing": "tray"}),
+                       ("move_thing", {"thing": "screwdriver", "place": "tray"}), ("arm_home", {})):
+        assert tb.dispatch(name, args) == tools.SAID_STOP
+    assert b.hand is None and asked == []
+    b.resume()
+    if sim:
+        assert tb.dispatch("pick_up", {"thing": "screwdriver"})["ok"]
+
+
+def stop_before(arm, b, move: int) -> list:
+    """Make the arm hear "Copilot, stop" just before its `move`th move_to, as from the ears' thread."""
+    moves, move_to = [], arm.move_to
+
+    def moving(q, **kwargs):
+        moves.append(q)
+        if len(moves) == move:
+            b.halt()
+        return move_to(q, **kwargs)
+    arm.move_to = moving
+    return moves
+
+
+@pytest.mark.parametrize("move, holding", [(2, None), (4, "screwdriver")])  # just over it; back up with it gripped
+def test_a_stop_partway_through_a_pick_holds_the_arm_and_says_what_the_jaws_have(move, holding):
+    arm, robot, _ = make(FakeFollower(start=pose(REST)), table=TABLE)
+    b, tb, _ = bench(arm_port="fake", go_ahead="request")
+    b.hand = Hand(arm, HAND)
+    b.seen["screwdriver"] = (SCREWDRIVER, time.monotonic())
+    robot.between["gripper"] = (1400, math.inf)
+    moves = stop_before(arm, b, move)
+    result = tb.dispatch("pick_up", {"thing": "screwdriver"})
+    assert result["ok"] is False and result["halted"] and "stopped before a move" in result["error"]
+    assert result.get("holding") == holding and b.hand.held == holding and len(moves) == move
+    assert all(robot.torque.values()) and "screwdriver" not in b.seen  # held there, and located again before a move
+
+
+@pytest.mark.parametrize("move, holding", [(2, "screwdriver"), (3, None)])  # going down to the tray; back up from it
+def test_a_stop_partway_through_a_put_says_whether_the_jaws_let_go(move, holding):
+    arm, robot, _ = make(FakeFollower(start=pose(REST)), table=TABLE)
+    b, tb, _ = bench(arm_port="fake", go_ahead="request")
+    b.hand = Hand(arm, HAND)
+    b.seen.update(screwdriver=(SCREWDRIVER, time.monotonic()), tray=(TRAY, time.monotonic()))
+    robot.between["gripper"] = (1400, math.inf)
+    assert tb.dispatch("pick_up", {"thing": "screwdriver"})["ok"]
+    stop_before(arm, b, move)
+    result = tb.dispatch("put_down", {"thing": "tray"})
+    assert result["halted"] and result.get("holding") == holding and b.hand.held == holding
+
+
+def test_park_after_a_stop_leaves_the_arm_where_it_stopped():
+    arm, robot, _ = make(FakeFollower(start=pose(REST)), table=TABLE)
+    said = []
+    b, tb, _ = bench(arm_port="fake", go_ahead="request", say=said.append)
+    b.hand = Hand(arm, HAND)
+    b.seen["screwdriver"] = (SCREWDRIVER, time.monotonic())
+    robot.between["gripper"] = (1400, math.inf)
+    assert tb.dispatch("pick_up", {"thing": "screwdriver"})["ok"]
+    b.halt()
+    where = dict(robot.pos)
+    b.park()
+    assert robot.pos == where and not any(robot.torque.values())
+    assert said == ["The arm was told to stop, so it stays where it is. Hold it: its motors are going off."]
+
+
 def test_an_arm_resting_past_the_end_of_a_range_is_refused_before_the_question():
     # Oct 30: the gripper had been turned past the wrist roll's limit, and only Enter and the power-on found it
     arm, robot, _ = make(FakeFollower(start=pose([0, -20, 40, 30, -160])), table=TABLE)
@@ -840,7 +929,7 @@ class Typing:
 def run_main(monkeypatch, run_turn, keyboard, stdin, can_go_home=True):
     parked = []
     bench = NS(park=lambda home=True: parked.append(home), stop_arm=lambda: None, hand=None,
-               stopped=threading.Event(), can_go_home=lambda: can_go_home)
+               stopped=threading.Event(), can_go_home=lambda: can_go_home, resume=lambda: None)
     budget = NS(spent=0.0, limit=5.0, check=lambda: None, pop_warning=lambda: None)
     router = NS(label="Spark", model="spark", run_turn=run_turn)
     monkeypatch.setattr(agent, "build", lambda *a: ({"ears": {}, "coder": {}, "mouth": {}}, budget, SilentHud(), router,
@@ -924,7 +1013,7 @@ def test_after_ctrl_c_nothing_is_staged_or_flashed_but_after_the_end_of_the_inpu
 def test_no_prefetch_skips_the_bench_facts_fetched_before_each_turn(monkeypatch, flags, prefetch):
     build, built = agent.build, []
     bench = NS(park=lambda home=True: None, stop_arm=lambda: None, hand=None, stopped=threading.Event(),
-               can_go_home=lambda: False)
+               can_go_home=lambda: False, resume=lambda: None)
     budget = NS(spent=0.0, limit=5.0, check=lambda: None, pop_warning=lambda: None)
     fake = NS(label="Spark", model="spark", run_turn=lambda text: "Done.")
     parts = ({"ears": {}, "coder": {}, "mouth": {}}, budget, SilentHud(), fake, bench, Keyboard(say=lambda s: None))
@@ -935,6 +1024,52 @@ def test_no_prefetch_skips_the_bench_facts_fetched_before_each_turn(monkeypatch,
     monkeypatch.setattr(agent.config, "meta_client", lambda models: NS())  # so building needs no key
     router = build(*built[0])[3]
     assert bool(router.prefetch) is prefetch  # without it, the router fetches nothing before a turn
+
+
+def test_go_ahead_comes_from_robot_yaml_and_enter_overrides_it(monkeypatch):
+    monkeypatch.setattr(agent.config, "meta_client", lambda models: NS())  # so building needs no key
+    assert agent.build(True, False)[4].go_ahead == "request"
+    assert agent.build(True, False, enter=True)[4].go_ahead == "enter"
+    robot, load = agent.config.load_yaml("robot.yaml"), agent.config.load_yaml
+    monkeypatch.setattr(agent.config, "load_yaml",
+                        lambda name: {**robot, "hand": {"go_ahead": "voice"}} if name == "robot.yaml" else load(name))
+    with pytest.raises(RuntimeError, match="hand.go_ahead is request or enter, not 'voice'"):
+        agent.build(True, False)
+
+
+def test_a_spoken_stop_holds_the_arm_drops_what_waits_and_the_next_request_moves_it_again(monkeypatch):
+    lines, did, turns, voice = queue.Queue(), [], [], {}
+    bench = NS(resume=lambda: did.append("resume"), halt=lambda: did.append("halt"), park=lambda home=True: None,
+               stop_arm=lambda: None, hand=None, stopped=threading.Event(), can_go_home=lambda: False)
+    budget = NS(spent=0.0, limit=5.0, check=lambda: None, pop_warning=lambda: None)
+
+    def run_turn(text):
+        turns.append(text)
+        if len(turns) == 1:
+            voice["on_text"]("put the screwdriver in the tray")  # said while the turn runs: it waits behind it
+            voice["on_stop"]()  # then "Copilot, stop"
+            lines.put("go home\n")  # and a typed request after that
+            return "Stopped, with the screwdriver in the jaws."
+        lines.put(None)  # the end of the input
+        return "Back at rest. Want me to put the screwdriver away?"
+
+    def listen(on_text, cfg, key, budget, hud, muted=None, on_stop=None, question=None):
+        voice.update(on_text=on_text, on_stop=on_stop, question=question)
+        lines.put("pick up the screwdriver\n")
+
+    hud = SilentHud()
+    router = NS(label="Spark", model="spark", run_turn=run_turn)
+    monkeypatch.setattr(agent, "build", lambda *a: ({"ears": {}, "coder": {}, "mouth": {}}, budget, hud, router, bench,
+                                                    Keyboard(say=lambda s: None)))
+    monkeypatch.setattr(agent.coder, "compile_in_sandbox", lambda *a: None)
+    monkeypatch.setattr(agent.config, "api_key", lambda: "key")
+    monkeypatch.setattr(agent.ears, "listen_forever", listen)
+    monkeypatch.setattr("sys.stdin", iter(lines.get, None))
+    assert agent.main(["--voice", "--no-speak"]) == 0
+    assert turns == ["pick up the screwdriver", "go home"] and did == ["resume", "halt", "resume"]
+    assert ("note", "stopped: no arm move starts until the next request; dropped what was waiting: put the "
+                    "screwdriver in the tray") in hud.events
+    assert voice["question"].at is not None  # the last reply asked something, so a bare "yes" answers it
 
 
 def test_the_wbc_script_ends_the_way_python_m_does():

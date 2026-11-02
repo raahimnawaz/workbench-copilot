@@ -39,6 +39,10 @@ request, the cut included, so the driver clears that mark before it talks to the
 Python delivers Ctrl-C only to its main thread: a move there holds the arm where it is, and one on another thread stops
 by cut().
 
+halt(), the spoken stop, is the stop that doesn't drop the arm: a move running elsewhere stops at its next tick, its
+joints keeping the goals already written, so the arm holds there with its motors on, and the jaws stop squeezing as for
+Ctrl-C. Every move, grip and release raises Halted until resume().
+
 LeRobot's robot.connect() is never called. With no calibration file under this macOS account it runs a full
 recalibration that rewrites every servo's homing offset and limits, and it always ends by turning torque on with
 whatever goals the servos hold (0 after a power-up). Only robot.bus.connect() runs, which opens the port and pings the
@@ -142,6 +146,10 @@ class Tripped(Exception):
 
 class Refused(ValueError):
     """Refused before anything was written or moved."""
+
+
+class Halted(Exception):
+    """Stopped by halt(), before or partway through a move: the arm holds where it got to, its motors on."""
 
 
 @dataclass
@@ -255,6 +263,7 @@ class Arm:
         self.stopped_short = None
         self._lock = threading.RLock()
         self._stopped = threading.Event()  # set by every cut, cleared only by clear_stop()
+        self._halted = threading.Event()  # set by halt(), cleared only by resume()
         self._closed = False
 
     @classmethod
@@ -422,6 +431,7 @@ class Arm:
         with self._lock:
             self.stopped_short = None
             self._refuse_if_stopped()
+            self._halting("before a move")
             missing = [m for m in ARM if m not in self.powered]
             if missing:
                 raise Refused(f"the {listed(missing)} isn't powered: power the arm on first")
@@ -471,6 +481,7 @@ class Arm:
         `samples` gets one entry a tick: t, the gripper's goal and position in raw ticks, and its load."""
         with self._lock:
             start = self._ready_gripper("the grip")
+            self._halting("before the jaws moved")
             closed, now = self._closed_end(), start.raw["gripper"]
             if now - closed < GRIP_CLEAR:
                 raise Refused(f"the jaws are {now - closed} ticks from closed, under the {GRIP_CLEAR} a grip starts from: "
@@ -492,6 +503,7 @@ class Arm:
             raise Refused(f"the gripper opens from 0 to 100 percent, not {opening!r}")
         with self._lock:
             start = self._ready_gripper("the release")
+            self._halting("before the jaws moved")
             s = self.joints.servos["gripper"]
             goal = round(s.range_min + opening / 100 * (s.range_max - s.range_min))
             self._jaw_goal, self._gripping = goal, False
@@ -522,6 +534,21 @@ class Arm:
         until this, so call it only once someone has checked the arm."""
         with self._lock:  # not while a cut from another thread is still on its way to the bus
             self._stopped.clear()
+
+    def halt(self) -> None:
+        """The spoken stop, from any thread: a move or the jaws running elsewhere stop at their next tick and raise
+        Halted. The arm's joints keep the goals already written, so it holds there with its motors on, and the jaws stop
+        where they are, squeezing nothing, in case it's a finger they were closing on. Every move, grip and release
+        raises Halted too, with nothing written, until resume(). cut() is the stop that drops the arm."""
+        self._halted.set()
+
+    def resume(self) -> None:
+        """Let moves run again after halt()."""
+        self._halted.clear()
+
+    @property
+    def halted(self) -> bool:
+        return self._halted.is_set()
 
     def close(self) -> None:
         """Cut every motor, stopping a move running on another thread at its next tick first. Then, once every servo
@@ -620,6 +647,11 @@ class Arm:
         handler)."""
         if self._stopped.is_set():
             raise self._trip(f"stopped while {during}")
+
+    def _halting(self, when: str) -> None:
+        """Halted once halt() has been called, writing nothing: the joints keep the goals they have."""
+        if self._halted.is_set():
+            raise Halted(f"stopped {when}: the arm holds where it is, its motors on")
 
     def _ready(self, during: str) -> Reading:
         """Where the arm is, once every powered joint reads its torque still on at its cap. Refused, with nothing
@@ -760,6 +792,7 @@ class Arm:
         try:
             for k, row in enumerate(rows, 1):
                 self._stopping("the arm was moving")
+                self._halting("partway through a move")
                 want = self.joints.raw(row)
                 bus.sync_write("Goal_Position", {m: min(present[m] + STEP_TICKS, max(present[m] - STEP_TICKS, want[m]))
                                                  for m in ARM}, normalize=False)
@@ -788,7 +821,7 @@ class Arm:
                 wait = t0 + k / HZ - self.clock()
                 if wait > 0:
                     self.sleep(wait)
-        except Tripped:
+        except (Tripped, Halted):
             raise
         except KeyboardInterrupt:
             try:
@@ -858,6 +891,7 @@ class Arm:
             while k < len(rows):
                 goal, k = rows[k], k + 1
                 self._stopping("the gripper was moving")
+                self._halting("while the jaws were moving")
                 bus.sync_write("Goal_Position", {"gripper": goal}, normalize=False)
                 reading = self._read()
                 jaw = reading.raw["gripper"]
@@ -888,6 +922,14 @@ class Arm:
                 if wait > 0:
                     self.sleep(wait)
         except Tripped:
+            raise
+        except Halted:  # as for Ctrl-C, the jaws stop where they are, squeezing nothing; the arm keeps its goals
+            self._gripping = False
+            try:
+                bus.sync_write("Goal_Position", {"gripper": reading.raw["gripper"]}, normalize=False)
+                self._jaw_goal = reading.raw["gripper"]
+            except Exception as e:  # noqa: BLE001 - it can't stop the jaws, so let go instead
+                raise self._trip(f"{failure(e)} stopping the jaws ({e})") from e
             raise
         except KeyboardInterrupt:  # the jaws stop where they are, squeezing nothing: there may be a finger in them
             self._gripping = False

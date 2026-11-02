@@ -51,7 +51,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from .arm import FLOOR_JOINTS, RANGE_MARGIN, SAG, Refused
+from .arm import FLOOR_JOINTS, RANGE_MARGIN, SAG, Halted, Refused
 from .joints import ARM, NAMES
 from .kinematics import pose_to_task, solve_ik, solve_task
 from .table import PAN_AXIS
@@ -475,10 +475,18 @@ class Hand:
         is ending).
         Refused (the driver's or IK's) before anything moves when a pose can't be reached, but a refused climb back up
         from the thing comes back as an error that says the arm is down there; Tripped, with the motors cut, as the
-        driver says."""
+        driver says; Halted by the spoken stop, with `held` set if the jaws hold the thing by then."""
         if self.held:
             raise Refused(f"the jaws already hold the {self.held}: put it down first")
         steps = self.plan_pick(thing)
+        try:
+            return self._pick(thing, steps, confirm)
+        except Halted:
+            if self.arm.jaw().holding:
+                self.held = thing.name
+            raise
+
+    def _pick(self, thing: Thing, steps: list, confirm) -> dict:
         over, just, down, up = steps
         self.arm.move_to(over.q)
         opened = self.arm.release(100.0)
@@ -521,10 +529,18 @@ class Hand:
 
     def put_down(self, place: Thing, confirm=None) -> dict:
         """Put what the jaws hold down on or in `place`: over it, down to just over its top, open, back up. confirm as
-        for pick_up, asked over the place before it goes down."""
+        for pick_up, asked over the place before it goes down. Halted by the spoken stop, with `held` cleared if the
+        jaws have let go by then."""
         if not self.held and not self.arm.jaw().holding:
             raise Refused("the jaws hold nothing to put down")
-        over, down, up = self.plan_put(place)
+        try:
+            return self._put(place, *self.plan_put(place), confirm)
+        except Halted:
+            if not self.arm.jaw().holding:
+                self.held = None
+            raise
+
+    def _put(self, place: Thing, over: Step, down: Step, up: Step, confirm) -> dict:
         self.arm.move_to(over.q)
         if confirm is not None:
             answer = confirm(f"Over the {place.name}. Go down and let go?")

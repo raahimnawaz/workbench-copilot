@@ -1,14 +1,19 @@
-"""Run the bench agent: python -m wbc.agent [--sim] [--voice] [--hear] [--speak] [--backup] [--arm] [--no-prefetch]
+"""Run the bench agent: python -m wbc.agent [--sim] [--voice] [--hear] [--speak] [--backup] [--arm] [--enter]
+[--no-prefetch]
 
 Typed lines and spoken requests go on one queue, and the router handles them one turn at a time. Before each turn,
 code fetches the bench facts in models.yaml's router.prefetch (Act 1's board read, pins.h and the sensor);
 --no-prefetch skips them, for a session that only moves the arm. With --voice (or
 --speak), the co-pilot says the first sentence or two of each reply out loud, and the mic is muted while it speaks.
-With --arm, the arm's tools may move it, each move only after Enter at the keyboard: while a move waits, the next
-typed line answers it instead of going to the router, and nothing heard by voice does. Ctrl-C cuts every motor (the
-arm drops, so keep a hand near it) and quits at once, and no arm move starts after it. At the end of the input (Ctrl-D)
-a question still waiting gets a no, no arm move starts, and once the turn ends the arm goes back to where it rested and
-its motors go off; any other exit asks before moving it.
+With --arm, the arm's tools may move it. With robot.yaml's hand.go_ahead "request", the request is the go-ahead and
+the arm moves at once. With "enter", or --enter for bench tests, each move waits for Enter at the keyboard: while a
+move waits, the next typed line answers it instead of going to the router, and nothing heard by voice does.
+"Copilot, stop", or "Stop!" on its own, is heard even while the co-pilot speaks: a move stops at its next tick and
+the arm holds where it is, its motors on, requests waiting behind it are dropped, and the next request may move it
+again. Ctrl-C cuts every motor (the arm drops, so keep a hand near it) and quits at once, and no arm move starts after
+it. At the end of the input (Ctrl-D) a question still waiting gets a no, no arm move starts, and once the turn ends
+the arm goes back to where it rested, unless it was told to stop, and its motors go off; any other exit asks before
+moving it.
 
 Every turn is recorded in .wbc/session.json (wbc/agent/memory.py), however it ends. Each run starts a new session, and
 --resume picks up the last one instead; the notebook the router keeps with `remember` carries over either way.
@@ -23,6 +28,7 @@ import os
 import queue
 import sys
 import threading
+import time
 from pathlib import Path
 
 from wbc import config
@@ -38,21 +44,29 @@ from wbc.agent.web_hud import WebHud
 
 SYSTEM = (Path(__file__).parent / "prompts" / "system.md").read_text(encoding="utf-8")
 FAILED = "That turn failed. The error is on the screen."
+GO_AHEADS = ("request", "enter")  # robot.yaml's hand.go_ahead: what lets an arm move go
 
 
 def build(sim: bool, backup: bool, router_model: str | None = None, arm: bool = False,
           calibration_dir: str | None = None, prefetch: bool = True, resume: bool = False,
-          hud_port: int | None = None):
+          hud_port: int | None = None, enter: bool = False):
     models = config.load_yaml("models.yaml")
     budget = Budget.from_config(models, config.ROOT)
     hud = ConsoleHud() if hud_port is None else WebHud(models, budget, hud_port, backup=backup)
     meta = hud.watch(config.meta_client(models))  # the coder always runs on the Meta Model API
     robot_cfg = config.load_yaml("robot.yaml")
+    go_ahead = "enter" if enter else (robot_cfg.get("hand") or {}).get("go_ahead", "enter")
+    if go_ahead not in GO_AHEADS:
+        raise RuntimeError(f"robot.yaml's hand.go_ahead is {' or '.join(GO_AHEADS)}, not {go_ahead!r}")
     keyboard = Keyboard(say=hud.note)
     bench = Bench(config.ROOT, models, meta, budget, sim=sim, say=hud.note, layout=config.load_yaml("bench.yaml"),
                   parts=config.load_yaml("parts.yaml"), robot_cfg=robot_cfg, desk_cfg=config.load_yaml("desk.yaml"),
                   arm_port=robot_cfg.get("port") if arm else None,
-                  calibration_dir=calibration_dir or robot_cfg.get("calibration_dir"), confirm=keyboard.ask)
+                  calibration_dir=calibration_dir or robot_cfg.get("calibration_dir"), confirm=keyboard.ask,
+                  go_ahead=go_ahead)
+    if arm:
+        hud.note("the arm moves when you ask; \"Copilot, stop\" holds it, Ctrl-C cuts it" if go_ahead == "request" else
+                 "each arm move waits for Enter at the keyboard; Ctrl-C cuts it")
     toolbox = build_toolbox(bench)
     max_steps = models["router"].get("max_steps", 12)
     prefetch = models["router"].get("prefetch") if prefetch else None
@@ -81,7 +95,9 @@ def main(argv=None) -> int:
     ap.add_argument("--router-model", metavar="ID",
                     help="route with this model instead of router.model, e.g. muse-spark-1.1 to compare speed")
     ap.add_argument("--arm", action="store_true",
-                    help="let the arm's tools move it, each move after Enter (the port is robot.yaml's)")
+                    help="let the arm's tools move it, as robot.yaml's hand.go_ahead says (the port is robot.yaml's)")
+    ap.add_argument("--enter", action="store_true",
+                    help="each arm move waits for Enter at the keyboard, whatever hand.go_ahead says (bench tests)")
     ap.add_argument("--calibration-dir", metavar="DIR",
                     help="lerobot-calibrate's folder for the arm, when it's another macOS account's")
     ap.add_argument("--no-prefetch", action="store_true",
@@ -95,7 +111,7 @@ def main(argv=None) -> int:
     try:
         models, budget, hud, router, bench, keyboard = build(args.sim, args.backup, args.router_model, args.arm,
                                                              args.calibration_dir, not args.no_prefetch, args.resume,
-                                                             args.hud)
+                                                             args.hud, args.enter)
     except RuntimeError as e:  # missing key or voice extras
         print(e, file=sys.stderr)
         return 2
@@ -119,6 +135,26 @@ def main(argv=None) -> int:
             hud.note("spoken replies off: macOS say isn't on this machine")
             mouth = None
     inbox = queue.Queue()
+    question = ears.Question()  # while the last reply waits for an answer, a short one needs no "Copilot,"
+
+    def stop() -> None:
+        """The spoken stop, on the ears' thread, whatever the turn is doing: the arm holds where it is, requests waiting
+        behind it are dropped, and the co-pilot stops talking."""
+        bench.halt()
+        dropped = []
+        while True:
+            try:
+                item = inbox.get_nowait()
+            except queue.Empty:
+                break
+            if item is None:  # the end of the input stays the last thing on the queue
+                inbox.put(None)
+                break
+            dropped.append(item)
+        if mouth:
+            mouth.speak("Stopped.")  # cuts off whatever it was saying
+        hud.note("stopped: no arm move starts until the next request"
+                 + (f"; dropped what was waiting: {' / '.join(dropped)}" if dropped else ""))
 
     def typed() -> None:
         for line in sys.stdin:
@@ -137,7 +173,8 @@ def main(argv=None) -> int:
         on_text = (lambda text: None) if args.hear else inbox.put  # listen_forever prints what it heard
         threading.Thread(target=ears.listen_forever, daemon=True,
                          args=(on_text, models["ears"], config.api_key(), budget, hud),
-                         kwargs={"muted": mouth.busy if mouth else None}).start()
+                         kwargs={"muted": mouth.busy if mouth else None, "on_stop": None if args.hear else stop,
+                                 "question": None if args.hear else question}).start()
     if args.hear:
         hud.note("mic check: nothing goes to the router. Ctrl-D quits.")
 
@@ -149,11 +186,14 @@ def main(argv=None) -> int:
                 return 0
             if args.hear:
                 continue
+            bench.resume()  # a new request: after a stop, the arm may move again
+            question.close()
             hud.turn(text)
             try:
                 reply = router.run_turn(text)
                 if mouth:
                     mouth.speak(reply)
+                question.asked(reply, time.monotonic())
                 hud.turn_over()
             except BudgetExceeded as e:
                 hud.note(str(e))
