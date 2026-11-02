@@ -9,9 +9,11 @@ joints: [shoulder_pan, shoulder_lift, elbow_flex, wrist_flex, wrist_roll]
 # point between the jaws to the closed jaws' tips, by the four-touch test (Oct 29, 22:34, arm-bench/tip_offset.py
 # --roll): one dot touched straight down over 255° of wrist roll read 11.6 mm rms apart with the URDF's point and 4.9
 # with this, which puts the tips 3.7 mm from the roll's axis instead of 7.9. Along the gripper it stays 0, as the 20:35
-# tilt test found (-3 mm).
+# tilt test found (-3 mm). On Oct 30 the wrist roll's zero went back half a turn, so that the gripper's standard
+# upright pose reads about 0° (arm-bench/roll_half_turn.py --undo), and the tips turned half a turn about the roll's
+# axis with it: [-0.0099, 0.0033, 0] before. Every pose's tips are where they were, within a micrometre.
 tool:
-  xyz: [-0.0099, 0.0033, 0]
+  xyz: [-0.0059, -0.00286, 0]
   rpy: [0, -1.5708, 0]
 
 # The table under the arm (wbc/motion/table.py): the driver's floors are measured from it. The desk sits about 15 mm
@@ -49,10 +51,11 @@ hand:
   across_roll_deg: 0
   # Which side the moving jaw is on, left or right, standing behind the base looking out along the arm with the gripper
   # pointing straight down at the rest roll. One jaw is fixed, so a pick puts that one beside the thing; without this,
-  # picks are refused. Left, from a look at the arm (Oct 30).
+  # picks are refused. Left: on Oct 30, in the gripper's standard upright pose (the wrist roll at about 0° since its
+  # zero went back half a turn), the jaw that moved was on the arm's left.
   moving_jaw: left
-  # Ask again over the thing, before the jaws open and go down, so a jaw line or a spot that's wrong stops there.
-  # Turn it off once picks land where they should.
+  # Ask again over the thing with the jaws open, before they go down, so a spot, a jaw line or a fixed jaw over the
+  # thing instead of beside it stops there. Turn it off once picks land where they should.
   check_over: true
 
 # Servo ids, and the signs wbc/motion/joints.py maps raw ticks with: q = sign * (raw - 2047) * 2 pi / 4096 radians.

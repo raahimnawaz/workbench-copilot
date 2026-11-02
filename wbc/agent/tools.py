@@ -141,8 +141,16 @@ def key(thing: str) -> str:
 
 
 def _locate_live(bench: Bench, thing: str, height_mm: float) -> dict:
-    """locate on the desk camera, as scripts/desk_camera.py locate does: a photo, the touched tags' map, one SAM
-    request. Saves the photo, SAM's reply (for desk_camera.py locate --replay) and the drawn view in .wbc/vision."""
+    """locate on the desk camera for one thing, as _locate_all does."""
+    return _locate_all(bench, [(thing, height_mm)])[thing]
+
+
+def _locate_all(bench: Bench, wants: list) -> dict:
+    """locate on the desk camera for each (thing, height_mm) in `wants`, as scripts/desk_camera.py locate does for one:
+    one photo and the touched tags' map for them all, and a SAM request for each, sent together. {thing: result}.
+    Saves the photo, each SAM reply (for desk_camera.py locate --replay) and each drawn view in .wbc/vision."""
+    from concurrent.futures import ThreadPoolExecutor
+
     import cv2
     import numpy as np
 
@@ -161,20 +169,24 @@ def _locate_live(bench: Bench, thing: str, height_mm: float) -> dict:
     def segment(image, phrase):
         return sam_client.segment(bench.client, bench.models["eyes"], bench.budget, image, phrase)
 
-    hits, view, seg = desk.locate(frame, fit, cfg, segment, thing, height_mm)
+    with ThreadPoolExecutor(max_workers=max(1, len(wants))) as pool:  # SAM takes one concept per request
+        located = list(pool.map(lambda w: desk.locate(frame, fit, cfg, segment, w[0], w[1]), wants))
     out = bench.root / ".wbc" / "vision"
     out.mkdir(parents=True, exist_ok=True)
-    slug = "".join(c if c.isalnum() else "-" for c in key(thing))[:30]
-    when = f"{datetime.now():%Y%m%d-%H%M%S}-{next(LOCATES)}-{slug}"  # two locates at once mustn't share files
+    when = f"{datetime.now():%Y%m%d-%H%M%S}-{next(LOCATES)}"  # two locates at once mustn't share files
     photo = out / f"desk-{when}-photo.png"
     cv2.imwrite(str(photo), frame)
-    (out / f"desk-{when}.json").write_text(json.dumps({"phrase": thing, "height_mm": height_mm, "photo": str(photo),
-                                                      "raw": seg.raw}, indent=1), encoding="utf-8")
-    drawn = out / f"desk-{when}.png"
     to_arm = np.linalg.inv(desk.view_matrix(cfg["region_mm"], cfg["px_per_mm"]))
-    cv2.imwrite(str(drawn), desk.draw(view, to_arm, touched, hits))
-    return {"found": [f.summary() for f in hits], "problems": list(seg.problems),
-            "drawn": str(drawn.relative_to(bench.root)), "_timing": {"capture": captured}}
+    results = {}
+    for (thing, height_mm), (hits, view, seg) in zip(wants, located):
+        stem = out / f"desk-{when}-{''.join(c if c.isalnum() else '-' for c in key(thing))[:30]}"
+        stem.with_suffix(".json").write_text(json.dumps({"phrase": thing, "height_mm": height_mm, "photo": str(photo),
+                                                         "raw": seg.raw}, indent=1), encoding="utf-8")
+        cv2.imwrite(str(stem.with_suffix(".png")), desk.draw(view, to_arm, touched, hits))
+        results[thing] = {"found": [f.summary() for f in hits], "problems": list(seg.problems),
+                          "drawn": str(stem.with_suffix(".png").relative_to(bench.root)),
+                          "_timing": {"capture": captured}}
+    return results
 
 
 def _open_hand(bench: Bench):
@@ -330,32 +342,54 @@ def build_toolbox(bench: Bench) -> Toolbox:
         "mm, its length and width, the heading of its long axis and its top's height, best match first. One camera "
         "can't see height, so give height_mm for anything standing up."), thing_params, label="SAM")
     def locate(thing: str, height_mm: float = 0) -> dict:
+        return {"ok": True, "thing": thing, **located([(thing, height_mm)])[thing]}
+
+    def located(wants: list) -> dict:
+        """locate for each (thing, height_mm) in `wants`, from one photo, keeping what it finds in bench.seen:
+        {thing: result}."""
         from wbc.motion.hand import Thing
 
         if bench.sim:
             scene = json.loads((bench.root / "fixtures" / "desk_scene.json").read_text(encoding="utf-8"))
-            result = {"sim": True, "found": [s for name, s in scene.items() if name in key(thing)]}
+            results = {t: {"sim": True, "found": [s for name, s in scene.items() if name in key(t)]} for t, _ in wants}
+        elif len(wants) == 1:
+            results = {wants[0][0]: _locate_live(bench, *wants[0])}
         else:
-            result = _locate_live(bench, thing, height_mm)
-        if result["found"]:
-            bench.seen[key(thing)] = (Thing.from_summary({**result["found"][0], "phrase": key(thing)}),
-                                      time.monotonic())
-        else:
-            bench.seen.pop(key(thing), None)
-        return {"ok": True, "thing": thing, **result}
+            results = _locate_all(bench, wants)
+        for thing, _ in wants:
+            if results[thing]["found"]:
+                bench.seen[key(thing)] = (Thing.from_summary({**results[thing]["found"][0], "phrase": key(thing)}),
+                                          time.monotonic())
+            else:
+                bench.seen.pop(key(thing), None)
+        return results
+
+    def targets(wants: list):
+        """([Thing, ...], None) for each (thing, height_mm) in `wants` from what locate found, locating the ones it
+        hasn't in the last SEEN_S, or found at another height than one given now, again, together from one photo;
+        (None, error) when one can't be found."""
+        stale = []
+        for thing, height_mm in wants:
+            last = bench.seen.get(key(thing))
+            if last is None or time.monotonic() - last[1] > SEEN_S or (height_mm > 0 and height_mm != last[0].height_mm):
+                stale.append((thing, height_mm or (last[0].height_mm if last else 0)))
+        if stale:
+            located(stale)
+        missing = [thing for thing, _ in wants if key(thing) not in bench.seen]
+        if missing:
+            return None, {"ok": False, "error": f"locate found no {missing[0]} on the desk"}
+        return [bench.seen[key(thing)][0] for thing, _ in wants], None
 
     def target(thing: str, height_mm: float):
-        """(Thing, None) from what locate found, locating it again first if it hasn't in the last SEEN_S, or was
-        located at another height than one given now; (None, error) when it can't."""
-        last = bench.seen.get(key(thing))
-        stale = last is None or time.monotonic() - last[1] > SEEN_S or (height_mm > 0 and height_mm != last[0].height_mm)
-        if stale and not locate(thing, height_mm or (last[0].height_mm if last else 0))["found"]:
-            return None, {"ok": False, "error": f"locate found no {thing} on the desk"}
-        return bench.seen[key(thing)][0], None
+        """(Thing, None) as targets() finds one; (None, error) when it can't."""
+        found, problem = targets([(thing, height_mm)])
+        return (found[0] if found else None), problem
 
-    def move(question: str, run) -> dict:
-        """run(hand) under the arm lock once the user presses Enter, powering the arm on first if it's off. The
-        driver's refusals and trips come back as errors."""
+    def move(question: str, run, plan=None) -> dict:
+        """run(hand) under the arm lock once the user presses Enter, powering the arm on first if it's off. Before
+        asking, the arm is checked (with its motors off, past an end of a range or too hot) and plan(hand) runs, so
+        what the driver or IK would refuse is refused before anything is asked or written. The driver's refusals and
+        trips come back as errors."""
         if not bench.arm_port:
             return {"ok": False, "error": "the arm's tools are off: start the agent with --arm"}
         if bench.confirm is None:
@@ -372,6 +406,10 @@ def build_toolbox(bench: Bench) -> Toolbox:
             if bench.stopped.is_set():
                 return ending
             off = len(hand.arm.powered) < len(hand.arm.joints.servos)
+            if off:
+                hand.arm.check()  # what power_on would refuse, refused before the question
+            if plan is not None:
+                plan(hand)
             answer = bench.confirm(question + (" The motors come on first." if off else ""))
             if answer is None or bench.stopped.is_set():  # the keyboard closed: the session is ending
                 return ending
@@ -388,7 +426,8 @@ def build_toolbox(bench: Bench) -> Toolbox:
             bench.arm_lock.release()
 
     def check_over():
-        """What pick_up and put_down ask over the thing before going down, while robot.yaml's hand.check_over is on."""
+        """What pick_up and put_down ask over the thing before going down (a pick with its jaws open), while
+        robot.yaml's hand.check_over is on."""
         return bench.confirm if (bench.robot_cfg.get("hand") or {}).get("check_over", True) else None
 
     @tb.register("pick_up", (
@@ -408,7 +447,7 @@ def build_toolbox(bench: Bench) -> Toolbox:
             bench.seen.pop(key(thing), None)
             return {"ok": True, "sim": True, "holding": t.name, "x_mm": t.x, "y_mm": t.y}
         result = move(f"Pick up the {t.name} at x {t.x:.0f}, y {t.y:.0f} mm?",
-                      lambda hand: hand.pick_up(t, confirm=check_over()))
+                      lambda hand: hand.pick_up(t, confirm=check_over()), plan=lambda hand: hand.plan_pick(t))
         if result.get("ok") or "steps" in result or result.get("motors_cut"):  # the arm went to it
             bench.seen.pop(key(thing), None)  # in the jaws now, or nudged trying: locate it again before the next move
         return result
@@ -427,7 +466,58 @@ def build_toolbox(bench: Bench) -> Toolbox:
             held, bench.sim_held = bench.sim_held, None
             return {"ok": True, "sim": True, "put": held, "on": t.name}
         return move(f"Put it down on the {t.name} at x {t.x:.0f}, y {t.y:.0f} mm?",
-                    lambda hand: hand.put_down(t, confirm=check_over()))
+                    lambda hand: hand.put_down(t, confirm=check_over()), plan=lambda hand: hand.plan_put(t))
+
+    @tb.register("move_thing", (
+        "Move a thing on the desk onto or into a place, such as a screwdriver onto a tray, in one call: one desk photo "
+        "finds both (about $0.005), then the arm picks the thing up and puts it down there. The user presses Enter "
+        "before the arm moves. Use it whenever something goes somewhere, rather than locate, pick_up and put_down one "
+        "at a time. Name each with a short noun phrase the camera can see, such as 'screwdriver' or 'sticky note', "
+        "not where it is, and give heights for anything standing up."), {
+        "type": "object",
+        "properties": {
+            "thing": {"type": "string", "description": "what to pick up, a short noun phrase, e.g. 'screwdriver'"},
+            "place": {"type": "string", "description": "what to put it on or in, a short noun phrase, e.g. 'tray'"},
+            "thing_height_mm": {"type": "number", "minimum": 0, "maximum": 300, "default": 0,
+                                "description": "how tall the thing stands, for something standing up; 0 for "
+                                               "something lying flat"},
+            "place_height_mm": {"type": "number", "minimum": 0, "maximum": 300, "default": 0,
+                                "description": "how tall the place stands, such as a tray's rim or the case it's "
+                                               "in; 0 for something flat on the desk"}},
+        "required": ["thing", "place"]}, label="arm")
+    def move_thing(thing: str, place: str, thing_height_mm: float = 0, place_height_mm: float = 0) -> dict:
+        found, problem = targets([(thing, thing_height_mm), (place, place_height_mm)])
+        if problem:
+            return problem
+        t, p = found
+        if bench.sim:
+            if bench.sim_held:
+                return {"ok": False, "error": f"refused, nothing moved for it: the jaws already hold the "
+                                              f"{bench.sim_held}: put it down first"}
+            bench.seen.pop(key(thing), None)
+            return {"ok": True, "sim": True, "moved": t.name, "onto": p.name, "x_mm": p.x, "y_mm": p.y}
+
+        def run(hand):
+            from wbc.motion.arm import Refused
+
+            picked = hand.pick_up(t, confirm=check_over())
+            if not picked.get("ok"):
+                return {**picked, "put": "not tried"}
+            try:
+                put = hand.put_down(p, confirm=check_over())
+            except Refused as e:  # refused before that move started, so it's still in the jaws
+                return {"ok": False, "holding": t.name, "error": f"picked up the {t.name}, but putting it on the "
+                        f"{p.name} was refused, so the jaws still hold it: {e}", "steps": picked["steps"]}
+            if not put["ok"]:  # stopped over the place
+                return {**put, "holding": t.name, "steps": picked["steps"] + put["steps"]}
+            return {"ok": True, "moved": t.name, "onto": p.name, "holding": None,
+                    "steps": picked["steps"] + put["steps"]}
+
+        result = move(f"Pick up the {t.name} at x {t.x:.0f}, y {t.y:.0f} mm and put it on the {p.name} at x {p.x:.0f}, "
+                      f"y {p.y:.0f} mm?", run, plan=lambda hand: (hand.plan_pick(t), hand.plan_put(p)))
+        if result.get("ok") or "steps" in result or result.get("motors_cut"):  # the arm went to it
+            bench.seen.pop(key(thing), None)
+        return result
 
     @tb.register("arm_home", "Move the arm back to where it rested when its motors came on. The user presses Enter "
                              "first.", {"type": "object", "properties": {}}, label="arm")

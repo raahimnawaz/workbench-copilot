@@ -471,7 +471,8 @@ class Hand:
 
     def pick_up(self, thing: Thing, confirm=None) -> dict:
         """Pick `thing` up: over it, open, just over its top, down, grip, back up. confirm(prompt), when given, is asked
-        over the thing before the jaws open and go down; False stops there, and so does None (the session is ending).
+        over the thing once the jaws are open, before they go down; False stops there, and so does None (the session
+        is ending).
         Refused (the driver's or IK's) before anything moves when a pose can't be reached, but a refused climb back up
         from the thing comes back as an error that says the arm is down there; Tripped, with the motors cut, as the
         driver says."""
@@ -480,16 +481,17 @@ class Hand:
         steps = self.plan_pick(thing)
         over, just, down, up = steps
         self.arm.move_to(over.q)
-        if confirm is not None:
-            answer = confirm(f"Over the {thing.name}, the jaws along {over.jaws_deg:+.0f}°. Go down and grip it?")
-            if not answer:
-                return {"ok": False, "stopped": f"over the {thing.name}, "
-                        + ("as you asked" if answer is False else "since the session is ending"),
-                        "steps": [over.summary()]}
         opened = self.arm.release(100.0)
         if opened.opening < OPEN_ENOUGH:
             return {"ok": False, "error": f"the jaws stopped {opened.opening:.0f}% open over the {thing.name}: "
                                           "something's in their way, so they didn't go down", "steps": [over.summary()]}
+        if confirm is not None:  # open, so whoever answers can see the fixed jaw is beside it, not over it
+            answer = confirm(f"Over the {thing.name} with the jaws open: the one that didn't move should be beside it, "
+                             "not over it. Go down and grip it?")
+            if not answer:
+                return {"ok": False, "stopped": f"over the {thing.name} with the jaws open, "
+                        + ("as you asked" if answer is False else "since the session is ending"),
+                        "steps": [over.summary()]}
         self.arm.move_to(just.q)
         sagging = self._sagging(down, thing)
         if sagging:
