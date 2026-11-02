@@ -17,6 +17,26 @@ def response(rid, output=(), text=""):
     return NS(id=rid, output=list(output), output_text=text, usage=usage())
 
 
+def said(request) -> list:
+    """Spark's earlier replies that a request sends back as the conversation so far, in order."""
+    return [i["content"] for i in request["input"] if i.get("role") == "assistant"]
+
+
+def asked(request):
+    """The content of a request's last user message that isn't an image: its turn's words, with any bench facts."""
+    for i in reversed(request["input"]):
+        content = i.get("content") if i.get("role") == "user" else None
+        if content is not None and (isinstance(content, str)
+                                    or not content[0].get("text", "").startswith("Image from")):
+            return content
+    return None
+
+
+def fresh(request) -> bool:
+    """Whether a request starts a new conversation: all it sends is its turn's user messages."""
+    return all(i.get("role") == "user" for i in request["input"])
+
+
 class FakeResponses:
     """Replays scripted responses and records every request."""
 

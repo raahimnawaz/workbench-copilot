@@ -2,7 +2,7 @@ import json
 import time
 
 import pytest
-from fakes import (FakeChatClient, FakeClient, SilentHud, chat_response, function_call, response)
+from fakes import FakeChatClient, FakeClient, SilentHud, asked, chat_response, function_call, response
 
 from wbc.agent.budget import Budget
 from wbc.agent.loop import ChatRouter, Router
@@ -53,13 +53,14 @@ def test_parallel_tool_round_then_reply():
     assert sorted(log) == ["coder", "row:5"]
 
     second = api.requests[1]
-    assert second["previous_response_id"] == "r1"
+    assert "previous_response_id" not in second
+    assert [i.get("type") for i in second["input"][1:3]] == ["function_call", "function_call"]  # r1's, sent back
     outputs = [i for i in second["input"] if i.get("type") == "function_call_output"]
     assert [o["call_id"] for o in outputs] == ["c1", "c2"]
     assert "_image" not in outputs[1]["output"]
     # the image goes after every function output, as a user message
     assert second["input"][-1]["content"][1]["image_url"].startswith("data:image/png;base64,")
-    assert router.prev_id == "r2"
+    assert router.history[-1] == {"role": "assistant", "content": "The sensor is on GPIO 4. Patch staged."}
     assert ("call", "Wonder", "ask_coder") in hud.events
     assert router.budget.spent > 0
 
@@ -124,11 +125,25 @@ def test_reasoning_effort_is_sent_only_when_set():
     assert sum(1 for e in hud.events if e[0] == "note" and "answered in" in e[1]) == 2
 
 
-def test_next_turn_chains_on_the_last_response():
+def test_next_turn_sends_the_conversation_so_far():
     router, api, _ = make_router([response("r1", text="hi"), response("r2", text="again")], Toolbox())
     router.run_turn("one")
     router.run_turn("two")
-    assert api.requests[1]["previous_response_id"] == "r1"
+    assert api.requests[1]["input"] == [{"role": "user", "content": "one"}, {"role": "assistant", "content": "hi"},
+                                        {"role": "user", "content": "two"}]
+    assert "previous_response_id" not in api.requests[1]
+
+
+def test_a_reply_and_its_calls_go_back_into_the_conversation_without_its_reasoning():
+    from types import SimpleNamespace as NS
+    first = response("r1", [NS(type="reasoning", summary=[]), function_call("c1", "ask_coder", "{}")])
+    first.output_text = "Asking the coder."
+    router, api, _ = make_router([first, response("r2", text="Staged.")], slow_toolbox([]))
+    router.run_turn("fix it")
+    sent = api.requests[1]["input"]
+    assert sent[:3] == [{"role": "user", "content": "fix it"}, {"role": "assistant", "content": "Asking the coder."},
+                        {"type": "function_call", "call_id": "c1", "name": "ask_coder", "arguments": "{}"}]
+    assert sent[3]["type"] == "function_call_output" and len(sent) == 4
 
 
 def test_router_stops_before_a_call_once_the_budget_is_spent():
@@ -154,7 +169,7 @@ def test_bad_json_arguments_come_back_as_a_tool_error():
         response("r2", text="sorry"),
     ], slow_toolbox([]))
     router.run_turn("point")
-    out = json.loads(api.requests[1]["input"][0]["output"])
+    out = json.loads(next(i["output"] for i in api.requests[1]["input"] if i.get("type") == "function_call_output"))
     assert out["ok"] is False and "not valid JSON" in out["error"]
 
 
@@ -173,7 +188,7 @@ def test_stops_after_max_steps_and_does_not_chain_onto_pending_calls():
     looping = [response(f"r{i}", [function_call(f"c{i}", "ask_coder", "{}")]) for i in range(4)]
     router, _, hud = make_router(looping, slow_toolbox([]), max_steps=3)
     router.run_turn("loop forever")
-    assert router.prev_id is None
+    assert router.history == []
     assert any(e[0] == "note" and "stopped" in e[1] for e in hud.events)
 
 
@@ -213,11 +228,11 @@ def test_facts_the_conversation_has_are_not_sent_again():
                                  prefetch=PREFETCH)
     router.run_turn("one")
     router.run_turn("two")
-    second = api.requests[1]["input"][0]["content"]
+    second = asked(api.requests[1])
     assert second.count("unchanged since you last saw it") == 2 and "mismatches" not in second
     board["mismatches"] = [{"signal": "SENSOR_PIN"}]
     router.run_turn("three")
-    third = api.requests[2]["input"][0]["content"]
+    third = asked(api.requests[2])
     assert "SENSOR_PIN" in third and third.count("unchanged") == 1  # only pins.h stayed the same
 
 
@@ -249,7 +264,7 @@ def test_private_keys_stay_out_of_what_the_model_sees():
     router, api, _ = make_router([response("r1", [function_call("c1", "ask_coder", "{}")]),
                                   response("r2", text="done")], tb)
     router.run_turn("fix it")
-    assert "_timing" not in api.requests[1]["input"][0]["output"]
+    assert all("_timing" not in i["output"] for i in api.requests[1]["input"] if i.get("type") == "function_call_output")
 
 
 def test_chat_router_gets_the_same_bench_facts():

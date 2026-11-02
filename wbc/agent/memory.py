@@ -1,7 +1,7 @@
 """What the bench agent remembers past one conversation: a session that survives restarts and a full context,
 and a notebook of facts worth keeping for days.
 
-Spark keeps each conversation server-side (previous_response_id), so within one run it already remembers
+Spark gets the whole conversation with every call (wbc/agent/loop.py), so within one run it already remembers
 everything said and seen. A conversation ends when the process does, when a turn runs out of tool rounds, and
 when it outgrows the model's context. This module carries what matters across those breaks:
 

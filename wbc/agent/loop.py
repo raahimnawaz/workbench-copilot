@@ -38,6 +38,15 @@ def _private(result: dict) -> dict:
     return {k: result.pop(k) for k in [k for k in result if k.startswith("_")]}
 
 
+def _replayed(r) -> list:
+    """A response's output as input items for the conversation's next call: its text as an assistant message, then
+    its function calls. Its reasoning stays out, since that can't be sent back."""
+    text = getattr(r, "output_text", "") or ""
+    calls = [{"type": "function_call", "call_id": i.call_id, "name": i.name, "arguments": i.arguments}
+             for i in r.output if getattr(i, "type", "") == "function_call"]
+    return ([{"role": "assistant", "content": text}] if text else []) + calls
+
+
 def _spoken_list(names: list) -> str:
     """Tool names as words, each once: ['locate', 'pick_up', 'locate'] -> 'Locate and pick up'."""
     words = list(dict.fromkeys(n.replace("_", " ") for n in names))
@@ -254,7 +263,12 @@ class _RouterBase:
 
 
 class Router(_RouterBase):
-    """Muse Spark on the Meta Model API. Conversation state lives server-side via previous_response_id."""
+    """Muse Spark on the Meta Model API's Responses endpoint.
+
+    The conversation is kept here and sent whole with every call, rather than chained on the last response's id.
+    On Nov 1, every call chained with previous_response_id took 11.8–13.8 s, whether or not it carried a tool result,
+    while the same conversation's first call, sent whole, took 3.4 s (pipeline-notes/spark-chaining-test). Only a
+    finished turn joins the conversation, so a failed one leaves it as it was, as it did when chained."""
 
     label = "Spark"
 
@@ -262,14 +276,14 @@ class Router(_RouterBase):
         super().__init__(*args, **kwargs)
         self.fallback = fallback
         self.effort = effort  # reasoning effort; None leaves the API default
-        self.prev_id = None
+        self.history = []  # the conversation's finished turns as input items, Spark's replies and calls included
 
     def _chained(self) -> bool:
-        return self.prev_id is not None
+        return bool(self.history)
 
     def _new_conversation(self) -> None:
         super()._new_conversation()
-        self.prev_id = None
+        self.history = []
 
     def _summarize(self, text: str) -> str:
         """One call with no tools and no previous response, so it fits however full the conversation got."""
@@ -284,7 +298,7 @@ class Router(_RouterBase):
 
     def _turn(self, user_text: str, done: list, fetched: list) -> str:
         self._ran_out = False
-        if self.prev_id is None:
+        if not self.history:
             self._seen = {}  # a new conversation hasn't been sent anything yet
         facts, pictures = self._bench_facts(fetched)
         text = f"{user_text}\n\n{facts}" if facts else user_text
@@ -292,12 +306,14 @@ class Router(_RouterBase):
             part for name, image in pictures for part in (
                 {"type": "input_text", "text": f"Image from {name}:"},
                 {"type": "input_image", "image_url": image_data_url(image)})]
-        r = self._create([{"role": "user", "content": content}], self.prev_id)
+        turn = [{"role": "user", "content": content}]
+        r = self._create(self.history + turn)
         for _ in range(self.max_steps):
+            turn += _replayed(r)
             calls = [Call(i.call_id, i.name, i.arguments) for i in r.output
                      if getattr(i, "type", "") == "function_call"]
             if not calls:
-                self.prev_id = r.id
+                self.history += turn
                 break
             results = self._round(calls, done)
             items, images = [], []
@@ -308,9 +324,10 @@ class Router(_RouterBase):
                     images.append({"role": "user", "content": [
                         {"type": "input_text", "text": f"Image from {c.name}:"},
                         {"type": "input_image", "image_url": image_data_url(image)}]})
-            r = self._create(items + images, r.id)
+            turn += items + images
+            r = self._create(self.history + turn)
         else:
-            # The last response still has unanswered calls, so don't chain the next turn onto it.
+            # The last response still has unanswered calls, so the next turn starts a new conversation.
             self.hud.note(f"stopped after {self.max_steps} tool rounds")
             self._ran_out = True
             self._new_conversation()
@@ -318,10 +335,9 @@ class Router(_RouterBase):
         self.hud.reply(self.label, text)
         return text
 
-    def _create(self, items: list, prev_id):
+    def _create(self, items: list):
         self.budget.check()
-        kwargs = dict(instructions=self._instructions(), tools=self.toolbox.schemas(), input=items,
-                      previous_response_id=prev_id)
+        kwargs = dict(instructions=self._instructions(), tools=self.toolbox.schemas(), input=items)
         if self.effort:
             kwargs["reasoning"] = {"effort": self.effort}
         t0 = time.monotonic()

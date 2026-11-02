@@ -9,7 +9,8 @@ from types import SimpleNamespace as NS
 
 import pytest
 import yaml
-from fakes import FakeChatClient, FakeClient, SilentHud, chat_response, function_call, response, usage
+from fakes import (FakeChatClient, FakeClient, SilentHud, asked, chat_response, fresh, function_call, response, said,
+                   usage)
 
 from wbc import config
 from wbc.agent import __main__ as agent
@@ -308,7 +309,7 @@ def test_compacts_once_a_call_reaches_the_token_threshold(tmp_path):
     assert summary_call["instructions"] == SUMMARY_PROMPT
     assert "previous_response_id" not in summary_call and "tools" not in summary_call
     assert "check my wiring" in summary_call["input"][0]["content"]
-    assert next_call["previous_response_id"] is None and next_call["input"][0]["content"] == "what now?"
+    assert fresh(next_call) and next_call["input"][0]["content"] == "what now?"
     assert "Found the sensor on GPIO 4." in next_call["instructions"]
     assert memory.session.summary == "Found the sensor on GPIO 4."
     assert [t["user"] for t in memory.session.turns] == ["what now?"]
@@ -320,7 +321,7 @@ def test_the_token_threshold_reads_the_last_call_not_a_running_total(tmp_path):
     router, api, _ = make_router([big("r1", "a", 30000), big("r2", "b", 30000), response("r3", text="c")], memory)
     for text in ("one", "two", "three"):
         router.run_turn(text)
-    assert len(api.requests) == 3 and api.requests[2]["previous_response_id"] == "r2", "no summary call"
+    assert len(api.requests) == 3 and said(api.requests[2]) == ["a", "b"], "no summary call"
 
 
 def test_compacts_once_enough_turns_pile_up(tmp_path):
@@ -329,7 +330,7 @@ def test_compacts_once_enough_turns_pile_up(tmp_path):
                                   response("s1", text="Two turns."), response("r3", text="c")], memory)
     for text in ("one", "two", "three"):
         router.run_turn(text)
-    assert "tools" not in api.requests[2] and api.requests[3]["previous_response_id"] is None
+    assert "tools" not in api.requests[2] and fresh(api.requests[3])
 
 
 def test_long_turns_become_a_summary_while_the_summary_call_can_still_read_them_whole(tmp_path):
@@ -371,11 +372,11 @@ def test_a_full_context_on_the_first_call_starts_the_turn_over_once_without_read
                                  prefetch=[{"tool": "read_breadboard"}])
     router.run_turn("hello")
     assert router.run_turn("now do it") == "Done."
-    assert api.requests[1]["previous_response_id"] == "r1", "the call that didn't fit"
+    assert said(api.requests[1]) == ["hi"], "the call that didn't fit"
     summary = api.requests[2]
     assert "tools" not in summary and "now do it" not in summary["input"][0]["content"]
     retry = api.requests[3]
-    assert retry["previous_response_id"] is None and retry["input"][0]["content"].startswith("now do it")
+    assert fresh(retry) and retry["input"][0]["content"].startswith("now do it")
     assert "Said hi." in retry["instructions"]
     assert "mismatches" in retry["input"][0]["content"], "the new conversation gets the board read in full"
     assert log == ["board", "board"], "one board read a turn, the turn that started over too"
@@ -406,7 +407,7 @@ def test_a_full_context_after_an_arm_move_asks_whats_still_to_do_instead_of_movi
     assert reply == ("My memory of this conversation filled up, so I started a new one from a summary. "
                      "Pick up already ran, so tell me what's still to do.")
     assert ("reply", "Spark", reply) in hud.events, "said and shown, not only returned"
-    assert len(api.requests) == 4 and router.prev_id is None
+    assert len(api.requests) == 4 and router.history == []
     assert [t["user"] for t in memory.session.turns] == ["pick up the screwdriver"], "recorded once"
     assert memory.session.turns[0]["live"] is False and memory.session.turns[0]["calls"][0]["tool"] == "pick_up"
     assert "pick up the screwdriver" in router._instructions(), "the next conversation hears what happened"
@@ -428,10 +429,11 @@ def test_two_failed_turns_in_a_row_start_a_new_conversation(tmp_path):
     for _ in range(2):
         with pytest.raises(BadRequestError):
             router.run_turn("try again")
-    assert router.prev_id == "r1", "a failed turn leaves the conversation as it was"
+    assert router.history == [{"role": "user", "content": "hello"}, {"role": "assistant", "content": "hi"}], \
+        "a failed turn leaves the conversation as it was"
     assert [t["live"] for t in memory.session.turns] == [True, False, False]
     router.run_turn("and now?")
-    assert "tools" not in api.requests[3] and api.requests[4]["previous_response_id"] is None
+    assert "tools" not in api.requests[3] and fresh(api.requests[4])
 
 
 def test_the_network_or_the_rate_limit_failing_twice_leaves_the_conversation_alone(tmp_path):
@@ -443,7 +445,7 @@ def test_the_network_or_the_rate_limit_failing_twice_leaves_the_conversation_alo
         with pytest.raises(error):
             router.run_turn("check my wiring")
     router.run_turn("check my wiring")
-    assert len(api.requests) == 4 and api.requests[3]["previous_response_id"] == "r1", "no summary, same chain"
+    assert len(api.requests) == 4 and said(api.requests[3]) == ["hi"], "no summary, the same conversation"
 
 
 def test_a_failure_between_good_turns_doesnt_count_toward_two(tmp_path):
@@ -455,7 +457,7 @@ def test_a_failure_between_good_turns_doesnt_count_toward_two(tmp_path):
             router.run_turn(text)
         except BadRequestError:
             pass
-    assert len(api.requests) == 5 and api.requests[4]["previous_response_id"] == "r2"
+    assert len(api.requests) == 5 and said(api.requests[4]) == ["a", "b"]
 
 
 def test_turns_that_fail_outside_a_conversation_dont_summarize_the_last_run(tmp_path):
@@ -488,8 +490,8 @@ def test_a_failed_turn_leaves_its_bench_facts_to_be_sent_again(tmp_path, with_me
         router.run_turn("check my wiring again")
     router.run_turn("and now?")
     third = api.requests[2]
-    assert third["previous_response_id"] == "r1" and "SENSOR_PIN" in third["input"][0]["content"]
-    assert "unchanged" not in third["input"][0]["content"], "the conversation never received the new read"
+    assert said(third) == ["ok"] and "SENSOR_PIN" in asked(third)
+    assert "unchanged" not in asked(third), "the conversation never received the new read"
 
 
 def test_a_failed_summary_keeps_a_healthy_conversation_and_tries_again_five_turns_later(tmp_path):
@@ -500,8 +502,8 @@ def test_a_failed_summary_keeps_a_healthy_conversation_and_tries_again_five_turn
     for i in range(1, 9):
         router.run_turn(f"turn {i}")
     assert ["tools" in q for q in api.requests] == [True, True, False, True, True, True, True, True, False, True]
-    assert api.requests[3]["previous_response_id"] == "r2", "the summary failed, so the conversation carried on"
-    assert api.requests[9]["previous_response_id"] is None
+    assert said(api.requests[3]) == ["reply 1", "reply 2"], "the summary failed, so the conversation carried on"
+    assert fresh(api.requests[9])
     assert any("the summary failed (ConnectionError), so the conversation carries on" in n for n in notes(hud))
 
 
@@ -515,7 +517,7 @@ def test_a_failed_summary_after_failed_turns_starts_over_with_the_turns_as_text(
             router.run_turn("try again")
     router.run_turn("and now?")
     next_call = api.requests[4]
-    assert next_call["previous_response_id"] is None and "hello" in next_call["instructions"]
+    assert fresh(next_call) and "hello" in next_call["instructions"]
     assert memory.session.summary == ""
     assert any("the summary failed (ConnectionError), so the turns carry over as they are" in n for n in notes(hud))
 
@@ -531,7 +533,7 @@ def test_running_out_of_tool_rounds_ends_the_conversation_and_says_the_rest_wasn
     assert memory.session.turns[1]["reply"] == "(stopped after 1 tool rounds; the rest wasn't done)"
     router.run_turn("again")
     last = api.requests[-1]
-    assert last["previous_response_id"] is None
+    assert fresh(last)
     assert "check my wiring" in last["instructions"] and "keep picking it up" in last["instructions"]
     assert "Turns this conversation doesn't hold (from an earlier run, or cut off by an error or a reset)" \
         in last["instructions"], "not 'from before this conversation': a turn that failed in it may be newer"
@@ -588,12 +590,12 @@ def test_resume_picks_up_after_a_restart_and_a_run_without_it_starts_clean(tmp_p
     router, api, _ = make_router([response("r2", text="It was on 4.")], again)
     router.run_turn("where was the sensor?")
     request = api.requests[0]
-    assert request["previous_response_id"] is None
+    assert fresh(request)
     assert "check my wiring" in request["instructions"] and "It's on GPIO 4." in request["instructions"]
 
-    fresh = Memory.from_config(models, tmp_path)  # and the one after, without it
-    assert fresh.session.turns == [] and "(--resume picks up the one from " in fresh.describe()
-    router, api, _ = make_router([response("r3", text="Hello.")], fresh)
+    later = Memory.from_config(models, tmp_path)  # and the one after, without it
+    assert later.session.turns == [] and "(--resume picks up the one from " in later.describe()
+    router, api, _ = make_router([response("r3", text="Hello.")], later)
     router.run_turn("hello")
     assert api.requests[0]["instructions"] == "system", "nothing from the runs before"
     archived = json.loads(next((tmp_path / "sessions").iterdir()).read_text())
