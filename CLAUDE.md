@@ -3,7 +3,7 @@
 Entry for the Meta Global AI Developer Hackathon (Indie track, Push the Frontier). The build runs Oct 26 – Nov 4, 2026, and **submissions close Nov 4 at 9:00 PM ET** with a public repo and a 3-minute video. The plan of record is the blueprint artifact at https://claude.ai/artifact/1f5AMxFTVycA2C25DkqWwm. Read it with the Artifact tool, starting with the Status sheet, before changing it.
 
 ## Working rules
-- Every change goes on its own branch with a PR into `main`. Push, open the PR and merge without asking. Ask before destructive git operations. Through Nov 2, commits go on `late-build` instead, and it's never pushed: the workspace notes (`../CLAUDE.md`) have that rule.
+- Every change goes on its own branch with a PR into `main`. Push, open the PR and merge without asking. Ask before destructive git operations.
 - **Paid API calls:** say what will run and roughly what it costs, then wait for a yes. Offline tests are free.
 - Never read, print or commit `.env`, which holds `META_API_KEY` (and `BASETEN_API_KEY`).
 - The demo may only show work built during the event. Keep the README's built-vs-reused table accurate, and add any reused code with its license.
