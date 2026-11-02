@@ -67,7 +67,8 @@ class Feed:
 
 def test_every_model_with_a_role_has_its_place_on_the_page():
     pages = page_models(MODELS)
-    assert pages == {WONDER: "wonder", SAM: "sam", EARS: "transcribe", MODELS["backup"]["model"]: "open"}
+    assert pages == {WONDER: "wonder", SAM: "sam", EARS: "transcribe", MODELS["backup"]["model"]: "open",
+                     MODELS["fast_arm"]["model"]: "llama"}
     block = re.search(r"const MODELS = \{(.*?)\n\};", PAGE, re.S).group(1)
     assert set(pages.values()) | {"spark"} <= set(re.findall(r"^\s+(\w+): \{ name:", block, re.M))
     line = next(line for line in PAGE.splitlines() if "const live = {" in line)

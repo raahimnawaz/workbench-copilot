@@ -33,7 +33,7 @@ HEARD = 8  # the most requests heard and waiting for their turns
 def page_models(models: dict) -> dict:
     """The page's name (MODELS in the page) for each model id models.yaml gives a role. Any other id is the
     router's: router.model, its fallback, or --router-model."""
-    roles = (("coder", "wonder"), ("eyes", "sam"), ("ears", "transcribe"), ("backup", "open"))
+    roles = (("coder", "wonder"), ("eyes", "sam"), ("ears", "transcribe"), ("backup", "open"), ("fast_arm", "llama"))
     return {models[role]["model"]: page for role, page in roles if role in models}
 
 

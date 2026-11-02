@@ -5,6 +5,9 @@ for an open-weights model on your own machine (Muse Glimmer) or a partner's serv
 
 With a Memory (wbc/agent/memory.py), every turn is recorded, and when a conversation breaks or fills up, the
 next one starts from a summary of it, or from the recorded turns, instead of from nothing.
+
+With a FastArm (fast_arm.py), an arm command its rules and the local model agree on runs first, with no call to the
+router's model, and joins the conversation as a turn like any other.
 """
 from __future__ import annotations
 
@@ -16,8 +19,13 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .budget import BudgetExceeded
+from .fast_arm import said
 from .memory import (SUMMARY_PROMPT, SUMMARY_RETRY_TURNS, call_record, context_full, input_tokens, summary_input,
                      transient, turn_record)
+
+# What the router's model gets after the fast path's move came back failed, with the request
+TRIED = ("The arm's fast path already ran {tool} {args} for this request, and it came back failed: {note}. Don't run "
+         "it again unless something should change. Say what happened.")
 
 
 @dataclass
@@ -58,7 +66,7 @@ class _RouterBase:
     label = "router"
 
     def __init__(self, client, model: str, toolbox, budget, hud, system: str, max_steps: int = 12,
-                 prefetch: list | None = None, memory=None):
+                 prefetch: list | None = None, memory=None, fast=None):
         self.client = client
         self.model = model
         self.toolbox = toolbox
@@ -70,6 +78,7 @@ class _RouterBase:
         self._seen = {}  # each prefetched result as this conversation last saw it
         self.pool = ThreadPoolExecutor(max_workers=4)
         self.memory = memory  # what outlives a conversation; None keeps only the conversation itself
+        self.fast = fast  # the arm's fast path (fast_arm.py); None sends every request to the router's model
         self._input_tokens = 0  # the last call's input: how full the conversation is
         self._failures = 0  # turns in a row that failed in a way that may mean the conversation is broken
         self._summary_after = 0  # after a summary that failed, how many recorded turns before the next try
@@ -147,6 +156,13 @@ class _RouterBase:
         turn. Nothing runs twice: not the bench facts, and never a tool that has acted on the bench."""
         done = []
         self.unfinished = (user_text, done)
+        asked = user_text  # what the router's model gets: the request, and what the fast path did if it failed
+        if self.fast is not None:
+            reply = self._fast(user_text, done)
+            if reply is not None:
+                return reply
+            if done:
+                asked = f"{user_text}\n\n{TRIED.format(**done[-1])}"
         seen = dict(self._seen)
         try:
             if self.memory is not None:
@@ -154,7 +170,7 @@ class _RouterBase:
             retry = self.memory is not None and self._chained()  # starting over only helps a turn in a conversation
             fetched = self._fetch()
             try:
-                text = self._turn(user_text, done, fetched)
+                text = self._turn(asked, done, fetched)
             except Exception as e:
                 if isinstance(e, BudgetExceeded) or not (retry and context_full(e)):
                     raise
@@ -166,7 +182,7 @@ class _RouterBase:
                     self.unfinished = None
                     self._record(user_text, done, text, live=False)
                     return text
-                text = self._turn(user_text, done, fetched)  # nothing has acted yet: start over in the new one, once
+                text = self._turn(asked, done, fetched)  # nothing has acted yet: start over in the new one, once
         except BudgetExceeded:
             self.unfinished = None
             self._record(user_text, done, "(stopped: the budget's hard stop)", live=self._keeps_failed_turns)
@@ -184,6 +200,29 @@ class _RouterBase:
         kept = text or (f"(stopped after {self.max_steps} tool rounds; the rest wasn't done)" if self._ran_out else "")
         self._record(user_text, done, kept, live=self._chained())
         return text
+
+    def _fast(self, user_text: str, done: list) -> str | None:
+        """The fast path: an arm command its rules and the local model agree on runs at once, with no call to the
+        router's model, and once it has worked its result is said. The turn joins the conversation and the session as
+        if the router had made the call. None when it isn't one, or when the move came back failed: then it's in
+        `done`, for the router's model to explain."""
+        command = self.fast.take(user_text)
+        if command is None:
+            return None
+        result = self._round([Call("fast0", command["tool"], json.dumps(command["args"]))], done)[0]
+        if not result.get("ok", True):
+            return None
+        text = said(command["tool"], result)
+        self.hud.reply("fast path", text)
+        self._join(user_text, text)
+        self.unfinished = None
+        self._failures = 0
+        self._record(user_text, done, text, live=True)
+        return text
+
+    def _join(self, user_text: str, reply: str) -> None:
+        """A turn the fast path answered, added to the conversation the next call sends."""
+        raise NotImplementedError
 
     def record_unfinished(self, why: str) -> None:
         """After Ctrl-C, once the motors are cut: record the turn it stopped, with what ran and what was running."""
@@ -281,6 +320,9 @@ class Router(_RouterBase):
     def _chained(self) -> bool:
         return bool(self.history)
 
+    def _join(self, user_text: str, reply: str) -> None:
+        self.history += [{"role": "user", "content": user_text}, {"role": "assistant", "content": reply}]
+
     def _new_conversation(self) -> None:
         super()._new_conversation()
         self.history = []
@@ -372,6 +414,9 @@ class ChatRouter(_RouterBase):
 
     def _chained(self) -> bool:
         return len(self.messages) > 1
+
+    def _join(self, user_text: str, reply: str) -> None:
+        self.messages += [{"role": "user", "content": user_text}, {"role": "assistant", "content": reply}]
 
     def _new_conversation(self) -> None:
         super()._new_conversation()

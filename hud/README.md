@@ -38,7 +38,7 @@ These functions are globals in the page's script. Live, each event the agent sen
 | Call | What it does |
 |---|---|
 | `setState(s)` | `'idle'`, `'listening'`, `'thinking'` or `'speaking'`. The sea, the line's waves and the voice glow follow it. |
-| `setModel(m)` | `'transcribe'`, `'spark'`, `'sam'`, `'wonder'` or `'open'` (Spark Open on Baseten). Sets the orb's colors, the model's name and its role line. |
+| `setModel(m)` | `'transcribe'`, `'spark'`, `'sam'`, `'wonder'`, `'open'` (Spark Open on Baseten) or `'llama'` (Llama 3.2 3B, the arm's fast path on this Mac). Sets the orb's colors, the model's name and its role line. |
 | `you(text)` | Shows what the user said, in quotes. `you('')` clears it. |
 | `say(html)` | Shows Muse's reply, a sentence at a time. `say('')` clears it. |
 | `begin(m)` | Adds model `m` to the call bar at the bottom when it starts. |

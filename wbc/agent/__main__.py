@@ -35,6 +35,7 @@ from wbc import config
 from wbc.agent import coder, ears
 from wbc.agent.approve import Keyboard
 from wbc.agent.budget import Budget, BudgetExceeded
+from wbc.agent.fast_arm import FastArm
 from wbc.agent.hud import ConsoleHud
 from wbc.agent.loop import ChatRouter, Router
 from wbc.agent.memory import Memory
@@ -49,7 +50,7 @@ GO_AHEADS = ("request", "enter")  # robot.yaml's hand.go_ahead: what lets an arm
 
 def build(sim: bool, backup: bool, router_model: str | None = None, arm: bool = False,
           calibration_dir: str | None = None, prefetch: bool = True, resume: bool = False,
-          hud_port: int | None = None, enter: bool = False):
+          hud_port: int | None = None, enter: bool = False, fast: bool = True):
     models = config.load_yaml("models.yaml")
     budget = Budget.from_config(models, config.ROOT)
     hud = ConsoleHud() if hud_port is None else WebHud(models, budget, hud_port, backup=backup)
@@ -72,14 +73,20 @@ def build(sim: bool, backup: bool, router_model: str | None = None, arm: bool = 
     prefetch = models["router"].get("prefetch") if prefetch else None
     memory = Memory.from_config(models, config.ROOT, resume=resume, sim=sim)
     add_memory_tools(toolbox, memory.notebook)
+    if fast and models.get("fast_arm"):
+        fast = FastArm(models["fast_arm"], toolbox, bench, memory.notebook, hud)
+    else:
+        fast = None
     if backup:
         b = models["backup"]
         router = ChatRouter(hud.watch(config.backup_client(models)), b["model"], toolbox, budget, hud, SYSTEM,
-                            max_steps=max_steps, prefetch=prefetch, memory=memory, reasoning=b.get("reasoning"))
+                            max_steps=max_steps, prefetch=prefetch, memory=memory, fast=fast,
+                            reasoning=b.get("reasoning"))
     else:
         r = models["router"]
         router = Router(meta, router_model or r["model"], toolbox, budget, hud, SYSTEM, max_steps=max_steps,
-                        prefetch=prefetch, memory=memory, fallback=r.get("fallback"), effort=r.get("effort"))
+                        prefetch=prefetch, memory=memory, fast=fast, fallback=r.get("fallback"),
+                        effort=r.get("effort"))
     return models, budget, hud, router, bench, keyboard
 
 
@@ -98,6 +105,8 @@ def main(argv=None) -> int:
                     help="let the arm's tools move it, as robot.yaml's hand.go_ahead says (the port is robot.yaml's)")
     ap.add_argument("--enter", action="store_true",
                     help="each arm move waits for Enter at the keyboard, whatever hand.go_ahead says (bench tests)")
+    ap.add_argument("--no-fast-arm", action="store_true",
+                    help="send arm commands to the router's model too, not the local fast path (to compare times)")
     ap.add_argument("--calibration-dir", metavar="DIR",
                     help="lerobot-calibrate's folder for the arm, when it's another macOS account's")
     ap.add_argument("--no-prefetch", action="store_true",
@@ -111,7 +120,7 @@ def main(argv=None) -> int:
     try:
         models, budget, hud, router, bench, keyboard = build(args.sim, args.backup, args.router_model, args.arm,
                                                              args.calibration_dir, not args.no_prefetch, args.resume,
-                                                             args.hud, args.enter)
+                                                             args.hud, args.enter, not args.no_fast_arm)
     except RuntimeError as e:  # missing key or voice extras
         print(e, file=sys.stderr)
         return 2
@@ -167,6 +176,9 @@ def main(argv=None) -> int:
         inbox.put(None)
 
     threading.Thread(target=typed, daemon=True).start()
+    fast = getattr(router, "fast", None)
+    if fast is not None and not args.hear:  # it loads its model on the first request, so that goes now
+        threading.Thread(target=fast.start, daemon=True).start()
     if not args.hear:  # build the firmware once now, so the session's first patch skips the cold build
         threading.Thread(target=coder.compile_in_sandbox, args=("", config.ROOT, models["coder"]), daemon=True).start()
     if args.voice or args.hear:
