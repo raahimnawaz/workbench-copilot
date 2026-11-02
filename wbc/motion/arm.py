@@ -25,7 +25,7 @@ climb back over it, going no lower on the way than the 50 µm its goals' whole t
 the base, so moves can't walk the arm down a little at a time. The floors are measured from config/robot.yaml's table
 (table.py): the desk sits under the URDF's z 0 and reads lower the further out the arm reaches (Oct 29), so floors
 measured from z 0 kept the jaws 27-46 mm above it, too high to pick up anything lying there.
-Moves are quintic and peak at 30°/s on any joint and 80 mm/s at the tool point, and no goal goes more than 5° from
+Moves are quintic and peak at 45°/s on any joint and 120 mm/s at the tool point, and no goal goes more than 5° from
 where its joint is. The floors hold for the plan, and joints within the 5° stray can put the tool point 17-41 mm
 under it, so a move also cuts every motor when the arm itself goes 5 mm under a floor. After a power cut the servos
 come back limp, with every goal 0 and no torque cap (Oct 28), so each move first checks that every powered joint still
@@ -89,8 +89,9 @@ GRIPPER_CAP = 24        # percent on the gripper: under the 25% where the overlo
 MAX_JUMP = 3.0          # degrees a joint may move on its own as its torque comes on before every motor is cut
 MAX_STRAY = 5.0         # degrees a joint may be from where it should be during a move before every motor is cut
 MAX_STEP = 5.0          # degrees: no goal goes further than this from where its joint is (LeRobot's max_relative_target)
-MAX_JOINT_SPEED = 30.0  # degrees per second any joint may reach at a move's peak
-MAX_TIP_SPEED = 0.08    # metres per second the tool point may reach at a move's peak: the plan's 80 mm/s near the bench
+MAX_JOINT_SPEED = 45.0  # degrees per second any joint may reach at a move's peak: 1.5x the first 30, since the 1/345
+                        # elbow lifted the forearm from flat to straight up at it lagging 3.5° at most (Nov 2)
+MAX_TIP_SPEED = 0.12    # metres per second the tool point may reach at a move's peak: 1.5x the plan's first 80 mm/s
 RANGE_MARGIN = 2.0      # degrees inside each end of a joint's range that a move may aim for
 TOOL_FLOOR = 0.010      # metres above the table the tool point has to stay, unless config/robot.yaml's tool_floor_mm
                         # sets it: since the tool point is the jaw tips (Oct 29), a pick needs them lower
@@ -325,8 +326,10 @@ class Arm:
                 raise Refused(f"the servos didn't answer ({e}). Is their power on?") from e
         where, turn = self._past(raw, joints)
         if where:
-            raise Refused(f"past the end of its range: {where}. Move it in a little, toward the middle"
-                          + (f". {turn}" if turn else ""))
+            # Whose pose it is, said outright: Spark read "move it in" as moving the thing on the desk (Nov 2).
+            raise Refused(f"the arm itself is past the end of its range: {where}. That's the arm's own pose, not "
+                          "where anything on the desk is: with the motors off, turn that joint by hand a little toward "
+                          "the middle" + (f". {turn}" if turn else ""))
         heat = {m: statistics.median(t[m] for t in temps) for m in JOINTS if m in joints}
         hot = {m: c for m, c in heat.items() if c >= TEMP_STOP}
         if hot:

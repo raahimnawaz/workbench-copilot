@@ -394,6 +394,8 @@ def test_a_grip_that_ends_a_tick_under_its_floor_still_goes_back_up_holding_the_
 
 def test_a_grip_that_cant_go_back_up_says_the_jaws_hold_the_thing_so_the_next_pick_doesnt_drop_it(monkeypatch):
     monkeypatch.setattr(driver, "ROUNDING", 1e-6)  # so the climb above is refused
+    monkeypatch.setattr(driver, "MAX_JOINT_SPEED", 30.0)  # the first caps: whether the climb's first tick dips
+    monkeypatch.setattr(driver, "MAX_TIP_SPEED", 0.08)    # under that 1e-6 depends on the move's speed
     hand, robot = on_the_bench(sag={"shoulder_lift": 2, "elbow_flex": 2})
     robot.between["gripper"] = (1400, math.inf)
     result = hand.pick_up(Thing("screwdriver", *out(220, 10), -30, heading_deg=0, **HANDLE))
@@ -405,6 +407,8 @@ def test_a_grip_that_cant_go_back_up_says_the_jaws_hold_the_thing_so_the_next_pi
 
 def test_a_miss_that_cant_go_back_up_says_so_not_that_nothing_moved(monkeypatch):
     monkeypatch.setattr(driver, "ROUNDING", 1e-6)  # so the climb from the grip is refused, as above
+    monkeypatch.setattr(driver, "MAX_JOINT_SPEED", 30.0)  # and at the first caps, as above
+    monkeypatch.setattr(driver, "MAX_TIP_SPEED", 0.08)
     hand, robot = on_the_bench(sag={"shoulder_lift": 2, "elbow_flex": 2})  # nothing between the jaws
     result = hand.pick_up(Thing("screwdriver", *out(220, 10), -30, heading_deg=0, **HANDLE))
     assert not result["ok"] and result["missed"] and hand.held is None and len(result["steps"]) == 3
@@ -849,6 +853,7 @@ def test_an_arm_resting_past_the_end_of_a_range_is_refused_before_the_question()
     b.seen["screwdriver"] = (SCREWDRIVER, time.monotonic())
     result = tb.dispatch("pick_up", {"thing": "screwdriver"})
     assert "past the end of its range: the wrist roll by 2.7°" in result["error"] and asked == []  # in whole ticks
+    assert "the arm's own pose, not where anything on the desk is" in result["error"]
     assert not arm.powered and robot.sent == []
 
 

@@ -495,7 +495,8 @@ def test_a_cut_from_another_thread_stops_a_power_on_before_the_next_joint():
 @pytest.mark.parametrize("setup, match", [
     (lambda robot: robot.torque.update(elbow_flex=True), r"torque is already on for the elbow.*cut\(\) the motors"),
     (lambda robot: robot.pos.update(wrist_flex=826),
-     r"past the end of its range: the wrist flex by 2\.2°. Move it in a little, toward the middle"),
+     r"the arm itself is past the end of its range: the wrist flex by 2\.2°\. That's the arm's own pose, not where "
+     r"anything on the desk is: with the motors off, turn that joint by hand a little toward the middle"),
     (lambda robot: robot.pos.update(wrist_roll=4071),  # where the roll read in the L pose on Oct 28
      r"the wrist roll by 15\.1°.*Turn the gripper clockwise, looking from the wrist toward the jaw tips\. Its reading "
      "wraps at ±180°, and a move across the wrap would turn the servo the long way round"),
@@ -803,7 +804,9 @@ def test_without_aim_a_move_leaves_the_joints_where_they_stopped():
     assert robot.sent[-1][1]["shoulder_lift"] == pose(TARGET)["shoulder_lift"]
 
 
-def test_a_re_aim_sets_no_goal_more_than_max_offset_past_its_target():
+def test_a_re_aim_sets_no_goal_more_than_max_offset_past_its_target(monkeypatch):
+    monkeypatch.setattr(driver, "MAX_JOINT_SPEED", 30.0)  # the first caps: at 45°/s a tick's step takes this sag
+    monkeypatch.setattr(driver, "MAX_TIP_SPEED", 0.08)    # past the 5° stray on its own
     arm, robot, said = powered(sag={"wrist_flex": -50})  # 4.4° short: inside the 5° stray, past the 4° a re-aim may add
     reading = arm.move_to(np.radians(TARGET))
     assert max(goal["wrist_flex"] for _, goal in robot.sent) - pose(TARGET)["wrist_flex"] <= driver.MAX_OFFSET * TPD + 1
@@ -816,6 +819,12 @@ def test_a_re_aim_never_sets_a_goal_past_its_joints_range():
     top = math.degrees(MAP.limits("wrist_roll")[1])
     assert max(goal["wrist_roll"] for _, goal in robot.sent) <= MAP.raw(np.radians([0, 0, 0, 0, top]))["wrist_roll"]
     assert math.degrees(reading.q[4]) == pytest.approx(top - 35 / TPD, abs=0.1)
+
+
+def test_the_speed_caps_are_the_ones_the_1_345_elbow_was_measured_at():
+    # 1.5x the first 30°/s and 80 mm/s: the elbow at P 32 lifted the forearm to straight up lagging 3.5° at most, and
+    # tripped the 5° cut at 2x (arm-bench run 30). Raising them needs that test again
+    assert (driver.MAX_JOINT_SPEED, driver.MAX_TIP_SPEED) == (45.0, 0.12)
 
 
 def test_a_re_aim_keeps_to_the_speed_caps():
