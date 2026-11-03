@@ -6,6 +6,26 @@ An AI lab partner for the electronics bench. You talk to it hands free: say "Cop
 
 Built for the Meta Global AI Developer Hackathon (Indie track, Push the Frontier), Oct 26 – Nov 4, 2026.
 
+## How it fits together
+
+```mermaid
+flowchart TD
+  mic["Bench mic"] --> ears["Muse Voice Transcribe<br>hears every utterance"]
+  ears -->|"“Copilot, …”"| spark["Muse Spark 1.3<br>the router"]
+  ears -.->|"an arm command"| llama["Llama 3.2 3B on this Mac<br>the arm's fast path"]
+  ears -.->|"a question no tool<br>is needed for"| open["Muse Spark Open<br>on Baseten"]
+  spark -->|"ask_coder"| wonder["Muse Wonder 1.0<br>writes the firmware fix"]
+  wonder --> check["git apply --check<br>and a sandbox build"]
+  check -->|"build_and_flash,<br>once you say go"| board["ESP32 demo board"]
+  spark -->|"read_breadboard, locate"| sam["SAM 3.1 on the board<br>and desk cameras"]
+  spark -->|"pick_up, put_down,<br>move_thing"| arm["SO-101 arm"]
+  llama --> arm
+  spark -->|"add_part"| open
+  open --> kicad["KiCad: the part drawn<br>into a schematic copy,<br>rules checked"]
+```
+
+Every reply shows on the HUD, and Kokoro says it on this Mac. The dashed lines are the two routes that skip Spark; [how the router works](#how-the-router-works) gives the rules.
+
 ## Built during the hackathon, and what it builds on
 
 Everything in this repository was written during the hackathon, starting Oct 26, 2026, and the commit history dates every change. The exceptions are the vendored URDF and the two pieces of MIT-licensed code the HUD's page adapts, all listed below.
@@ -61,7 +81,7 @@ Everything in this repository was written during the hackathon, starting Oct 26,
 | Arm driver | Runs on the real arm: power-on without a jump, moves at up to 45°/s and 180 mm/s, every motor cut on a stray. |
 | Picks and puts | Run on the real arm by voice: "put my screwdriver on my sticky note" worked in 4 of its last 6 tries, the quickest 31.5 s from the request. The other two: the wrist roll's stop, which moves keep clear of now, and a note out of reach straight down. "Put my screwdriver in my cup" stood it in the mug on end, handle first, in 43 s. |
 | Board reader | Runs live: it reads the flat wires, traces the nets, and reports a wire on the wrong GPIO with the line to fix. |
-| Schematic | Offline: `read_schematic` gives the demo board's nets and a clean electrical rules check in under 1 s, and Spark gets them with the board read. Not run live yet. |
+| Schematic | Runs at start-up: `read_schematic` gives the LED board's nets and a clean electrical rules check in under 1 s, and Spark and Spark Open get them with the board read. Spark Open's answer below came from them. |
 | Spark Open | Runs live on Baseten: a question no tool is needed for goes to Spark Open with the bench facts, which answered "what should I read on GPIO4 when the LED is on?" from the schematic and the firmware in 7.4 s; anything else, or a failure, goes to Spark. |
 | Add a part | Ran live on Baseten against the LED board's schematic: Spark Open worked out the screen's wiring in 8.7 s on its first try (the ESP32's hardware SPI pins for the clock and data, free GPIOs for the rest), and KiCad's check passed on the drawn copy, about 1¢ a run. Not in a take yet. |
 | Desk camera and `locate` | Runs live: a screwdriver or a sticky note found on the desk and placed in the arm's frame. |
@@ -100,7 +120,34 @@ Then type `My LED isn't blinking. Check my wiring against the firmware.` With `-
 
 ## How the router works
 
-Muse Spark is the only model that talks to you and the only one that decides. Every other model sits behind a tool:
+Every utterance is transcribed, and each one takes the first path that fits:
+
+```mermaid
+flowchart TD
+  heard["An utterance, transcribed"] --> stop{"A stop?"}
+  stop -->|"yes, even mid-turn"| halt["The arm holds where it is;<br>waiting requests<br>are dropped"]
+  stop -->|no| wake{"Addressed<br>to it?"}
+  wake -->|no| ignored["Ignored"]
+  wake -->|yes| rules{"An arm<br>command?"}
+  rules -->|yes| llama{"Llama<br>agrees?"}
+  llama -->|yes| move["The tool runs<br>with no Spark call,<br>decided in about 0.25 s"]
+  move -->|"it worked"| reply
+  move -->|"the move failed"| spark
+  llama -->|"no, or the server is off"| spark
+  rules -->|no| question{"A question with<br>no tool needed?"}
+  question -->|yes| open["Muse Spark Open<br>on Baseten answers<br>from the bench facts"]
+  open -->|"it answered"| reply
+  open -->|"it failed"| spark
+  question -->|no| spark["Muse Spark 1.3, given<br>pins.h, the schematic<br>and the board read,<br>calling tools in parallel"]
+  spark --> reply["The reply on the HUD,<br>its first two sentences<br>said by Kokoro"]
+```
+
+- **A stop** is "Copilot, stop", or "Stop!" on its own. It's heard while a turn runs and while the co-pilot speaks, and goes straight to `Bench.halt()`.
+- **Addressed to it** means it starts with "Copilot", or answers the co-pilot's question in up to five words within 8 s.
+- **An arm command** is found by plain rules (`wbc/agent/fast_arm.py`): its kind from trigger words, its thing and place from `fast_arm` in `config/models.yaml` or a note's quoted place. Questions, a "not", "I" and "we" statements, a bare "that" and unknown things aren't. Llama 3.2 3B on `mlx_lm.server` then has to name the same kind of command.
+- **A question with no tool needed** starts with "what", "how", "is" and the like, and has none of "why", "fix", "flash", "move" and the rest.
+
+Once a request reaches Muse Spark, it decides what runs, and every other model sits behind a tool:
 
 - Before Spark's first call of a turn, code fetches the bench facts it will need (`router.prefetch`): `pins.h`, the schematic, and the board read, which is made once at start-up and kept for the session. Spark calls `read_breadboard` itself when you say the wiring changed.
 - `ask_coder` sends a task, the bench facts and up to 4 files to Muse Wonder. The diff it returns must pass `git apply --check` and a PlatformIO build in a sandbox copy, and then it's staged in the working tree, never committed. `build_and_flash` uploads it to the demo board once you say go, and Spark asks whether the LED blinks.
