@@ -13,6 +13,9 @@ import shutil
 import subprocess
 import threading
 import time
+from pathlib import Path
+
+from wbc import config
 
 SENTENCE_END = re.compile(r"(?<=[.!?])\s+|(?<=[.!?][\"')\]])\s+")  # also before "pins.h ...", and after a quote
 ABBREVIATIONS = {"e.g.", "i.e.", "vs.", "approx.", "ca.", "no.", "min.", "max.", "fig."}  # these don't end one
@@ -38,6 +41,16 @@ def plain(text: str) -> str:
     return " ".join(text.split())
 
 
+def say_command(wanted: str | None = None) -> str | None:
+    """The program that speaks: macOS `say`, or models.yaml's mouth.command standing in for it (taking `say`'s
+    arguments), such as scripts/kokoro-say, relative to the repo. A stand-in that's missing leaves the voice off rather
+    than falling back to `say`, whose voices can't be in a published video."""
+    if not wanted:
+        return shutil.which("say")
+    path = Path(wanted) if Path(wanted).is_absolute() else config.ROOT / wanted
+    return str(path) if path.is_file() else None
+
+
 def spoken(text: str, sentences: int = 2, limit: int = 240) -> str:
     """The part of a reply worth saying: its first sentences as plain words, at most `limit` characters.
 
@@ -57,7 +70,7 @@ def spoken(text: str, sentences: int = 2, limit: int = 240) -> str:
 class Mouth:
     def __init__(self, cfg: dict, command: str | None = None, popen=subprocess.Popen, clock=time.monotonic,
                  hud=None):
-        self.command = command or shutil.which("say")  # None off macOS: replies stay on the HUD
+        self.command = command or say_command(cfg.get("command"))  # None: replies stay on the HUD
         self.voice = cfg.get("voice")
         self.rate = cfg.get("rate")
         self.sentences = cfg.get("sentences", 2)

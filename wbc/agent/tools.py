@@ -317,6 +317,17 @@ def build_toolbox(bench: Bench) -> Toolbox:
             return result
         return {**{k: v for k, v in result.items() if k != "_image"}, "mismatches": mismatches}
 
+    @tb.register("read_schematic", (
+        "Read the demo board's KiCad schematic, the design: each net and the pins it joins (which ESP32 pin drives "
+        "what), and KiCad's electrical rules check."), {"type": "object", "properties": {}}, label="KiCad")
+    def read_schematic() -> dict:
+        drawn = (bench.layout or {}).get("schematic")
+        if not drawn:
+            return {"ok": False, "error": "bench.yaml names no schematic"}
+        from wbc.perception import schematic
+
+        return {"ok": True, **schematic.read(bench.root / drawn)}
+
     @tb.register("read_breadboard", (
         "Photograph the breadboard with the overhead camera, segment its jumper wires with SAM 3.1, and return "
         "each wire's two holes, the netlist, any mismatches against pins.h, and an annotated image."), {

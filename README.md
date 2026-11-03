@@ -23,7 +23,9 @@ Everything in this repository was written during the hackathon, starting Oct 26,
 | `wbc/motion/carrier.py`, `scripts/register_arm.py` | Registering the arm to the carrier from points touched with the motors off, and the touch test |
 | `wbc/perception/` | The SAM 3.1 client, camera capture, the board reader (the carrier's tags, the top-down view, the hole grid fit, wire tracing, the netlist and its check against `pins.h`) and the desk camera's `locate` |
 | `scripts/` | The smoke test, the board reader and its carrier sheet, the desk camera, the joint map check and arm registration |
-| `config/`, `fixtures/`, `tests/` | Model, bench and arm config, the recorded bench for `--sim`, 798 offline tests |
+| `wbc/perception/schematic.py`, `scripts/make_schematic.py`, `hardware/*.kicad_sch` | The demo boards' KiCad schematics, drawn from KiCad's own symbols, and `read_schematic`: their nets and KiCad's electrical rules check, through `kicad-cli` |
+| `scripts/kokoro_server.py`, `scripts/kokoro-say` | The co-pilot's voice: Kokoro-82M kept loaded on this Mac, and a stand-in for `say` that plays its audio |
+| `config/`, `fixtures/`, `tests/` | Model, bench and arm config, the recorded bench for `--sim`, 812 offline tests |
 | `firmware/dut_demo/` | Act 1's demo board: reads the force sensor and prints millivolts and the pin it reads |
 
 | Reused | License | Used for |
@@ -37,7 +39,10 @@ Everything in this repository was written during the hackathon, starting Oct 26,
 | Llama 3.2 3B Instruct, 4-bit MLX (`mlx-community/Llama-3.2-3B-Instruct-4bit`), served by mlx-lm | Llama 3.2 Community License, and MIT for mlx-lm. **Built with Llama** | The arm's fast path: a second opinion on spoken arm commands, on this Mac |
 | Muse Glimmer 30B weights | Apache-2.0 | The local backup router |
 | [AprilTag](https://april.eecs.umich.edu/software/apriltag)'s tag36h11 family, as built into OpenCV's ArUco module | BSD-2-Clause | The carrier's and the desk's tags |
-| macOS `say` | Part of macOS | Spoken replies (Meta's API has no text-to-speech model) |
+| [Kokoro-82M](https://huggingface.co/hexgrad/Kokoro-82M) weights, run by [kokoro-onnx](https://github.com/thewh1teagle/kokoro-onnx) with onnxruntime and espeak-ng (through espeakng-loader and phonemizer) | Apache-2.0; MIT; MIT; GPL-3.0 (espeak-ng, phonemizer) | The co-pilot's voice (Meta's API has no text-to-speech model), in its own venv: `pip install kokoro-onnx==0.6.1` |
+| macOS `say` | Part of macOS | The voice only without Kokoro: its voices can't be in a published video |
+| [KiCad](https://www.kicad.org) 10 and its symbol libraries | GPL-3.0; CC-BY-SA-4.0 with KiCad's exception for designs | `kicad-cli` exports the schematics' netlists and runs their electrical rules check; the symbols are drawn into `hardware/*.kicad_sch` |
+| Muse Spark Open (`meta-models/muse-spark-open-1026`) on [Baseten](https://www.baseten.co) | Meta's open weights, served by Baseten | Questions no tool is needed for (`open` in `models.yaml`) |
 | openai, numpy, PyYAML, httpx, sounddevice, pyserial, pytest, OpenCV, Pillow | Apache-2.0, BSD-3, MIT, BSD-3, MIT, BSD-3, MIT, Apache-2.0, MIT-CMU | Python dependencies |
 | [PlatformIO](https://platformio.org) and the [Arduino core for ESP32](https://github.com/espressif/arduino-esp32) | Apache-2.0, LGPL-2.1 | Building and flashing the demo board's firmware |
 
@@ -48,13 +53,15 @@ Everything in this repository was written during the hackathon, starting Oct 26,
 | Act 1, spoken | Runs live on the real bench with the HUD: the board read, the wire on the wrong GPIO against `pins.h`, Wonder's fix staged and compiled in about 21 s from the request, then the flash on "go". |
 | Router on Muse Spark | Runs live. Each call sends the whole conversation, about 2 s a call, where chaining on `previous_response_id` took 12–14 s. |
 | `ask_coder` on Muse Wonder | Runs live: a fix in 3–7 s, then a warm compile in a sandbox copy in 6–8 s. |
-| Voice | The wake phrase runs live on the bench mic, from Terminal.app, and replies are spoken with macOS `say`. The spoken stop and the short answer after a question are tested on synthetic audio. |
+| Voice | The wake phrase runs live on the bench mic, from Terminal.app, and replies are spoken by Kokoro-82M on this Mac (0.3 s for a short line, 0.9 s for two sentences). The spoken stop and the short answer after a question are tested on synthetic audio. |
 | Memory | Runs live on `--sim`: a `--resume` run answers from the turn before it, and a new session puts the screwdriver away from a note. |
 | HUD | Runs live with `--hud`, every model call under its own name with its time. Still to come: the board view, the netlist and the diff. |
 | Arm fast path | Live against `mlx_lm.server`: an arm command in about 0.25 s from request to reply, against about 4.4 s through Spark. On 117 phrasings neither was tuned on, rules and model agreeing never moved the arm wrongly. |
 | Arm driver | Runs on the real arm: power-on without a jump, moves at up to 45°/s and 180 mm/s, every motor cut on a stray. |
 | Picks and puts | Run on the real arm by voice: "put my screwdriver on my sticky note" worked in 4 of its last 6 tries, the quickest 31.5 s from the request. The other two: the wrist roll's stop, which moves keep clear of now, and a note out of reach straight down. |
 | Board reader | Runs live: it reads the flat wires, traces the nets, and reports a wire on the wrong GPIO with the line to fix. |
+| Schematic | Offline: `read_schematic` gives the demo boards' nets and a clean electrical rules check in under 1 s, and Spark gets them with the board read. Not run live yet. |
+| Spark Open | Runs live on Baseten: a question no tool is needed for goes to Spark Open with the bench facts, which answered "what should I read on GPIO4 when the LED is on?" from the schematic and the firmware in 7.4 s; anything else, or a failure, goes to Spark. |
 | Desk camera and `locate` | Runs live: a screwdriver or a sticky note found on the desk and placed in the arm's frame. |
 | FK/IK and the joint map | 200 of 200 bench poses round-trip within 0.2 mm and 0.5°. All five joint signs checked by hand on the arm. |
 | Budget guard | Every paid call checks tracked spend first. |

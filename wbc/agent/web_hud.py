@@ -36,7 +36,8 @@ SUMMARY = 144  # the most characters of a reply the page shows
 def page_models(models: dict) -> dict:
     """The page's name (MODELS in the page) for each model id models.yaml gives a role. Any other id is the
     router's: router.model, its fallback, or --router-model."""
-    roles = (("coder", "wonder"), ("eyes", "sam"), ("ears", "transcribe"), ("backup", "open"), ("fast_arm", "llama"))
+    roles = (("coder", "wonder"), ("eyes", "sam"), ("ears", "transcribe"), ("backup", "open"), ("fast_arm", "llama"),
+             ("open", "open"))
     return {models[role]["model"]: page for role, page in roles if role in models}
 
 

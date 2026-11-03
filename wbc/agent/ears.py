@@ -27,7 +27,7 @@ import httpx
 import numpy as np
 
 FRAME_S = 0.03  # the loudness gate works on 30 ms frames
-FILLERS = ("hey", "ok", "okay", "um", "uh", "so", "and")  # allowed before the wake phrase
+FILLERS = ("hey", "ok", "okay", "um", "uh", "so", "and", "yeah", "yes")  # allowed before the wake phrase
 AWAKE_S = 8.0  # after the wake phrase alone, how long the next utterance counts as the request
 ANSWER_S = 8.0  # after a reply that asks something, how long a short answer counts without the wake phrase
 ANSWER_WORDS = 5  # the most words such an answer has, as in "yes, go ahead and flash"

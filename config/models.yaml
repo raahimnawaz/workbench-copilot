@@ -18,6 +18,7 @@ router:
     # A board read takes 6-9 s, 5 of them opening the camera, and a second read of the same wiring can miss a
     # wire. The kept read is checked against pins.h each turn, so a staged fix shows.
     - {tool: read_breadboard, keep: true}
+    - {tool: read_schematic, keep: true}   # the design, from KiCad: under 1 s
     - {tool: read_file, args: {path: firmware/dut_demo/include/pins.h}}
     - {tool: read_sensor}               # the demo board's force sensor, live
 
@@ -47,8 +48,10 @@ ears:
   # as a hint.
   keywords: [GPIO, ADC, regrasp]
 
-mouth:                              # spoken replies (--voice or --speak), with macOS `say`: Meta's API has no TTS
-  voice: null                       # a name from `say -v '?'`; null keeps the Mac's system voice
+mouth:                              # spoken replies (--voice or --speak): Meta's API has no TTS
+  command: scripts/kokoro-say       # Kokoro-82M on this Mac (scripts/kokoro_server.py); none: macOS `say`, whose
+                                    # voices can't be in a published video
+  voice: af_heart                   # a Kokoro voice (GET /voices on its server); with `say`, a name from `say -v '?'`
   rate: null                        # words a minute; null keeps the system rate
   sentences: 2                      # how much of each reply is said; the HUD shows all of it
   tail_s: 0.4                       # the mic stays muted this long after speech ends, for the room's echo
@@ -69,6 +72,12 @@ fast_arm:                           # arm commands without Spark (wbc/agent/fast
     sticky note: [yellow sticky note, sticky notes, post it note, post it]
     cup: [mug]
     tray: [blue tray]
+
+open:                               # Muse Spark Open on Baseten: questions no tool is needed for (wbc/agent/loop.py)
+  model: meta-models/muse-spark-open-1026
+  base_url: https://inference.baseten.co/v1
+  key_env: BASETEN_API_KEY          # from the environment or .env; without it, every question goes to the router
+  label: Spark Open
 
 backup:                             # open-weights router served on your own machine
   model: muse-glimmer-30b           # the name your local server registers
@@ -98,3 +107,4 @@ budget:
     muse-voice-transcribe-1.0: {per_hour: 0.18}                # third-party
     sam-3.1: {per_1k_images: 2.50}                              # Meta's pricing page
     muse-glimmer-30b: {in: 0, out: 0}                           # runs locally
+    meta-models/muse-spark-open-1026: {in: 1.00, out: 4.00}    # a placeholder: Baseten's price not checked

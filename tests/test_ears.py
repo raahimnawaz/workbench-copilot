@@ -81,6 +81,7 @@ def test_transcriber_posts_wav_and_bills_audio():
 @pytest.mark.parametrize("text, request_", [
     ("Copilot, check my wiring.", "check my wiring."),
     ("Hey co-pilot, flash it", "flash it"),
+    ("Yeah Copilot can you flash it", "can you flash it"),
     ("Okay, Co pilot. What's the grip force?", "What's the grip force?"),
     ("Copilot.", ""),
     ("pass me the solder", None),

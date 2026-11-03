@@ -88,16 +88,22 @@ def build(sim: bool, backup: bool, router_model: str | None = None, arm: bool = 
         fast = FastArm(models["fast_arm"], toolbox, bench, memory.notebook, hud)
     else:
         fast = None
+    o = models.get("open")
+    reaches = config.open_client(models) if o and not sim else None
+    open_route = (hud.watch(reaches), o["model"], o.get("label", "Spark Open")) if reaches else None
+    if o and not sim:
+        hud.note(f"{o.get('label', 'Spark Open')}: " + ("questions no tool is needed for" if reaches else
+                                                      f"off, no {o.get('key_env', 'BASETEN_API_KEY')}"))
     if backup:
         b = models["backup"]
         router = ChatRouter(hud.watch(config.backup_client(models)), b["model"], toolbox, budget, hud, SYSTEM,
                             max_steps=max_steps, prefetch=prefetch, memory=memory, fast=fast,
-                            reasoning=b.get("reasoning"))
+                            reasoning=b.get("reasoning"), open=open_route)
     else:
         r = models["router"]
         router = Router(meta, router_model or r["model"], toolbox, budget, hud, SYSTEM, max_steps=max_steps,
                         prefetch=prefetch, memory=memory, fast=fast, fallback=r.get("fallback"),
-                        effort=r.get("effort"))
+                        effort=r.get("effort"), open=open_route)
     return models, budget, hud, router, bench, keyboard
 
 

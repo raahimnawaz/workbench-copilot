@@ -1,0 +1,20 @@
+#!/bin/bash
+# The co-pilot's voice through Kokoro-82M, standing in for macOS `say` (config/models.yaml's mouth.command):
+#   kokoro-say [-v VOICE] [-r RATE] -- WORDS
+# It posts the words to scripts/kokoro_server.py (KOKORO_URL, default http://127.0.0.1:8767) and becomes afplay
+# playing the WAV, so the mouth cutting it off stops the sound. -r is taken and ignored. With no server it exits 1,
+# saying nothing.
+voice=af_heart
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -v) voice="$2"; shift 2 ;;
+    -r) shift 2 ;;
+    --) shift; break ;;
+    *) break ;;
+  esac
+done
+dir="${TMPDIR:-/tmp}/kokoro-say"
+mkdir -p "$dir" && find "$dir" -name '*.wav' -mmin +2 -delete 2>/dev/null
+wav="$dir/$$.wav"
+curl -sf -m 20 --data-binary "$*" "${KOKORO_URL:-http://127.0.0.1:8767}/say?voice=$voice" -o "$wav" || exit 1
+exec afplay "$wav"

@@ -40,6 +40,16 @@ def meta_client(models: dict):
     return OpenAI(base_url=models["api"]["base_url"], api_key=api_key())
 
 
+def open_client(models: dict):
+    """Client for Muse Spark Open on Baseten (models.yaml's open), or None without its key in the environment."""
+    from openai import OpenAI
+
+    load_env()
+    o = models.get("open") or {}
+    key = os.environ.get(o.get("key_env", "BASETEN_API_KEY"), "")
+    return OpenAI(base_url=o["base_url"], api_key=key) if o and key else None
+
+
 def backup_client(models: dict):
     """Client for the open-weights router on your own machine (any OpenAI-compatible server)."""
     from openai import OpenAI

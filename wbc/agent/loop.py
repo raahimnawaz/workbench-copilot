@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import base64
 import json
+import re
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -45,6 +46,17 @@ def image_data_url(image) -> str:
     return f"data:{mime};base64,{base64.b64encode(data).decode()}"
 
 
+# A question no tool is needed for goes to Spark Open (models.yaml's open): one that opens like a question and asks for
+# nothing to be done. "why" stays with the router, which diagnoses with its tools, and so does "can you ...".
+OPEN_FIRST = re.compile(r"^(what|whats|what's|how|which|when|where|is|are|does|do|should|would)\b")
+OPEN_NOT = re.compile(r"\b(why|fix|flash|move|put|pick|grab|hold|stage|build|compile|remember|forget|again|wrong)\b")
+OPEN_TOKENS = 2048  # its reply is two sentences; the rest is room for its reasoning (518 tokens on a one-line question)
+OPEN_SYSTEM = ("You are the voice co-pilot of an electronics bench, answering a question from the bench facts below: "
+               "the board read from the camera, the schematic (the design) and the firmware's pins. Answer in at most "
+               "two short sentences of plain speech, no markdown, with numbers where they help. If the facts don't "
+               "answer it, say what you'd need to check.")
+
+
 def _private(result: dict) -> dict:
     """Pop the keys meant for this process, not the model: "_image" goes in as an image, "_timing" to the HUD."""
     return {k: result.pop(k) for k in [k for k in result if k.startswith("_")]}
@@ -70,7 +82,7 @@ class _RouterBase:
     label = "router"
 
     def __init__(self, client, model: str, toolbox, budget, hud, system: str, max_steps: int = 12,
-                 prefetch: list | None = None, memory=None, fast=None):
+                 prefetch: list | None = None, memory=None, fast=None, open=None):
         self.client = client
         self.model = model
         self.toolbox = toolbox
@@ -85,6 +97,7 @@ class _RouterBase:
         self.pool = ThreadPoolExecutor(max_workers=4)
         self.memory = memory  # what outlives a conversation; None keeps only the conversation itself
         self.fast = fast  # the arm's fast path (fast_arm.py); None sends every request to the router's model
+        self.open = open  # (client, model, label): Spark Open for questions no tool is needed for; None: the router
         self._input_tokens = 0  # the last call's input: how full the conversation is
         self._failures = 0  # turns in a row that failed in a way that may mean the conversation is broken
         self._summary_after = 0  # after a summary that failed, how many recorded turns before the next try
@@ -212,6 +225,10 @@ class _RouterBase:
                 return reply
             if done:
                 asked = f"{user_text}\n\n{TRIED.format(**done[-1])}"
+        if self.open is not None and not done:
+            reply = self._open_answer(user_text)
+            if reply is not None:
+                return reply
         seen = dict(self._seen)
         try:
             if self.memory is not None:
@@ -267,6 +284,36 @@ class _RouterBase:
         self.unfinished = None
         self._failures = 0
         self._record(user_text, done, text, live=True)
+        return text
+
+    def _open_answer(self, user_text: str) -> str | None:
+        """Spark Open answering a question no tool is needed for, from the bench facts, with no tools: its reply is
+        said, and the turn joins the conversation as the fast path's do. None for anything else, or when it fails,
+        and the router's model takes the request."""
+        words = " ".join(re.sub(r"[^\w' ]+", " ", user_text.lower()).split())
+        if not OPEN_FIRST.match(words) or OPEN_NOT.search(words):
+            return None
+        client, model, label = self.open
+        try:
+            facts = []
+            for c, res, _ in self._fetch():
+                shown = {k: v for k, v in res.items() if not k.startswith("_")}
+                facts.append(f"{c.name} {c.arguments}: {json.dumps(shown)[:6000]}")
+            r = client.chat.completions.create(model=model, max_tokens=OPEN_TOKENS, messages=[
+                {"role": "system", "content": OPEN_SYSTEM + "\n\nBench facts:\n" + "\n".join(facts)},
+                {"role": "user", "content": user_text}])
+            self.budget.add_tokens(model, r.usage)
+            text = re.sub(r"<think>.*?</think>", "", r.choices[0].message.content or "", flags=re.S).strip()
+        except Exception as e:  # noqa: BLE001 - no key, no network, Baseten down: the router answers instead
+            self.hud.note(f"{label} didn't answer ({type(e).__name__}: {e}); the router takes it")
+            return None
+        if not text:
+            return None
+        self.hud.reply(label, text)
+        self._join(user_text, text)
+        self.unfinished = None
+        self._failures = 0
+        self._record(user_text, [], text, live=True)
         return text
 
     def _join(self, user_text: str, reply: str) -> None:
