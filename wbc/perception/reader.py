@@ -6,6 +6,9 @@
 3. SAM 3.1 segments the wires in that view while code finds each board's hole grid in it (breadboard.py).
 4. Trace each wire to its two holes, join the nets, and compare them with pins.h (netlist.py).
 5. Draw it all on the view, for the HUD and for Spark.
+
+A blurred or glaring photo is said among the read's problems, with what to change (photo_quality), and the read
+still goes ahead.
 """
 from __future__ import annotations
 
@@ -19,9 +22,28 @@ import cv2
 import numpy as np
 
 from . import breadboard, netlist, sam_client, tags
+from .camera import sharpness
 
 RED = (40, 40, 220)
 GRID = (205, 205, 205)
+# A photo the read can't be sure of, said beside the read rather than refusing it. The five good reads on Oct 28
+# measured 389-556 sharpness and 0.01% blown out at most; the same view blurred by a 3 px Gaussian measures 28.
+MIN_SHARPNESS = 150     # the variance of the Laplacian (camera.sharpness) of the top-down view
+MAX_BLOWN_PCT = 1.0     # share of the view's pixels blown out to white in every channel: glare off the plastic
+BLOWN = 252
+
+
+def photo_quality(view: np.ndarray, reader: dict) -> dict:
+    """How sure a read can be of its photo: the top-down view's sharpness and how much of it glare blew out, with
+    what to change when either is off. Advice only: the read goes ahead either way."""
+    sharp = sharpness(view)
+    blown = float((view.min(axis=2) >= BLOWN).mean() * 100)
+    advice = []
+    if sharp < reader.get("min_sharpness", MIN_SHARPNESS):
+        advice.append(f"the photo is blurred (sharpness {sharp:.0f}): hold the board still, or let the camera refocus")
+    if blown > reader.get("max_blown_pct", MAX_BLOWN_PCT):
+        advice.append(f"glare blew out {blown:.1f}% of the board: move the lamp or tilt it away from the camera")
+    return {"sharpness": round(sharp), "blown_pct": round(blown, 2), "advice": advice}
 
 
 def locate_boards(frame: np.ndarray, bench: dict, parts: dict) -> tuple:
@@ -47,7 +69,9 @@ def read_board(frame: np.ndarray, bench: dict, parts: dict, client, eyes: dict, 
     s = reader["px_per_mm"]
     fit, boards, area, view = locate_boards(frame, bench, parts)
     timing = {"tags": time.monotonic() - t0}
+    photo = photo_quality(view, reader)
     problems = [f"carrier tags {fit.missing} not seen, mapped from {fit.tags}"] if fit.missing else []
+    problems += [f"photo: {a}; the read may miss or misplace wires" for a in photo["advice"]]
     with ThreadPoolExecutor(max_workers=1) as pool:  # SAM's round trip covers the grid search
         sam = pool.submit(sam_client.segment, client, eyes, budget, view, reader["wire_phrase"])
         registered = register_all(boards, view, area, reader)
@@ -78,6 +102,7 @@ def read_board(frame: np.ndarray, bench: dict, parts: dict, client, eyes: dict, 
         "endpoint_residual_mm": {"mean": round(float(np.mean(residuals)), 2) if residuals else None,
                                  "max": round(float(np.max(residuals)), 2) if residuals else None},
         "board": {"tags_rms_mm": round(fit.rms_mm, 2), "registration": [r for _, r in registered]},
+        "photo": {k: v for k, v in photo.items() if k != "advice"},
         "problems": problems,
     }
     image = annotate(view, wires, mismatches, boards, area, s)

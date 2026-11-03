@@ -36,6 +36,7 @@ def wire_ends(wires=WIRES) -> set:
 def bench_config() -> dict:
     bench = copy.deepcopy(load_yaml("bench.yaml"))  # the DevKit and the LED where bench.yaml places them
     bench["reader"]["tip_inset_mm"] = 0.0  # these wires end right on their holes, unlike the real bench's
+    bench["reader"]["max_blown_pct"] = 100  # the drawn board is pure white, which a real photo never is
     return bench
 
 
