@@ -21,6 +21,9 @@ import re
 import time
 import wave
 
+# httpx is imported here, not when the ears start: openai reads sys.modules["httpx"] without importing it, so a request
+# on another thread while the ears' thread imports it fails ("partially initialized module 'httpx'").
+import httpx
 import numpy as np
 
 FRAME_S = 0.03  # the loudness gate works on 30 ms frames
@@ -216,8 +219,6 @@ class Segmenter:
 
 class Transcriber:
     def __init__(self, cfg: dict, api_key: str, budget, http=None):
-        import httpx
-
         self.cfg = cfg
         self.api_key = api_key
         self.budget = budget

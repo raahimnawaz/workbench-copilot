@@ -500,7 +500,8 @@ def test_a_cut_from_another_thread_stops_a_power_on_before_the_next_joint():
     (lambda robot: robot.pos.update(wrist_roll=4071),  # where the roll read in the L pose on Oct 28
      r"the wrist roll by 15\.1°.*Turn the gripper clockwise, looking from the wrist toward the jaw tips\. Its reading "
      "wraps at ±180°, and a move across the wrap would turn the servo the long way round"),
-    (lambda robot: robot.pos.update(wrist_roll=150), r"the wrist roll by 9\.5°.*Turn the gripper counterclockwise"),
+    (lambda robot: robot.pos.update(wrist_roll=1051),  # -87.5°: past robot.yaml's -78° for the roll's stop
+     r"the wrist roll by 9\.5°.*Turn the gripper counterclockwise"),
     (lambda robot: robot.temperature.update(shoulder_lift=66), "too hot to power on: the shoulder lift at 66 °C"),
     (lambda robot: robot.temperature.update(wrist_roll=65), "too hot to power on: the wrist roll at 65 °C"),
     (lambda robot: setattr(robot, "power", False), r"the servos didn't answer \(.*\)\. Is their power on\?"),
@@ -821,10 +822,11 @@ def test_a_re_aim_never_sets_a_goal_past_its_joints_range():
     assert math.degrees(reading.q[4]) == pytest.approx(top - 35 / TPD, abs=0.1)
 
 
-def test_the_speed_caps_are_the_ones_the_1_345_elbow_was_measured_at():
-    # 1.5x the first 30°/s and 80 mm/s: the elbow at P 32 lifted the forearm to straight up lagging 3.5° at most, and
-    # tripped the 5° cut at 2x (arm-bench run 30). Raising them needs that test again
-    assert (driver.MAX_JOINT_SPEED, driver.MAX_TIP_SPEED) == (45.0, 0.12)
+def test_the_speed_caps_are_the_ones_the_arm_was_measured_at():
+    # 45°/s: the elbow at P 32 lifted the forearm to straight up lagging 3.5° at most, and tripped the 5° cut at 60°/s
+    # (arm-bench run 30). 180 mm/s: the first move from rest and back, every joint 3.2° at most (run 32, Nov 2). Raising
+    # either needs those tests again
+    assert (driver.MAX_JOINT_SPEED, driver.MAX_TIP_SPEED) == (45.0, 0.18)
 
 
 def test_a_re_aim_keeps_to_the_speed_caps():
@@ -841,9 +843,19 @@ def test_a_re_aim_keeps_to_the_speed_caps():
     assert joint_speed <= driver.MAX_JOINT_SPEED and tip_speed <= 1.01 * driver.MAX_TIP_SPEED
 
 
-def test_a_re_aim_that_would_take_the_arm_under_a_floor_isnt_run():
+def test_a_re_aim_toward_a_floor_goes_only_as_far_as_keeps_its_goals_within_reaim_under_of_it():
     arm, robot, said = powered(sag={"elbow_flex": -23})  # held 2° open, so the tool point is higher than planned
-    reading = arm.move_to(np.radians(NEAR))  # 11 mm up: folding the elbow 2° more aims the tool point under 10 mm
+    arm.move_to(np.radians(NEAR))  # 11 mm up: folding the elbow 2° more aims the tool point under 10 mm
+    goals = [MAP.q({**pose(NEAR), **goal}) for _, goal in robot.sent]
+    assert pose(NEAR)["elbow_flex"] < max(goal["elbow_flex"] for _, goal in robot.sent) < pose(NEAR)["elbow_flex"] + 23
+    lowest_tips = min(lowest(CHAIN, q, driver.FLOOR_JOINTS, arm.table)[0] for q in goals)
+    assert driver.TOOL_FLOOR - driver.REAIM_UNDER - 1e-4 <= lowest_tips < driver.TOOL_FLOOR
+
+
+def test_a_re_aim_that_not_even_a_quarter_of_would_keep_within_reaim_under_of_a_floor_isnt_run(monkeypatch):
+    monkeypatch.setattr(driver, "REAIM_UNDER", 0.0)
+    arm, robot, said = powered(sag={"elbow_flex": -23})
+    reading = arm.move_to(np.radians(NEAR))
     assert max(goal["elbow_flex"] for _, goal in robot.sent) == pose(NEAR)["elbow_flex"]
     assert math.degrees(reading.q[2]) == pytest.approx(NEAR[2] - 23 / TPD, abs=0.1)
 
@@ -1305,7 +1317,7 @@ def test_open_connects_only_the_bus_and_takes_the_map_and_gains_from_the_config(
     arm = Arm.open("/dev/cu.fake", ROBOT_CFG, ROOT, calibration_dir="/elsewhere", make_robot=make_robot)
     assert made == [("/dev/cu.fake", "wbc_follower", "/elsewhere")]
     assert arm.robot.events == ["bus connect"]  # nothing written, and robot.connect() never ran: the fake raises
-    assert arm.joints.servos == MAP.servos and arm.gains == {"elbow_flex": 32, "gripper": 32}
+    assert arm.joints.servos == MAP.servos and arm.gains == {m: 32 for m in JOINTS if m != "wrist_roll"}
 
 
 @pytest.mark.parametrize("setup, match", [

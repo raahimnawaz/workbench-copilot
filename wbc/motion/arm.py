@@ -22,7 +22,7 @@ the tool point or the elbow and wrist axes too near the table. A move that start
 climb back over it, going no lower on the way than the 50 µm its goals' whole ticks can dip (ROUNDING), or only turn
 the base, so moves can't walk the arm down a little at a time. The floors are measured from config/robot.yaml's table
 (table.py), since the desk sits under the URDF's z 0 and reads lower the further out the arm reaches.
-Moves are quintic and peak at 45°/s on any joint and 120 mm/s at the tool point, and no goal goes more than 5° from
+Moves are quintic and peak at 45°/s on any joint and 180 mm/s at the tool point, and no goal goes more than 5° from
 where its joint is. The floors hold for the plan, and joints within the 5° stray can put the tool point 17-41 mm
 under it, so a move also cuts every motor when the arm itself goes 5 mm under a floor. After a power cut the servos
 come back limp, with every goal 0 and no torque cap, so each move first checks that every powered joint still
@@ -88,7 +88,9 @@ MAX_STRAY = 5.0         # degrees a joint may be from where it should be during 
 MAX_STEP = 5.0          # degrees: no goal goes further than this from where its joint is (LeRobot's max_relative_target)
 MAX_JOINT_SPEED = 45.0  # degrees per second any joint may reach at a move's peak: the 1/345 elbow lifts the forearm
                         # from flat to straight up at it lagging 3.5° at most, under MAX_STRAY
-MAX_TIP_SPEED = 0.12    # metres per second the tool point may reach at a move's peak
+MAX_TIP_SPEED = 0.18    # metres per second the tool point may reach at a move's peak: the first move from the folded
+                        # rest then takes 7.7 s, held by the wrist flex's 185° at MAX_JOINT_SPEED, every joint 3.2° at most
+                        # from its goal (10.6 s at 0.12); the other moves of a pick and a put are held by the joint cap
 RANGE_MARGIN = 2.0      # degrees inside each end of a joint's range that a move may aim for
 TOOL_FLOOR = 0.010      # metres above the table the tool point has to stay, unless config/robot.yaml's tool_floor_mm
                         # sets it: the tool point is the jaw tips, and a pick needs them lower
@@ -114,6 +116,15 @@ AIM = 0.2               # degrees from its target each joint should end a move w
 AIM_ROUNDS = 3          # re-aims a move may take before it settles for where its joints stopped
 MAX_OFFSET = 4.0        # degrees past its target a re-aim may set a goal: under MAX_STRAY, so a joint held that far
                         # short still sits clear of the stray cut
+REAIM_UNDER = 0.003     # metres a re-aim's goals may take the tool point under its floor, though never under
+                        # GRIP_FLOOR. They're set past where the joints stop, so a joint that stopped holding the tips up
+                        # just over a floor can still be taken up; if the tips reached those goals, they'd still be 2 mm
+                        # over the SAG cut
+GRIP_FLOOR = 0.001      # metres over the table (its margin included) the tool point has to stay on a move down to a
+                        # grip, instead of the tool floor: about 3 mm over the desk as the touches measured it, so the
+                        # jaw tips can close under a 12 mm handle's widest point (from 8 mm over the desk they closed
+                        # over it). The cut for sagging SAG under this floor would come only under the desk,
+                        # which stops the tips first; the stray cut still guards every joint on the short way down
 GRIPPER_SPEED = 60.0    # degrees per second the gripper's goal may reach at a release's peak: fully open in about 4 s.
                         # The jaw pushes about 2.4% of drive per degree it trails its goal, so under its 24% cap it
                         # tops out about 110°/s, 10° behind, where GRIP_LAG stops it; at 60°/s it trails 4-6°
@@ -409,17 +420,18 @@ class Arm:
                 self._watch(joint, still, shift, samples)
             return shift
 
-    def move_to(self, q, seconds: float | None = None, samples: list | None = None, aim: bool = True) -> Reading:
+    def move_to(self, q, seconds: float | None = None, samples: list | None = None, aim: bool = True,
+                grip: bool = False) -> Reading:
         """Move the five arm joints to URDF angles q (radians, in ARM order) together along one quintic, taking at least
         `seconds` and as long as the speed caps need, then hold there SETTLE seconds. Then, unless `aim` is False,
         re-aim every joint that stopped more than AIM short of its target (see _reaim). Returns the last reading.
 
         Refused, with nothing written, after a cut until clear_stop(), and unless all five are powered with their
         torque still on at their caps, each starts inside where moves may take it, each target is RANGE_MARGIN inside
-        its joint's range, and the path keeps the tool point TOOL_FLOOR and the elbow and wrist axes JOINT_FLOOR above
-        the table. From a start under a floor, or within ROUNDING over it, the path may go no more than ROUNDING lower
-        than the start, and has to end over the floor; one that only turns the base may stay under, no lower. Tripped,
-        with every motor cut, if
+        its joint's range, and the path keeps the tool point TOOL_FLOOR (GRIP_FLOOR with `grip`, on the way down to a
+        grip) and the elbow and wrist axes JOINT_FLOOR above the table. From a start under a floor, or within ROUNDING
+        over it, the path may go no more than ROUNDING lower than the start, and has to end over the floor; one that
+        only turns the base may stay under, no lower. Tripped, with every motor cut, if
         a joint strays MAX_STRAY from where it should be, the gripper strays MAX_STRAY from its own goal, the arm goes
         SAG under a floor, a cut arrives from elsewhere, or the bus fails. Ctrl-C holds the arm where it is and
         re-raises. `samples`, when given, gets one entry a tick: t, goal and q in degrees, and every joint's load."""
@@ -449,7 +461,7 @@ class Arm:
                                   f"may take it, {lo:+.1f}° to {hi:+.1f}°")
             fastest = min_seconds(start.q, target, math.radians(MAX_JOINT_SPEED), self.chain, MAX_TIP_SPEED)
             path = joint_path(start.q, target, max(seconds or 0.0, fastest, 1 / HZ), HZ)
-            floors = self._floors(start, target, path)
+            floors = self._floors(start, target, path, GRIP_FLOOR if grip else self.tool_floor)
             reading = self._run(path, start, floors, samples)
             self.stopped_short = target - reading.q
             return self._reaim(target, start, floors, reading, samples) if aim else reading
@@ -720,11 +732,12 @@ class Arm:
                 if n == VOLTAGE_TRIES or not glitch(e):
                     raise
 
-    def _floors(self, start: Reading, target: np.ndarray, path: np.ndarray) -> tuple[float, float]:
-        """The heights the tool point and the floor axes may not go under during this move, in metres: their floors,
-        or where they start when that's lower. Refused if the path, in the whole ticks its goals go out in, goes under
-        one; or, starting under one or within ROUNDING over it, goes more than ROUNDING lower than it starts or ends
-        under it. A move that only turns the base may stay under a floor it starts under, but go no lower."""
+    def _floors(self, start: Reading, target: np.ndarray, path: np.ndarray, tool_floor: float) -> tuple[float, float]:
+        """The heights the tool point and the floor axes may not go under during this move, in metres: their floors
+        (tool_floor for the tool point), or where they start when that's lower. Refused if the path, in the whole ticks
+        its goals go out in, goes under one; or, starting under one or within ROUNDING over it, goes more than ROUNDING
+        lower than it starts or ends under it. A move that only turns the base may stay under a floor it starts under,
+        but go no lower."""
         goals = np.array([self.joints.q(self.joints.raw(row)) for row in path])
         lows = lowest(self.chain, goals, FLOOR_JOINTS, self.table)
         ends = lowest(self.chain, goals[-1], FLOOR_JOINTS, self.table)
@@ -734,7 +747,7 @@ class Arm:
         near, dip = (0.0, LEVEL) if turn else (ROUNDING, ROUNDING)  # a turn's goals don't dip as they set off
         floors = []
         for what, low, end, begin, floor, need in (
-                ("tool point", lows[0], ends[0], starts[0], self.tool_floor, "its {} mm floor"),
+                ("tool point", lows[0], ends[0], starts[0], tool_floor, "its {} mm floor"),
                 ("elbow or wrist", lows[1], ends[1], starts[1], JOINT_FLOOR, "the {} mm their servos need")):
             need = need.format(round(1000 * floor))
             under = begin < floor  # a start within ROUNDING over the floor isn't under it, for the reason given
@@ -838,8 +851,10 @@ class Arm:
         """Each joint stops short of its goal by its load over its P gain, and holds there. So, while a joint is more
         than AIM from its target, for up to AIM_ROUNDS rounds: move its goal on by how far it stopped short, at most
         MAX_OFFSET past its target and never past its range; ramp every goal there from the last ones under the speed
-        caps; and hold them SETTLE seconds with every check a move has. A round whose goals would go under the move's
-        floors isn't run. Returns the last reading. The bus lock is held by move_to."""
+        caps; and hold them SETTLE seconds with every check a move has. A round whose goals would take the tool point
+        more than REAIM_UNDER under its floor, or the elbow and wrist axes under theirs, goes as much of the way as
+        keeps them there, in quarters, and isn't run when not even a quarter does. Returns the last reading. The bus
+        lock is held by move_to."""
         ends = np.array([self.joints.limits(m) for m in ARM])
         reach, near = math.radians(MAX_OFFSET), math.radians(AIM)
         goal = target
@@ -851,14 +866,25 @@ class Arm:
             aim = np.clip(np.clip(aim, target - reach, target + reach), ends[:, 0], ends[:, 1])
             if np.array_equal(aim, goal):  # every joint still short is at the most a re-aim may ask of it
                 break
-            seconds = min_seconds(goal, aim, math.radians(MAX_JOINT_SPEED), self.chain, MAX_TIP_SPEED)
-            path = joint_path(goal, aim, max(seconds, 1 / HZ), HZ)
-            tool, axis = lowest(self.chain, path, FLOOR_JOINTS, self.table)
-            if tool < floors[0] or axis < floors[1]:
+            path = self._reaim_path(goal, aim, floors)
+            if path is None:
                 break
             reading = self._run(path, start, floors, samples, now=reading)
-            goal = aim
+            goal = path[-1]
         return reading
+
+    def _reaim_path(self, goal: np.ndarray, aim: np.ndarray, floors: tuple) -> np.ndarray | None:
+        """A re-aim round's goals, ramped under the speed caps from the last ones toward `aim`: all the way, or else
+        the most of it, in quarters, that keeps the tool point within REAIM_UNDER of its floor and the elbow and wrist
+        axes over theirs. None when not even a quarter does."""
+        for part in (1.0, 0.75, 0.5, 0.25):
+            end = goal + part * (aim - goal)
+            seconds = min_seconds(goal, end, math.radians(MAX_JOINT_SPEED), self.chain, MAX_TIP_SPEED)
+            path = joint_path(goal, end, max(seconds, 1 / HZ), HZ)
+            tool, axis = lowest(self.chain, path, FLOOR_JOINTS, self.table)
+            if tool >= max(floors[0] - REAIM_UNDER, GRIP_FLOOR) and axis >= floors[1]:
+                return path
+        return None
 
     def _closed_end(self) -> int:
         """The gripper's closed end in raw ticks: on this arm, the low end of its calibrated range."""

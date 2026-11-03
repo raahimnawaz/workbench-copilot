@@ -9,19 +9,26 @@ nothing here talks to the servos except through it.
 
 pick_up and put_down take a thing as wbc/perception/desk.py's locate found it: its middle, its size, the heading of
 its long axis and, for something standing up, its height. A pick goes straight down beside its middle with the jaws
-closing across that axis: over it, open, just over its top, down, grip, and back up. Jaws that close on nothing, or come
-up empty, are a miss, and they open again. A put goes over the place with what's held lined up with the place's long
-axis, down to just over its top, opens, and goes back up. Every pose a pick or a put needs is solved before the first
-one moves, so one the arm can't reach is refused with the arm where it was.
+closing across that axis: over it, open as far as its width needs, just over its top, down, grip, and back up. A put
+goes over the place with what's held lined up with the place's long axis, down to just over its top, opens as far as
+the pick did, goes back up and closes the jaws. Only the moves down to the thing (just over it, then down) and down to the place re-aim; over it
+and back up, a few mm short is as good, and the re-aims' settling would only add stops. Every pose a pick or a put
+needs is solved before the first one moves, so one the arm can't reach is refused with the arm where it was.
 
 Heights come from the table the driver's floors use (table.py), the desk as the arm's touches measured it, not from
 locate's camera, whose table is one height for the whole desk. Something lying flat is taken to be as thick as it is
-wide, like a handle, and gripped halfway up; something standing up GRIP_DEPTH_MM under its top. Neither goes under the
-driver's floor for the tool point, so with robot.yaml's 5 mm tool_floor_mm and the table's 2 mm margin the tips go no
-lower than about 8 mm over the desk: a 16 mm handle is gripped at its middle, and anything they'd grip above THIN of
-its height is refused, since they'd close near its top and slip off. That's judged where the tips come down beside it,
-whose floor can be higher, against the desk under it as the touches measured it. So is a pick where no touch measured
-the desk (table.py holds it high there).
+wide, like a handle, and gripped GRIP_SHARE of the way up, under its middle, so the tips close under a round handle's
+widest point rather than over it, where they'd push it down and out from under them; something standing up
+GRIP_DEPTH_MM under its top. Neither goes under the floor the driver gives the way down to a grip (GRIP_FLOOR, 1 mm
+over the table's 2 mm margin), so with FLOOR_MARGIN_MM the tips go no lower than about 4 mm over the desk, and anything
+they'd grip above THIN of its height is refused, since they'd close near its top and slip off. That's judged where the
+tips come down beside it, whose floor can be higher, against the desk under it as the touches measured it. So is a
+pick where no touch measured the desk (table.py holds it high there).
+
+Jaws that close all the way may still hold the thing. These close a handle up into the gap above their tips, and hold
+it there reading as close to shut as empty jaws do (15-25 ticks from closed holding a screwdriver, 19-24 empty), so a
+pick goes back up with them shut either way and says when it can't tell (unconfirmed): only a look at where the thing
+was can.
 
 The arm stops short of each target by its joints' load over their P gains. The driver's re-aim makes that up at the
 end of a move, but not during the next one, so going down to the grip the arm reads lower than its plan by about as
@@ -47,11 +54,12 @@ tell which way round they are.
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
+import time
+from dataclasses import dataclass, replace
 
 import numpy as np
 
-from .arm import FLOOR_JOINTS, RANGE_MARGIN, SAG, Halted, Refused
+from .arm import FLOOR_JOINTS, GRIP_FLOOR, RANGE_MARGIN, SAG, TICKS_PER_DEGREE, Halted, Refused
 from .joints import ARM, NAMES
 from .kinematics import pose_to_task, solve_ik, solve_task
 from .table import PAN_AXIS
@@ -62,6 +70,8 @@ HOVER_MM = (60.0, 45.0, 30.0)  # over a thing's top, where a pick or a put start
 FLOOR_MARGIN_MM = 1.0   # over the driver's tool floor that a pick goes down to, so its end isn't refused for a scrap
 THICK_MM = 40.0         # the thickest something lying flat is taken to be, whatever its width
 GRIP_DEPTH_MM = 15.0    # under its top that the tips go to on something standing up
+GRIP_SHARE = 0.25       # of its thickness that the tips go up something lying flat: well under a handle's middle, and
+                        # for one under 16 mm, down to the grip floor (from 8 mm up they closed over a 12 mm handle)
 CLOSED_GAP_MM = 5.0     # the closed tips' gap: the tool point sits half of it from the fixed jaw's face
 JAW_CLEAR_MM = 5.0      # between the fixed jaw and the thing's side at the grip: the four-touch fit puts the closed
                         # tips' middle within about 2.4 mm (one sd) along the jaws' line
@@ -73,7 +83,17 @@ THIN = 2 / 3            # of its height over the desk that the tips have to get 
 HELD_MM = 2.0           # a pick is refused where the table is held more than this over its touched line: the desk's
                         # height there isn't known well enough to grip near a thing's middle
 ROLL_STEP_DEG = 30.0    # the most the wrist roll may turn from one step of a plan to the next, the jaws one way round
-OPEN_ENOUGH = 90.0      # percent open the jaws have to reach before a pick goes down
+OPEN_ENOUGH = 90.0      # percent of the opening asked for that the jaws have to reach before a pick goes down
+JAW_LEVER_MM = 70.0     # how far the moving jaw's tip goes across per radian it opens: the URDF puts the gripper's pivot
+                        # 75 mm up the jaws and 28 mm across from the point between the tips, and a ~10 mm handle stopped
+                        # the closing jaws 43 ticks past where empty ones stop, 76 mm a radian. Unmeasured at the tips
+                        # themselves, so a little under both
+MOVING_CLEAR_MM = 15.0  # past the thing's far side that the open moving jaw comes down: the desk map places a touched tag
+                        # 1-9 mm from where the others put it
+OPEN_SPARE = 1.25       # times the angle that lever says a pick needs, that it opens the jaws
+MIN_OPEN = 25.0         # percent: the least a pick opens the jaws, a quarter of their range, about 34°
+CLOSED_OPENING = 2.0    # percent: where a put or a miss leaves the jaws once it's done, closed but 31 ticks from their
+                        # closed end, short of the 19-24 where empty ones stop at P 32, so they don't keep pushing
 PUT_ABOVE_MM = 30.0     # over the place's top that a put opens the jaws
 ROUND = 1.3             # a thing whose length is under this many times its width has no long axis to grip across
 IK_MISS_MM = 2.0        # an IK answer further than this from its target is refused
@@ -112,11 +132,20 @@ class Thing:
     length_mm: float = 0.0
     width_mm: float = 0.0
     height_mm: float = 0.0
+    grip_x: float | None = None  # where a pick grips it, when locate found an even stretch to grip off its middle
+    grip_y: float | None = None
+    grip_width_mm: float | None = None  # how wide it is there
 
     @classmethod
     def from_summary(cls, s: dict) -> Thing:
         return cls(s["phrase"], s["x_mm"], s["y_mm"], s["top_z_mm"], s["heading_deg"], s["length_mm"], s["width_mm"],
-                   s["height_mm"])
+                   s["height_mm"], s.get("grip_x_mm"), s.get("grip_y_mm"), s.get("grip_width_mm"))
+
+    def gripped(self) -> Thing:
+        """Itself as a pick takes it: centred where locate said to grip it, as wide as it is there."""
+        if self.grip_x is None:
+            return self
+        return replace(self, x=self.grip_x, y=self.grip_y, width_mm=self.grip_width_mm or self.width_mm)
 
     @property
     def jaws_deg(self) -> float | None:
@@ -146,6 +175,8 @@ class Hand:
         self.across_roll = float(hand.get("across_roll_deg", 0.0))
         self.rest = None   # where power_on found the arm, just inside its ranges: home() goes back there
         self.held = None   # the name of what the jaws hold, from pick_up until put_down
+        self.opened = None  # percent the pick that's holding it opened the jaws to: put_down opens them that far
+        self.log = None    # a list while the agent records moves: each move and jaw action, with its samples
         q = np.zeros(self.chain.n)
         q[self.chain.names.index("wrist_roll")] = math.radians(self.across_roll)
         T, axes = self.chain.frames(q)
@@ -191,13 +222,40 @@ class Hand:
     def power_on(self) -> dict:
         """Bring the motors on (the driver's power_on), and keep where the arm was, just inside its ranges, for
         home()."""
-        shift = self.arm.power_on()
+        shift = self.arm.power_on(samples=self._samples("power on"))
         q = np.array(self.arm.read().q, float)
         for i, m in enumerate(ARM):
             lo, hi = self.arm.joints.limits(m)
             q[i] = min(max(q[i], lo + math.radians(HOME_CLEAR)), hi - math.radians(HOME_CLEAR))
         self.rest = q
         return shift
+
+    def _samples(self, what: str) -> list | None:
+        """While self.log is a list, a new entry in it for one move or jaw action, `what`, with when it started, and the
+        list the driver fills with its samples; None otherwise."""
+        if self.log is None:
+            return None
+        self.log.append({"what": what, "started": round(time.time(), 3), "samples": []})
+        return self.log[-1]["samples"]
+
+    def _move(self, step: Step, aim: bool = True, grip: bool = False):
+        """The driver's move_to to a step's pose, recorded as the step."""
+        return self.arm.move_to(step.q, samples=self._samples(step.what), aim=aim, grip=grip)
+
+    def opening_for(self, thing: Thing) -> float:
+        """How far a pick opens the jaws for `thing`, in percent: far enough for the moving jaw to come down
+        MOVING_CLEAR_MM past its far side with the fixed jaw JAW_CLEAR_MM off its near one, by JAW_LEVER_MM, times
+        OPEN_SPARE; MIN_OPEN at least, and fully open for anything wider than that lever reaches."""
+        across = thing.width_mm + JAW_CLEAR_MM + MOVING_CLEAR_MM - CLOSED_GAP_MM  # how far the moving tip goes
+        if across >= JAW_LEVER_MM:
+            return 100.0
+        s = self.arm.joints.servos["gripper"]
+        span = (s.range_max - s.range_min) / TICKS_PER_DEGREE  # degrees from closed to fully open
+        return min(100.0, max(MIN_OPEN, 100 * OPEN_SPARE * math.degrees(math.asin(across / JAW_LEVER_MM)) / span))
+
+    def _close(self):
+        """The jaws closed again, to CLOSED_OPENING, once a put or a miss is done."""
+        self.arm.release(CLOSED_OPENING, samples=self._samples("close"))
 
     def _inside(self, q) -> str:
         """'' when every joint of q is where the driver's moves may take it, else which isn't."""
@@ -324,15 +382,17 @@ class Hand:
         """Back to where power_on found the arm, just inside its ranges."""
         if self.rest is None:
             raise Refused("there's no home yet: power the arm on first")
-        return self.arm.move_to(self.rest)
+        return self.arm.move_to(self.rest, samples=self._samples("home"))
 
     def _desk_z(self, x: float, y: float) -> float:
         """The desk's height under (x, y) mm, mm in the arm's frame, as the driver's table has it."""
         return 1000 * self.arm.table.desk(x / 1000, y / 1000)
 
-    def _floor_z(self, x: float, y: float) -> float:
-        """The lowest the tool point may go over (x, y) mm, mm in the arm's frame, with FLOOR_MARGIN_MM to spare."""
-        return 1000 * (self.arm.table.z(x / 1000, y / 1000) + self.arm.tool_floor) + FLOOR_MARGIN_MM
+    def _floor_z(self, x: float, y: float, grip: bool = False) -> float:
+        """The lowest the tool point may go over (x, y) mm, mm in the arm's frame, with FLOOR_MARGIN_MM to spare: over
+        the driver's tool floor, or with `grip`, on the way down to a grip, over its GRIP_FLOOR."""
+        floor = GRIP_FLOOR if grip else self.arm.tool_floor
+        return 1000 * (self.arm.table.z(x / 1000, y / 1000) + floor) + FLOOR_MARGIN_MM
 
     def _top_z(self, thing: Thing) -> float:
         """Its top, mm in the arm's frame: its height over the desk, or for something lying flat its width, up to
@@ -340,11 +400,11 @@ class Hand:
         tall = thing.height_mm if thing.height_mm > 0 else min(thing.width_mm, THICK_MM)
         return self._desk_z(thing.x, thing.y) + tall
 
-    def _solved(self, plan: list, toward: float | None = None, loose: bool = False) -> list:
-        """Each (what, xyz, jaws) of a plan solved in turn, from where the arm is, with the jaws one way round
-        throughout: `toward` (a heading the jaw axis points within 90° of), or whichever the first step takes. Every
-        pose before any moves. `loose` as for solve()."""
-        q = np.array(self.arm.read().q, float)
+    def _solved(self, plan: list, toward: float | None = None, loose: bool = False, start=None) -> list:
+        """Each (what, xyz, jaws) of a plan solved in turn, from where the arm is (or joint angles `start`), with the
+        jaws one way round throughout: `toward` (a heading the jaw axis points within 90° of), or whichever the first
+        step takes. Every pose before any moves. `loose` as for solve()."""
+        q = np.array(self.arm.read().q if start is None else start, float)
         jaws = self.jaws_heading(q)
         steps = []
         for what, xyz, want in plan:
@@ -366,7 +426,8 @@ class Hand:
         fixed jaw coming down JAW_CLEAR_MM beside it. Of the two ways round the jaws could close across it, the one
         whose wrist roll is nearest where the arm is, of those whose tips get low enough on it. Refused when the moving
         jaw's side isn't set, the desk under it wasn't touched, or neither way round gets low enough and is in
-        reach."""
+        reach. Where locate gave a place to grip it (Thing.gripped), it's there, as wide as it is there."""
+        thing = thing.gripped()
         if self.moving_sign is None:
             raise Refused("which side the moving jaw is on isn't set, so a pick can't put the fixed jaw beside the "
                           f"{thing.name}: set hand.moving_jaw in config/robot.yaml to left or right, looking out from "
@@ -377,7 +438,7 @@ class Hand:
                           f"{held:.0f} mm higher than it may be there, too rough to grip it near its middle: move it "
                           "nearer the touched desk tags, or touch one near it (desk_camera.py touch)")
         desk, top = self._desk_z(thing.x, thing.y), self._top_z(thing)
-        grip_z = top - GRIP_DEPTH_MM if thing.height_mm > 0 else (top + desk) / 2  # or halfway up
+        grip_z = top - GRIP_DEPTH_MM if thing.height_mm > 0 else desk + GRIP_SHARE * (top - desk)  # or low on it
         under = desk - held  # the desk under it as the touches measured it: the lowest it may sit
         aside = max(0.0, thing.width_mm / 2 + JAW_CLEAR_MM - CLOSED_GAP_MM / 2)
         now = self.arm.read().q
@@ -387,7 +448,7 @@ class Hand:
             t = math.radians(toward)
             u = self.moving_sign * np.array([math.cos(t), math.sin(t)])  # from the fixed jaw toward the moving one
             x, y = thing.x - aside * u[0], thing.y - aside * u[1]
-            z = max(self._floor_z(x, y), grip_z)
+            z = max(self._floor_z(x, y, grip=True), grip_z)
             if z > grip_z and z - under > THIN * (top - desk):  # the floor where the tips come down keeps them high
                 beside = 1000 * self.arm.table.held(x / 1000, y / 1000) > 0.5
                 thin = thin or Refused(
@@ -407,20 +468,22 @@ class Hand:
         over, just, down = min(plans, key=lambda steps: abs(steps[0].q[ROLL] - now[ROLL]))
         return [over, just, down, Step("back up", over.xyz, over.jaws_deg, over.q)]  # the way it came down
 
-    def plan_put(self, place: Thing) -> list:
+    def plan_put(self, place: Thing, start=None) -> list:
         """The poses a put goes through, solved: over the place, down to just over its top, and back up. Of the two ways
         round the jaws could close along the place's line (or the line they hold the thing along, for a round place),
         each at its own highest hover, the one whose wrist roll is nearest where the arm is: a higher hover isn't worth
-        turning what's held half a turn."""
+        turning what's held half a turn. `start`, joint angles, plans it from there instead, as for a put planned
+        before the pick that comes first."""
         top = self._desk_z(place.x, place.y) + place.height_mm
         open_z = max(self._floor_z(place.x, place.y), top + PUT_ABOVE_MM)
-        now = self.arm.read().q
+        now = np.array(self.arm.read().q if start is None else start, float)
         jaws = place.jaws_deg if place.jaws_deg is not None else self.jaws_heading(now)
         plans, why = [], None
         for toward in (jaws, jaws + 180.0):
             try:
                 plans.append(self._hovering(place.x, place.y, top, lambda over: [
-                    ("over it", over, jaws), ("down to it", (place.x, place.y, open_z), jaws)], toward=toward))
+                    ("over it", over, jaws), ("down to it", (place.x, place.y, open_z), jaws)], toward=toward,
+                    start=now))
             except Refused as e:
                 why = why or e
         if not plans:
@@ -428,25 +491,26 @@ class Hand:
         over, down = min(plans, key=lambda steps: abs(steps[0].q[ROLL] - now[ROLL]))
         return [over, down, Step("back up", over.xyz, over.jaws_deg, over.q)]
 
-    def _hovering(self, x: float, y: float, top: float, plan, toward: float | None = None) -> list:
-        """plan(over) solved, the jaws one way round as _solved has them, for the highest of HOVER_MM over `top` at
-        (x, y) mm that the arm can reach straight down. A put opens PUT_ABOVE_MM over the top, so its lowest hover goes
-        no lower than that. Only when no hover can with poses IK converged on does it take one IK got within solve()'s
-        checks of (loose), far out, rather than refuse. Refused, as the lowest hover was, when none can: something too
-        tall to come down over straight down there says so in its height over the desk."""
+    def _hovering(self, x: float, y: float, top: float, plan, toward: float | None = None, start=None) -> list:
+        """plan(over) solved, the jaws one way round as _solved has them (from `start`, as it takes it), for the highest
+        of HOVER_MM over `top` at (x, y) mm that the arm can reach straight down. A put opens PUT_ABOVE_MM over the
+        top, so its lowest hover goes no lower than that. Only when no hover can with poses IK converged on does it
+        take one IK got within solve()'s checks of (loose), far out, rather than refuse. Refused, as the lowest hover
+        was, when none can: something too tall to come down over straight down there says so in its height over the
+        desk."""
         why = None
         for loose in (False, True):
             for hover in HOVER_MM:
                 try:
-                    return self._solved(plan((x, y, top + hover)), toward, loose)
+                    return self._solved(plan((x, y, top + hover)), toward, loose, start)
                 except Refused as e:
                     why = e
         raise why
 
     def _sagging(self, down: Step, thing: Thing) -> str:
         """'' when the arm, stopping as short of `down` as it stopped short of its last target (just over the thing,
-        with about the same load), would still read SAG_SPARE_MM over the driver's cut for sagging under the tool
-        point's floor; else why it shouldn't go down. Only the joints whose shortfall lowers the tips count: the re-aim
+        with about the same load), would still read SAG_SPARE_MM over the driver's cut for sagging under the floor of
+        the way down to a grip (GRIP_FLOOR); else why it shouldn't go down. Only the joints whose shortfall lowers the tips count: the re-aim
         at the end of the way down takes up at once one that held them up, while one that sagged can stay put."""
         short = self.arm.stopped_short
         if short is None:
@@ -460,7 +524,7 @@ class Hand:
             if lowest(self.chain, one, FLOOR_JOINTS, table)[0] < planned:
                 q[i] -= s
         sagged = lowest(self.chain, q, FLOOR_JOINTS, table)[0]
-        room = 1000 * (sagged - (self.arm.tool_floor - SAG))
+        room = 1000 * (sagged - (GRIP_FLOOR - SAG))  # the cut on the way down to a grip
         if room >= SAG_SPARE_MM:
             return ""
         return (f"just over the {thing.name} the arm sagged enough that down at it, it would stop about "
@@ -469,18 +533,20 @@ class Hand:
                 + " where the driver cuts every motor for sagging, so it stopped there: nearer the base, the arm sags "
                   "less")
 
-    def pick_up(self, thing: Thing, confirm=None) -> dict:
-        """Pick `thing` up: over it, open, just over its top, down, grip, back up. confirm(prompt), when given, is asked
-        over the thing once the jaws are open, before they go down; False stops there, and so does None (the session
-        is ending).
+    def pick_up(self, thing: Thing, confirm=None, steps: list | None = None) -> dict:
+        """Pick `thing` up: over it, open, just over its top, down, grip, back up, through `steps` if plan_pick has
+        already given them. confirm(prompt), when given, is asked over the thing once the jaws are open, before they go
+        down; False stops there, and so does None (the session is ending). Back up, it holds the thing as far as the
+        jaws can tell: with "unconfirmed" when they closed all the way, which they do on nothing and on a loosely held
+        handle alike.
         Refused (the driver's or IK's) before anything moves when a pose can't be reached, but a refused climb back up
         from the thing comes back as an error that says the arm is down there; Tripped, with the motors cut, as the
         driver says; Halted by the spoken stop, with `held` set if the jaws hold the thing by then."""
         if self.held:
             raise Refused(f"the jaws already hold the {self.held}: put it down first")
-        steps = self.plan_pick(thing)
+        steps = steps or self.plan_pick(thing)
         try:
-            return self._pick(thing, steps, confirm)
+            return self._pick(thing.gripped(), steps, confirm)
         except Halted:
             if self.arm.jaw().holding:
                 self.held = thing.name
@@ -488,11 +554,13 @@ class Hand:
 
     def _pick(self, thing: Thing, steps: list, confirm) -> dict:
         over, just, down, up = steps
-        self.arm.move_to(over.q)
-        opened = self.arm.release(100.0)
-        if opened.opening < OPEN_ENOUGH:
-            return {"ok": False, "error": f"the jaws stopped {opened.opening:.0f}% open over the {thing.name}: "
-                                          "something's in their way, so they didn't go down", "steps": [over.summary()]}
+        want = self.opening_for(thing)
+        self._move(over, aim=False)  # the way down to just over it re-aims instead
+        opened = self.arm.release(want, samples=self._samples("open"))
+        if opened.opening < OPEN_ENOUGH / 100 * want:
+            return {"ok": False, "error": f"the jaws stopped {opened.opening:.0f}% open over the {thing.name}, short of "
+                                          f"the {want:.0f}% it needs: something's in their way, so they didn't go "
+                                          "down", "steps": [over.summary()]}
         if confirm is not None:  # open, so whoever answers can see the fixed jaw is beside it, not over it
             answer = confirm(f"Over the {thing.name} with the jaws open: the one that didn't move should be beside it, "
                              "not over it. Go down and grip it?")
@@ -500,56 +568,50 @@ class Hand:
                 return {"ok": False, "stopped": f"over the {thing.name} with the jaws open, "
                         + ("as you asked" if answer is False else "since the session is ending"),
                         "steps": [over.summary()]}
-        self.arm.move_to(just.q)
+        self._move(just)
         sagging = self._sagging(down, thing)
         if sagging:
             return {"ok": False, "error": sagging, "steps": [over.summary(), just.summary()]}
-        self.arm.move_to(down.q)
-        grip = self.arm.grip()
-        if grip.holding:
-            try:
-                self.arm.move_to(up.q)
-            except Refused as e:  # it's in the jaws down at the desk: say so, not that nothing moved
-                self.held = thing.name
-                return {"ok": False, "holding": thing.name, "error": f"the jaws hold the {thing.name} down at the "
-                        f"desk: the arm couldn't go back up ({e})", "steps": [s.summary() for s in (over, just, down)]}
-            grip = self.arm.jaw()
+        self._move(down, grip=True)
+        self.arm.grip(samples=self._samples("grip"))
+        self.held, self.opened = thing.name, want  # shut all the way or not, they may hold it: see the module's notes
+        try:
+            self._move(up, aim=False)  # up from the thing, a few mm short is as good
+        except Refused as e:  # down at the desk with the jaws shut: say so, not that nothing moved
+            return {"ok": False, "holding": thing.name, "error": f"the jaws closed at the {thing.name} down at the "
+                    f"desk, and the arm couldn't go back up ({e})", "steps": [s.summary() for s in (over, just, down)]}
+        grip = self.arm.jaw()
+        result = {"ok": True, "holding": thing.name, "jaws_open_percent": round(grip.opening),
+                  "steps": [s.summary() for s in steps]}
         if not grip.holding:
-            try:
-                self.arm.release(100.0)
-                self.arm.move_to(up.q)
-            except Refused as e:  # down at the desk with nothing in the jaws: say so, not that nothing moved
-                return {"ok": False, "missed": True, "error": f"the jaws closed on nothing where the {thing.name} was, "
-                        f"and the arm couldn't go back up ({e})", "steps": [s.summary() for s in (over, just, down)]}
-            return {"ok": False, "missed": True, "error": f"the jaws closed on nothing where the {thing.name} was",
-                    "steps": [s.summary() for s in steps]}
-        self.held = thing.name
-        return {"ok": True, "holding": thing.name, "jaws_open_percent": round(grip.opening),
-                "steps": [s.summary() for s in steps]}
+            result["unconfirmed"] = (f"the jaws closed all the way, which they do on nothing and holding the "
+                                     f"{thing.name} loosely alike: only a look at where it was can tell")
+        return result
 
-    def put_down(self, place: Thing, confirm=None) -> dict:
-        """Put what the jaws hold down on or in `place`: over it, down to just over its top, open, back up. confirm as
-        for pick_up, asked over the place before it goes down. Halted by the spoken stop, with `held` cleared if the
-        jaws have let go by then."""
+    def put_down(self, place: Thing, confirm=None, steps: list | None = None) -> dict:
+        """Put what the jaws hold down on or in `place`: over it, down to just over its top, open, back up, through
+        `steps` if plan_put has already given them. confirm as for pick_up, asked over the place before it goes down.
+        Halted by the spoken stop, with `held` cleared if the jaws have let go by then."""
         if not self.held and not self.arm.jaw().holding:
             raise Refused("the jaws hold nothing to put down")
         try:
-            return self._put(place, *self.plan_put(place), confirm)
+            return self._put(place, *(steps or self.plan_put(place)), confirm)
         except Halted:
             if not self.arm.jaw().holding:
                 self.held = None
             raise
 
     def _put(self, place: Thing, over: Step, down: Step, up: Step, confirm) -> dict:
-        self.arm.move_to(over.q)
+        self._move(over, aim=False)  # the way down to the place re-aims instead
         if confirm is not None:
             answer = confirm(f"Over the {place.name}. Go down and let go?")
             if not answer:
                 return {"ok": False, "stopped": f"over the {place.name}, "
                         + ("as you asked" if answer is False else "since the session is ending"),
                         "steps": [over.summary()]}
-        self.arm.move_to(down.q)
-        self.arm.release(100.0)
-        self.arm.move_to(up.q)
-        held, self.held = self.held, None
+        self._move(down)
+        self.arm.release(self.opened or 100.0, samples=self._samples("let go"))  # as far as the pick opened them
+        held, self.held, self.opened = self.held, None, None
+        self._move(up, aim=False)
+        self._close()
         return {"ok": True, "put": held, "on": place.name, "steps": [s.summary() for s in (over, down, up)]}

@@ -61,6 +61,8 @@ Examples:
 "yeah do it" -> {"tool": "not_mine", "thing": null, "place": null}"""
 
 MAX_TOKENS = 64  # an answer is about 19 tokens
+START_TRIES = 3  # requests start() makes, START_GAP_S apart, before leaving the fast path off: the server may still
+START_GAP_S = 1.0  # be starting up
 # What the model and the rules have to agree on. The hand-over hold's hold and let_go aren't tools yet, so the rules
 # leave those requests to Spark; the benchmark took let_go only during the hold, and nothing else then.
 KINDS = {"pick_up": "carry", "put_down": "carry", "move_thing": "carry", "arm_home": "home", "hold": "hold",
@@ -165,6 +167,8 @@ def said(tool: str, result: dict) -> str:
     if tool == "put_down" and result.get("put"):
         return where(result["put"], result["on"])
     if tool == "pick_up" and result.get("holding"):
+        if result.get("unconfirmed"):
+            return f"I think I've got the {result['holding']}: the jaws closed all the way, so I can't be sure."
         return f"I've got the {result['holding']}."
     if tool == "arm_home":
         return "Back at rest."
@@ -175,7 +179,7 @@ class FastArm:
     """The rules and the local model, against the bench's toolbox. take() gives the arm command to run now, or None
     for Spark. Off until start() has had an answer from the server."""
 
-    def __init__(self, cfg: dict, toolbox, bench, notebook, hud, client=None, clock=time.monotonic):
+    def __init__(self, cfg: dict, toolbox, bench, notebook, hud, client=None, clock=time.monotonic, sleep=time.sleep):
         self.model = cfg["model"]
         self.label = cfg.get("label", "Llama 3.2 3B")
         self.url = cfg.get("base_url", "")
@@ -184,6 +188,7 @@ class FastArm:
         self.things = {name: tuple(s) for name, s in (cfg.get("things") or {}).items()}
         self.places = {name: tuple(s) for name, s in (cfg.get("places") or {}).items()}
         self.toolbox, self.bench, self.notebook, self.hud, self.clock = toolbox, bench, notebook, hud, clock
+        self.sleep = sleep
         if client is None:
             from openai import OpenAI
 
@@ -194,12 +199,22 @@ class FastArm:
     def start(self) -> bool:
         """At start-up, on its own thread: one request, since the server loads the model on the first, then one every
         keep_warm_s, which keeps answers near 0.16 s (two idle minutes made them 0.5 s). False, with the fast path left
-        off, when the server doesn't answer."""
+        off, when the server doesn't answer START_TRIES times; keeping it warm then keeps asking, and turns it on once
+        it answers."""
         t0 = self.clock()
-        try:
-            self._ask("(nothing yet)")
-        except Exception as e:  # noqa: BLE001 - no server, no model: Spark takes every request, as before
-            self.hud.note(f"fast path off: {self.label} at {self.url} didn't answer ({type(e).__name__})")
+        for tries in range(1, START_TRIES + 1):
+            try:
+                self._ask("(nothing yet)")
+                break
+            except Exception as e:  # noqa: BLE001 - no server, no model: Spark takes every request, as before
+                why = e
+                if tries < START_TRIES:
+                    self.sleep(START_GAP_S)
+        else:
+            self.hud.note(f"fast path off: {self.label} at {self.url} didn't answer ({type(why).__name__}: {why})"
+                          + (f"; it asks again every {self.keep_warm_s:g} s" if self.keep_warm_s else ""))
+            if self.keep_warm_s:
+                threading.Thread(target=self._keep_warm, daemon=True).start()
             return False
         self.ready = True
         self.hud.note(f"fast path on: {self.label} answered in {self.clock() - t0:.1f} s")
@@ -250,8 +265,11 @@ class FastArm:
 
     def _keep_warm(self) -> None:
         while True:
-            time.sleep(self.keep_warm_s)
+            self.sleep(self.keep_warm_s)
             try:
                 self._ask("(nothing yet)")
             except Exception:  # noqa: BLE001 - the next request finds out, and goes to Spark
-                pass
+                continue
+            if not self.ready:  # off since start-up: it answers now
+                self.ready = True
+                self.hud.note(f"fast path on: {self.label} answered")

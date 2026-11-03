@@ -1,6 +1,7 @@
 """The desk camera: the table mapped through touched tags, the camera placed from that map, heights corrected and
 locate's geometry, all on a synthetic pinhole camera; then the tags found in a rendered frame, touch on the fake arm,
 and the printed tag sheet."""
+import argparse
 import importlib.util
 import math
 
@@ -191,6 +192,41 @@ def test_a_flat_things_middle_size_and_heading():
     assert f.heading_deg == pytest.approx(30, abs=1) and f.top_z == pytest.approx(0)
     assert f.reach_mm == pytest.approx(math.hypot(280, 60), abs=1)
     assert f.summary()["x_mm"] == pytest.approx(280, abs=1)
+    assert np.linalg.norm(f.grip - (280, -60)) < 2 and f.grip_width_mm == pytest.approx(22, abs=2)  # even all along
+
+
+@pytest.mark.parametrize("heading", [0, 49, -70])
+def test_something_flat_is_gripped_at_its_widest_even_stretch_not_where_it_tapers(heading):
+    # the Nov 2 screwdriver, along its axis from the tip: a 36 mm shaft tapering 4 to 8 mm, the front of its handle
+    # 26 mm at 12, a taper, then its main grip 24 mm at 15, and its cap end at 13
+    fit = desk.fit(detections(Camera(*OVERHEAD)), TOUCHED, SIZE, F)
+    M = desk.view_matrix(CFG["region_mm"], CFG["px_per_mm"])
+    a = math.radians(heading)
+    axis, across = np.array([math.cos(a), math.sin(a)]), np.array([-math.sin(a), math.cos(a)])
+    mask = np.zeros((580, 900), np.uint8)
+    start = np.array([200.0, -60.0])
+    for s0, length, w0, w1 in ((0, 36, 4, 8), (36, 26, 12, 12), (62, 4, 12, 15), (66, 24, 15, 15), (90, 20, 13, 13)):
+        corners = [start + (s0 * axis) + (w0 / 2) * across, start + ((s0 + length) * axis) + (w1 / 2) * across,
+                   start + ((s0 + length) * axis) - (w1 / 2) * across, start + (s0 * axis) - (w0 / 2) * across]
+        cv2.fillConvexPoly(mask, np.round(tagmap.to_mm(M, np.array(corners))).astype(np.int32), 1)
+    f = desk.found(mask.astype(bool), np.linalg.inv(M), fit, 0.0, "screwdriver", 0.9)
+
+    def along(p):
+        return float(np.dot(np.asarray(p) - start, axis))
+    assert 66 + 4 <= along(f.grip) <= 90 - 4 and f.grip_width_mm == pytest.approx(15, abs=1.5)  # on the main grip
+    assert abs(float(np.dot(f.grip - start, across))) < 2  # on its centre line
+    assert 58 <= along(f.center) <= 70  # its middle, where a pick went before, is on the taper
+    assert f.summary()["grip_x_mm"] == pytest.approx(f.grip[0], abs=0.1)
+
+
+def test_something_with_no_even_stretch_long_enough_is_gripped_at_its_middle():
+    fit = desk.fit(detections(Camera(*OVERHEAD)), TOUCHED, SIZE, F)
+    M = desk.view_matrix(CFG["region_mm"], CFG["px_per_mm"])
+    mask = np.zeros((580, 900), np.uint8)
+    wedge = np.array([[200.0, -60.0], [300.0, -40.0], [300.0, -80.0]])  # 40 mm wide at one end, a point at the other
+    cv2.fillConvexPoly(mask, np.round(tagmap.to_mm(M, wedge)).astype(np.int32), 1)
+    f = desk.found(mask.astype(bool), np.linalg.inv(M), fit, 0.0, "wedge", 0.9)
+    assert f.grip is None and "grip_x_mm" not in f.summary()
 
 
 @pytest.mark.parametrize("where", [OVERHEAD, OBLIQUE], ids=["overhead", "oblique"])
@@ -259,6 +295,27 @@ def test_tags_found_in_a_rendered_frame_map_the_table_and_find_the_desk_camera()
     assert index == other and got is frame
     with pytest.raises(RuntimeError, match="no camera shows 4 of the touched desk tags"):
         desk.find_camera(CFG, TOUCHED, lambda index, width, height: board)
+
+
+def test_the_carriers_tags_count_only_beside_2_of_the_desks_own():
+    cam = Camera(*OVERHEAD)
+    carrier = {10: (200, -60), 11: (300, -60), 12: (300, 60), 13: (200, 60)}  # arm mm, each one touched too
+    touched = {**TOUCHED, **{i: np.array([x, y, 0.0]) for i, (x, y) in carrier.items()}}
+    board = render(cam, carrier)  # the board camera sees all of the carrier's and none of the desk's
+    with pytest.raises(RuntimeError, match="no camera shows 4 of the touched desk tags .*, 2 of them the desk's own"):
+        desk.find_camera(CFG, touched, lambda index, width, height: board)
+    one = render(cam, {**carrier, 20: TAGS[20]})
+    with pytest.raises(RuntimeError, match="shows 5 of them, 1 the desk's own"):
+        desk.find_camera(CFG, touched, lambda index, width, height: one)
+    two = render(cam, {**carrier, 20: TAGS[20], 21: TAGS[21]})  # the arm over the desk's other four
+    index, got = desk.find_camera(CFG, touched, lambda index, width, height: two)
+    assert index == CFG["camera"]["index"] and got is two
+
+
+def test_touch_takes_the_carriers_tags_too(capsys):
+    args = argparse.Namespace(port="/dev/no-such-port", what=["13", "30"], file=None)
+    assert desk_camera.cmd_touch(args, CFG) == 1  # refused before the port opens, for 30 only
+    assert "config/desk.yaml has no tag 30:" in capsys.readouterr().out
 
 
 def test_the_tag_sheet_prints_every_tag_at_its_size_and_they_read_back():

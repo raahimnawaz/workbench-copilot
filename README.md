@@ -23,7 +23,7 @@ Everything in this repository was written during the hackathon, starting Oct 26,
 | `wbc/motion/carrier.py`, `scripts/register_arm.py` | Registering the arm to the carrier from points touched with the motors off, and the touch test |
 | `wbc/perception/` | The SAM 3.1 client, camera capture, the board reader (the carrier's tags, the top-down view, the hole grid fit, wire tracing, the netlist and its check against `pins.h`) and the desk camera's `locate` |
 | `scripts/` | The smoke test, the board reader and its carrier sheet, the desk camera, the joint map check and arm registration |
-| `config/`, `fixtures/`, `tests/` | Model, bench and arm config, the recorded bench for `--sim`, 769 offline tests |
+| `config/`, `fixtures/`, `tests/` | Model, bench and arm config, the recorded bench for `--sim`, 798 offline tests |
 | `firmware/dut_demo/` | Act 1's demo board: reads the force sensor and prints millivolts and the pin it reads |
 
 | Reused | License | Used for |
@@ -52,8 +52,8 @@ Everything in this repository was written during the hackathon, starting Oct 26,
 | Memory | Runs live on `--sim`: a `--resume` run answers from the turn before it, and a new session puts the screwdriver away from a note. |
 | HUD | Runs live with `--hud`, every model call under its own name with its time. Still to come: the board view, the netlist and the diff. |
 | Arm fast path | Live against `mlx_lm.server`: an arm command in about 0.25 s from request to reply, against about 4.4 s through Spark. On 117 phrasings neither was tuned on, rules and model agreeing never moved the arm wrongly. |
-| Arm driver | Runs on the real arm: power-on without a jump, moves at up to 45°/s and 120 mm/s, every motor cut on a stray. |
-| Picks and puts | Tested offline. The first powered pick, by voice, ran every move without a trip, and its aim at the thing is being tuned. |
+| Arm driver | Runs on the real arm: power-on without a jump, moves at up to 45°/s and 180 mm/s, every motor cut on a stray. |
+| Picks and puts | Run on the real arm by voice: "put my screwdriver on my sticky note" worked in 4 of its last 6 tries, the quickest 31.5 s from the request. The other two: the wrist roll's stop, which moves keep clear of now, and a note out of reach straight down. |
 | Board reader | Runs live: it reads the flat wires, traces the nets, and reports a wire on the wrong GPIO with the line to fix. |
 | Desk camera and `locate` | Runs live: a screwdriver or a sticky note found on the desk and placed in the arm's frame. |
 | FK/IK and the joint map | 200 of 200 bench poses round-trip within 0.2 mm and 0.5°. All five joint signs checked by hand on the arm. |
@@ -124,7 +124,7 @@ python scripts/read_board.py read       # $0.0025: the whole read, drawn in .wbc
 
 A second C920 looks straight down at the desk from about 71 cm and sees the arm's whole reach, about 97 × 55 cm at 0.5 mm per pixel. `wbc/perception/desk.py` turns what it sees into the arm's frame, so the co-pilot can find "the cup" or "the screwdriver" and know where it is.
 
-1. **Tags, touched once.** AprilTags (tag36h11, ids 20–25, 50 mm) lie flat around the arm's reach. With the motors off, you put the gripper's tips on each tag's center, and forward kinematics records where it is in the arm's frame. Every photo is mapped through the tags it shows, so a bumped camera changes nothing.
+1. **Tags, touched once.** AprilTags (tag36h11, ids 20–25, 50 mm) lie flat around the arm's reach. The carrier's 20 mm tags can be touched too, so the arm over a few of the desk's still leaves enough in view. With the motors off, you put the gripper's tips on each tag's center, and forward kinematics records where it is in the arm's frame. Every photo is mapped through the tags it shows, so a bumped camera changes nothing.
 2. **Top-down view and SAM 3.1.** Code cuts out the table around the arm at 1 px/mm and asks SAM for the thing by name.
 3. **Height.** Something standing up looks further from the point under the camera than it is. The tags also place the camera itself, so given a thing's height, its outline's near and far edges put its middle back where it is: a cup's middle lands within 3 mm.
 
@@ -143,12 +143,12 @@ python scripts/desk_camera.py locate cup --height 95                  # $0.0025:
 `wbc/motion/arm.py` is the driver, and the only code that talks to the servo bus while the agent runs. `Arm.open()` connects LeRobot's bus and nothing more: never `robot.connect()`, which can recalibrate the arm and always ends by turning torque on. `power_on()` brings the joints up one at a time from the base out, and `move_to(q)` moves all five together to URDF angles q.
 
 - **Refused before anything moves:** a joint past an end of its calibrated range, the wrist roll near where its reading wraps, a servo at 65 °C, a target within 2° of a range's end, and a path that takes the jaw tips under their floor or the elbow and wrist axes under 30 mm above the desk. A refusal says which joint and which way to turn it.
-- **Speed:** moves are quintic and peak at 45°/s on any joint and 120 mm/s at the jaw tips, and no goal goes more than 5° from where its joint is. Torque is capped at 50% on the arm joints and 24% on the gripper, and the elbow's and gripper's P of 32 go back on after LeRobot's setup at every power-on.
+- **Speed:** moves are quintic and peak at 45°/s on any joint and 180 mm/s at the jaw tips, and no goal goes more than 5° from where its joint is. Torque is capped at 50% on the arm joints and 24% on the gripper, and a P of 32 on every joint but the wrist roll goes back on after LeRobot's setup at every power-on.
 - **Cuts:** every motor is cut at once if a joint jumps 3° as its torque comes on, strays 5° from its goal during a move, sags 5 mm under a floor, or the bus fails. `cut()` works from any thread or a signal handler, every cut is read back servo by servo, and a cut latches until `clear_stop()`. `halt()`, the spoken stop, stops a move at its next tick and holds the arm there with its motors on.
 - **Re-aim:** each joint stops short of its goal by its load over its P gain, so after a move's path `move_to()` sets each goal past its target by the shortfall, under the same caps and checks, until every joint is within 0.2°.
 - **Gripper:** `grip()` closes on what's between the jaws and keeps squeezing under the cap, and says whether they stopped on something. `release()` opens them, stopping where something's in the way.
 
-`wbc/motion/hand.py` builds the agent's arm skills on the driver. A pick goes straight down beside a thing's middle with the jaws closing across its long axis, the fixed jaw beside it and the moving jaw closing it against the fixed one: over it, open, just over its top, down, grip, and back up. A put lines what's held up with the place's long axis, goes down to just over its top and opens. Every pose a pick or a put needs is solved before the first one moves, so one the arm can't reach is refused with the arm where it was. Heights come from the desk as the arm's touches measured it (`wbc/motion/table.py`).
+`wbc/motion/hand.py` builds the agent's arm skills on the driver. A pick goes straight down beside a thing's grip, the middle of its widest even stretch (a screwdriver's handle, not where it tapers), with the jaws closing across its long axis, the fixed jaw beside it and the moving jaw closing it against the fixed one: over it, open only as wide as it needs, just over its top, down, grip, and back up with the jaws shut, since these jaws hold a handle in the gap above their tips reading as shut as empty ones. A put lines what's held up with the place's long axis, goes down to just over its top, opens as wide as the pick did, and closes the jaws again back up. Every pose a pick or a put needs is solved before the first one moves, so one the arm can't reach is refused with the arm where it was. Heights come from the desk as the arm's touches measured it (`wbc/motion/table.py`).
 
 ```bash
 python scripts/check_joint_map.py --port /dev/cu.usbmodemXXXX check   # motors off: the joint map's signs, by hand

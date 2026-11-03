@@ -64,11 +64,21 @@ def build(sim: bool, backup: bool, router_model: str | None = None, arm: bool = 
     bench = Bench(config.ROOT, models, meta, budget, sim=sim, say=hud.note, layout=config.load_yaml("bench.yaml"),
                   parts=config.load_yaml("parts.yaml"), robot_cfg=robot_cfg, desk_cfg=config.load_yaml("desk.yaml"),
                   arm_port=robot_cfg.get("port") if arm else None,
+                  move_logs=config.ROOT / ".wbc" / "logs" if arm and not sim else None,
                   calibration_dir=calibration_dir or robot_cfg.get("calibration_dir"), confirm=keyboard.ask,
                   go_ahead=go_ahead)
     if arm:
         hud.note("the arm moves when you ask; \"Copilot, stop\" holds it, Ctrl-C cuts it" if go_ahead == "request" else
                  "each arm move waits for Enter at the keyboard; Ctrl-C cuts it")
+    if arm and not sim:  # the desk camera kept open, so a locate before a move needn't open it and wait 3 s
+        from wbc.perception import camera  # the eyes extra
+
+        cam = bench.desk_cfg["camera"]
+        try:
+            bench.desk_stream = camera.Stream(cam["index"], cam["width"], cam["height"])
+            hud.note(f"desk camera {cam['index']} kept open for locate")
+        except RuntimeError as e:
+            hud.note(f"desk camera: {e} Each locate opens it instead.")
     toolbox = build_toolbox(bench)
     max_steps = models["router"].get("max_steps", 12)
     prefetch = models["router"].get("prefetch") if prefetch else None
@@ -246,6 +256,9 @@ def main(argv=None) -> int:
         if pool is not None:  # tool calls not started yet don't start
             pool.shutdown(wait=False, cancel_futures=True)
         bench.park(home=home)
+        stream = getattr(bench, "desk_stream", None)
+        if stream is not None:
+            stream.close()
 
 
 def cli() -> None:
