@@ -120,6 +120,19 @@ def compile_in_sandbox(diff: str, root: Path, cfg: dict) -> tuple:
     return ok, True, log
 
 
+# What a retry adds to the first prompt (models.yaml's coder.retries): what failed and how, so Wonder fixes its own diff
+# in the same call ask_coder makes, instead of the router spending a round to ask again.
+RETRY = """
+
+Your last answer didn't pass the checks: {error}.
+{detail}
+
+The diff it sent:
+{diff}
+
+Send the whole corrected diff in the same format, with its WHY line."""
+
+
 def ask_coder(client, cfg: dict, budget, root: Path, task: str, files: list, facts: dict | None = None) -> dict:
     if len(files) > cfg.get("max_files", 4):
         return {"ok": False, "error": f"send at most {cfg.get('max_files', 4)} files"}
@@ -130,18 +143,34 @@ def ask_coder(client, cfg: dict, budget, root: Path, task: str, files: list, fac
     sources = "\n\n".join(f"=== {p.relative_to(root.resolve())}\n{p.read_text(encoding='utf-8')}" for p in paths)
     prompt = (f"{task}\n\nMeasured on the bench (trust these over comments in the code):\n"
               f"{json.dumps(facts or {}, indent=1)}\n\n{sources}")
-    budget.check()
-    t0 = time.monotonic()
-    try:
-        r = client.responses.create(model=cfg["model"], instructions=CODER_SYS, input=prompt,
-                                    reasoning={"effort": cfg.get("effort", "low")},
-                                    timeout=cfg.get("timeout_s", 30))
-    except Exception as e:
-        return {"ok": False, "error": f"coder unavailable: {type(e).__name__}: {e}",
-                "_timing": {"wonder": time.monotonic() - t0}}
-    timing = {"wonder": time.monotonic() - t0}  # "_" keys go to the HUD, not to the router
-    budget.add_tokens(cfg["model"], getattr(r, "usage", None))
-    text = getattr(r, "output_text", "") or ""
+    timing = {"wonder": 0.0}  # "_" keys go to the HUD, not to the router
+    result = None
+    for attempt in range(1 + max(0, int(cfg.get("retries", 0)))):
+        asked = prompt if result is None else prompt + RETRY.format(
+            error=result["error"], detail=result.get("log") or result.get("raw") or "",
+            diff=result.get("diff") or "(none)")
+        budget.check()
+        t0 = time.monotonic()
+        try:
+            r = client.responses.create(model=cfg["model"], instructions=CODER_SYS, input=asked,
+                                        reasoning={"effort": cfg.get("effort", "low")},
+                                        timeout=cfg.get("timeout_s", 30))
+        except Exception as e:
+            timing["wonder"] += time.monotonic() - t0
+            if result is None:
+                return {"ok": False, "error": f"coder unavailable: {type(e).__name__}: {e}", "_timing": timing}
+            return {**result, "retry": f"the next try didn't come back ({type(e).__name__})", "_timing": timing}
+        timing["wonder"] += time.monotonic() - t0
+        budget.add_tokens(cfg["model"], getattr(r, "usage", None))
+        result = _checked(getattr(r, "output_text", "") or "", root, cfg, timing)
+        result["attempts"] = attempt + 1
+        if result["ok"]:
+            break
+    return result
+
+
+def _checked(text: str, root: Path, cfg: dict, timing: dict) -> dict:
+    """Wonder's answer checked: its diff must apply to the working tree and compile in the sandbox."""
     diff, why = split_diff(text)
     if not diff:
         return {"ok": False, "error": "coder returned no diff", "raw": text[:400], "_timing": timing}
@@ -152,7 +181,7 @@ def ask_coder(client, cfg: dict, budget, root: Path, task: str, files: list, fac
     t0 = time.monotonic()
     ok, compiled, log = compile_in_sandbox(diff, root, cfg)
     if compiled:
-        timing["compile"] = time.monotonic() - t0
+        timing["compile"] = timing.get("compile", 0.0) + time.monotonic() - t0
     result = {"ok": ok, "diff": diff, "why": why, "compiled": compiled, "log": log[-800:], "_timing": timing}
     if not ok:
         result["error"] = "patched firmware does not compile"
