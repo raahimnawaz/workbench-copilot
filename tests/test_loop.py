@@ -497,6 +497,19 @@ def test_requests_and_diagnoses_stay_with_the_router(request_):
     assert opened.requests == [] and len(spark.requests) == 1
 
 
+def test_spark_open_sees_the_recent_turns_so_a_question_can_refer_back(tmp_path):
+    from wbc.agent.memory import Memory, Notebook, Session
+    memory = Memory(Session(tmp_path / "session.json"), Notebook(tmp_path / "notebook.jsonl"))
+    opened = FakeChatClient([chat_response(content="GPIO 4, since the fix.")])
+    router, spark, _ = make_router([response("r1", text="Staged: LED_PIN is 4 now. Should I flash it?")],
+                                   facts_toolbox([]), prefetch=PREFETCH, open=(opened, "open", "Spark Open"),
+                                   memory=memory)
+    router.run_turn("Check my wiring against the firmware.")
+    assert router.run_turn("Which pin is the LED on now?") == "GPIO 4, since the fix."
+    system = opened.chat.completions.requests[0]["messages"][0]["content"]
+    assert "Recent turns, oldest first:" in system and "Staged: LED_PIN is 4 now." in system
+
+
 def test_when_spark_open_fails_the_router_answers():
     router, opened, spark, hud = open_router([RuntimeError("401")], [response("r1", text="About 10 mA.")])
     assert router.run_turn("What current should the LED draw?") == "About 10 mA."

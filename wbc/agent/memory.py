@@ -18,6 +18,7 @@ All of it reaches the router in its instructions, as reference, never as a reque
 from __future__ import annotations
 
 import json
+import math
 import os
 import re
 import tempfile
@@ -33,6 +34,16 @@ FIELD_MAX = 200         # characters kept of a tool's arguments or of what it re
 CARRIED_MAX = 6000      # characters of carried turns the router sees in its instructions; more become a summary
 TRANSCRIPT_MAX = 60000  # characters of turns the summary call reads; half that becomes a summary, to leave room
 SUMMARY_RETRY_TURNS = 5  # after a summary that failed, turns before the next try, unless the conversation is broken
+EARLIER_MAX = 400       # turns a summary folded away that the session keeps, to find again when a request mentions them
+RECALLED_MAX = 3000     # characters of those earlier turns a call gets, the best matches first
+RECALLED_HITS = 3       # earlier turns that match a request, each brought back with the exchange around it
+EPISODE_S = 300         # seconds between turns of one exchange ("flash it?" "yes"), brought back together
+# Words too common to tell one note or turn from another. The rest are weighed by how rare they are (see ranked).
+COMMON = frozenset("""a an the and or but if so then than to of in on at by for with from into onto as is are was were be
+been being am it its it's this that these those there here what which who whom whose where when how why do does did
+done can could would should will shall may might must i me my mine we us our you your yours he him his she her they
+them their please copilot just now not no yes ok okay oh um uh hey also too very really""".split())
+_WORD = re.compile(r"[a-z0-9]+(?:[._'-][a-z0-9]+)*")
 # How other OpenAI-style APIs and local servers (llama.cpp, LM Studio) word "the conversation no longer fits".
 # Meta doesn't document its own wording.
 CONTEXT_FULL = ("context_length", "context length", "context window", "maximum context", "context size",
@@ -101,8 +112,7 @@ def _when(t: str) -> str:
     return datetime.fromisoformat(t).strftime("%b %d %H:%M")
 
 
-def render(turns: list, limit: int) -> str:
-    """Turns as plain text, oldest first. Over `limit` characters, the oldest turns are left out."""
+def _blocks(turns: list) -> list:
     blocks = []
     for t in turns:
         lines = [f"{_when(t['t'])} User: {t['user']}"]
@@ -110,20 +120,101 @@ def render(turns: list, limit: int) -> str:
                   for c in t["calls"]]
         lines.append(f"{_when(t['t'])} You: {t['reply']}")
         blocks.append("\n".join(lines))
-    kept, size = [], 0
-    for block in reversed(blocks):
+    return blocks
+
+
+def shown(turns: list, limit: int) -> int:
+    """How many of the newest turns render keeps within `limit` characters."""
+    kept, size = 0, 0
+    for block in reversed(_blocks(turns)):
         if kept and size + len(block) > limit:
             break
-        kept.append(block)
+        kept += 1
         size += len(block) + 1
-    left_out = len(blocks) - len(kept)
+    return kept
+
+
+def render(turns: list, limit: int) -> str:
+    """Turns as plain text, oldest first. Over `limit` characters, the oldest turns are left out."""
+    blocks = _blocks(turns)
+    kept = shown(turns, limit)
+    left_out = len(blocks) - kept
     return "\n".join(([f"({left_out} earlier turn{'' if left_out == 1 else 's'} left out)"] if left_out else [])
-                     + kept[::-1])
+                     + blocks[left_out:])
 
 
 def _size(turns: list) -> int:
     """How long the turns are as text, whole."""
     return len(render(turns, float("inf")))
+
+
+def terms(text: str) -> set:
+    """The words that can tell one note or turn from another: lower case, a plural's s or es and a possessive's 's
+    dropped ("goes" is "go", "boxes" "box", "notes" "note"), the common words left out. "pins.h" and "GPIO4" stay
+    whole."""
+    found = set()
+    for w in _WORD.findall(text.lower()):
+        if w.endswith("'s"):
+            w = w[:-2]
+        if len(w) > 3 and w.endswith("es") and w[:-2].endswith(("o", "x", "z", "ch", "sh", "ss")):
+            w = w[:-2]
+        elif len(w) > 3 and w.endswith("s") and not w.endswith("ss"):
+            w = w[:-1]
+        if w not in COMMON:
+            found.add(w)
+    return found
+
+
+def recency(age: int) -> float:
+    """How much an item counts for its age, the number of items newer than it: 1 for the newest, then falling as
+    1 / ln(e + age), so an old item fades slowly (0.39 ten items back, 0.22 a hundred back) instead of falling off
+    the end of a list."""
+    return 1 / math.log(math.e + age)
+
+
+def matches(query: str, texts: list) -> list:
+    """How well each text matches the query: the sum, over the query's words found in it, of how rare each word is
+    among the texts, ln((n + 1) / (df + 0.5)), where df is how many of the n texts have it. So "screwdriver" decides
+    where "go" can't, and a word must be whole to count ("go" isn't in "good"). 0 for a text with none of them."""
+    words = terms(query)
+    found = [terms(t) & words for t in texts]
+    df = {w: sum(w in f for f in found) for w in words}
+    n = len(texts)
+    return [sum(math.log((n + 1) / (df[w] + .5)) for w in f) for f in found]
+
+
+def ranked(query: str, texts: list) -> list:
+    """The indexes of the texts (oldest first) the query's words are found in, best first: each match weighed by
+    how rare its words are (matches), and by its recency for up to half, (1 + recency) / 2, since a request that
+    names something wants that thing, however old; the newer first among equals."""
+    n = len(texts)
+    scored = [(m * (1 + recency(n - 1 - i)) / 2, i) for i, m in enumerate(matches(query, texts)) if m > 0]
+    return [i for _, i in sorted(scored, key=lambda s: (-s[0], -s[1]))]
+
+
+def _turn_text(t: dict) -> str:
+    return " ".join([t["user"], *(f"{c['tool']} {c['args']} {c['note']}" for c in t["calls"]), t["reply"]])
+
+
+def episodes(turns: list, hits: list) -> list:
+    """Each hit (an index into turns, best first) with the turn before and after it when they're within EPISODE_S,
+    so "flash it?" comes back with the "yes" that answered it. Exchanges that overlap become one, ranked by its best
+    hit. Lists of indexes, oldest first within each."""
+    def close(i, j):
+        return abs((datetime.fromisoformat(turns[j]["t"]) - datetime.fromisoformat(turns[i]["t"])).total_seconds()) \
+            <= EPISODE_S
+
+    groups = []  # best first
+    for hit in hits:
+        span = {hit} | {j for j in (hit - 1, hit + 1) if 0 <= j < len(turns) and close(hit, j)}
+        first = next((k for k, g in enumerate(groups) if g & span), None)
+        if first is None:
+            groups.append(span)
+            continue
+        span = span.union(*(g for g in groups if g & span))  # the groups before `first` don't touch it, so stay put
+        groups = [g for g in groups if not g & span]
+        groups.insert(first, span)
+    return [sorted(g) for g in groups]
 
 
 def _is_note(n) -> bool:
@@ -185,11 +276,11 @@ class Notebook:
         return {"ok": True, "id": entry["id"]}
 
     def search(self, query: str = "", limit: int = 10) -> list:
-        """The notes with the most words of the query in them, newest first among equals. No query: the newest."""
-        words = query.lower().split()
-        scored = [(sum(w in n["note"].lower() for w in words), i) for i, n in enumerate(self.notes)]
-        ranked = sorted((s for s in scored if s[0] or not words), reverse=True)
-        return [self.notes[i] for _, i in ranked[:limit]]
+        """The notes the query's words are found in, best first (see ranked). A query of only common words, or none:
+        the newest."""
+        if not terms(query):
+            return self.notes[::-1][:limit]
+        return [self.notes[i] for i in ranked(query, [n["note"] for n in self.notes])[:limit]]
 
     def remove(self, note_id: str) -> dict:
         with self._lock:
@@ -201,8 +292,18 @@ class Notebook:
             self._save()
         return {"ok": True, "removed": note_id}
 
-    def digest(self, count: int) -> str:
-        return "\n".join(f"- [{n['id']}] {_when(n['t'])}: {n['note']}" for n in self.notes[::-1][:count])
+    def digest(self, count: int, request: str = "") -> str:
+        """The `count` notes a call sees, newest first. With more notes than that, each counts as (1 + how well it
+        matches the request) times its recency, so an old note the request is about stays in view while the
+        newest, which nothing pushes out, fill the rest."""
+        picked = range(len(self.notes))
+        if len(self.notes) > count:
+            fit = matches(request, [n["note"] for n in self.notes])
+            n = len(self.notes)
+            weight = {i: (1 + fit[i]) * recency(n - 1 - i) for i in picked}
+            picked = sorted(sorted(picked, key=lambda i: (-weight[i], -i))[:count])
+        return "\n".join(f"- [{self.notes[i]['id']}] {_when(self.notes[i]['t'])}: {self.notes[i]['note']}"
+                         for i in reversed(picked))
 
     def _save(self) -> None:
         if self.path:
@@ -230,17 +331,22 @@ def _read(path: Path) -> dict:
     if not isinstance(data.get("summary", ""), str) or not isinstance(data.get("turns"), list) \
             or not all(_is_turn(t) for t in data["turns"]):
         raise ValueError("its turns aren't in the shape this version writes")
+    if not isinstance(data.get("earlier", []), list):
+        raise ValueError("its earlier turns aren't a list")
+    data["earlier"] = [t for t in data.get("earlier", []) if _is_turn(t)]  # only for finding again: skip, don't refuse
     return data
 
 
 class Session:
-    """The session between conversations: a summary of everything older, and a record of every turn since."""
+    """The session between conversations: a summary of everything older, and a record of every turn since. The turns
+    a summary folded away stay too (earlier), so a request that mentions one can bring it back whole."""
 
     def __init__(self, path: Path | None = None, summary: str = "", turns: list | None = None,
-                 saved: datetime | None = None, why_new: str = ""):
+                 saved: datetime | None = None, why_new: str = "", earlier: list | None = None):
         self.path = Path(path) if path else None
         self.summary = summary
         self.turns = turns or []
+        self.earlier = earlier or []  # oldest first, at most EARLIER_MAX
         self.saved = saved          # when the session this one picks up was last written; None for a new session
         self.why_new = why_new      # why --resume started a new session instead, for the HUD
         self.archived = None        # where the last session went once this one first saved
@@ -266,7 +372,8 @@ class Session:
         except ValueError as e:
             return cls(path, why_new=f"the last session's file is damaged ({e})")
         turns = [dict(t, live=False) for t in data["turns"]]  # a new run starts a new conversation
-        return cls(path, data.get("summary", ""), turns, saved=data["saved"])
+        return cls(path, data.get("summary", ""), turns, saved=data["saved"],
+                   earlier=[dict(t, live=False) for t in data["earlier"]])
 
     @staticmethod
     def _aside(path: Path, stamp: str) -> Path:
@@ -303,7 +410,10 @@ class Session:
         """Replace the summary and every turn with a new summary of both. The turns as they were go to sessions/
         first, since a summary can leave something out."""
         now = now or datetime.now()
-        before = json.dumps(self._data(now), indent=1) if self.turns else None
+        before = self._data(now)
+        before.pop("earlier", None)  # already in an earlier copy, or in the session file
+        before = json.dumps(before, indent=1) if self.turns else None
+        self.earlier = (self.earlier + [dict(t, live=False) for t in self.turns])[-EARLIER_MAX:]
         self.summary, self.turns = summary, []
         if self.path and before:
             _write(self._aside(self.path, f"{now:%Y%m%d-%H%M%S}-folded"), before)
@@ -313,8 +423,11 @@ class Session:
         return [t for t in self.turns if not t["live"]]
 
     def _data(self, now: datetime) -> dict:
-        return {"version": 1, "saved": now.isoformat(timespec="seconds"), "summary": self.summary,
+        data = {"version": 1, "saved": now.isoformat(timespec="seconds"), "summary": self.summary,
                 "turns": self.turns}
+        if self.earlier:
+            data["earlier"] = self.earlier
+        return data
 
     def save(self, now: datetime | None = None) -> None:
         if not self.path:
@@ -373,8 +486,26 @@ class Memory:
             return "the turns from before this conversation no longer fit in its instructions", False
         return None
 
-    def prompt(self) -> str:
-        """The section the router's instructions end with, or "" when there's nothing to remember."""
+    def recalled(self, request: str) -> str:
+        """The earlier turns the request's words point to, as text: those a summary folded away and those too old to
+        fit beside it, which the conversation no longer holds whole. The RECALLED_HITS best matches (see ranked),
+        each with the exchange around it (see episodes), the best exchanges first while they fit in RECALLED_MAX.
+        "" when nothing matches."""
+        carried = self.session.carried()
+        pool = self.session.earlier + carried[:len(carried) - shown(carried, CARRIED_MAX)]
+        hits = ranked(request, [_turn_text(t) for t in pool])[:RECALLED_HITS] if terms(request) else []
+        blocks, size = [], 0
+        for group in episodes(pool, hits):
+            block = "\n".join(_blocks([pool[i] for i in group]))
+            if blocks and size + len(block) > RECALLED_MAX:
+                break
+            blocks.append((group[0], block))
+            size += len(block) + 5
+        return "\n...\n".join(b for _, b in sorted(blocks))
+
+    def prompt(self, request: str = "") -> str:
+        """The section the router's instructions end with, or "" when there's nothing to remember. request: this
+        turn's, which picks the earlier turns brought back and, past notebook_in_prompt, the notes."""
         parts = []
         if self.session.summary:
             parts.append(f"Summary of earlier turns:\n{self.session.summary}")
@@ -382,7 +513,11 @@ class Memory:
         if carried:
             parts.append("Turns this conversation doesn't hold (from an earlier run, or cut off by an error or a "
                          "reset), oldest first:\n" + render(carried, CARRIED_MAX))
-        notes = self.notebook.digest(self.notebook_in_prompt)
+        recalled = self.recalled(request)
+        if recalled:
+            parts.append("Earlier turns this request's words point to, in full (the summary has the rest), oldest "
+                         "first:\n" + recalled)
+        notes = self.notebook.digest(self.notebook_in_prompt, request)
         if notes:
             parts.append(f"Notebook, newest first (`recall` finds older notes, `forget` drops a wrong one):\n{notes}")
         if not parts:

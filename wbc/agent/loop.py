@@ -25,8 +25,8 @@ from pathlib import Path
 
 from .budget import BudgetExceeded
 from .fast_arm import said
-from .memory import (SUMMARY_PROMPT, SUMMARY_RETRY_TURNS, call_record, context_full, input_tokens, summary_input,
-                     transient, turn_record)
+from .memory import (SUMMARY_PROMPT, SUMMARY_RETRY_TURNS, call_record, context_full, input_tokens, render,
+                     summary_input, transient, turn_record)
 
 # What the router's model gets after the fast path's move came back failed, with the request
 TRIED = ("The arm's fast path already ran {tool} {args} for this request, and it came back failed: {note}. Don't run "
@@ -50,9 +50,12 @@ def image_data_url(image) -> str:
 # nothing to be done. "why" stays with the router, which diagnoses with its tools, and so does "can you ...".
 OPEN_FIRST = re.compile(r"^(what|whats|what's|how|which|when|where|is|are|does|do|should|would)\b")
 OPEN_NOT = re.compile(r"\b(why|fix|flash|move|put|pick|grab|hold|stage|build|compile|remember|forget|again|wrong)\b")
+OPEN_TURNS = 6  # recent turns Spark Open sees, so a question can refer back to them
+OPEN_TURNS_MAX = 2500  # characters of them
 OPEN_TOKENS = 2048  # its reply is two sentences; the rest is room for its reasoning (518 tokens on a one-line question)
 OPEN_SYSTEM = ("You are the voice co-pilot of an electronics bench, answering a question from the bench facts below: "
-               "the board read from the camera, the schematic (the design) and the firmware's pins. Answer in at most "
+               "the board read from the camera, the schematic (the design) and the firmware's pins, then the "
+               "conversation's recent turns, for what the question refers to. Answer in at most "
                "two short sentences of plain speech, no markdown, with numbers where they help. If the facts don't "
                "answer it, say what you'd need to check.")
 
@@ -104,6 +107,7 @@ class _RouterBase:
         self.unfinished = None  # (request, tool calls that ran) while a turn runs, for main to record after Ctrl-C
         self.running = []  # the round of tool calls running now
         self._ran_out = False  # whether the last turn stopped at max_steps with calls unanswered
+        self._request = ""  # this turn's request, which picks what memory brings back (memory.prompt)
 
     def _prefetches(self) -> list:
         return [Call(f"prefetch{i}", p["tool"], json.dumps(p.get("args", {}))) for i, p in enumerate(self.prefetch)]
@@ -218,6 +222,7 @@ class _RouterBase:
         turn. Nothing runs twice: not the bench facts, and never a tool that has acted on the bench."""
         done = []
         self.unfinished = (user_text, done)
+        self._request = user_text
         asked = user_text  # what the router's model gets: the request, and what the fast path did if it failed
         if self.fast is not None:
             reply = self._fast(user_text, done)
@@ -300,7 +305,8 @@ class _RouterBase:
                 shown = {k: v for k, v in res.items() if not k.startswith("_")}
                 facts.append(f"{c.name} {c.arguments}: {json.dumps(shown)[:6000]}")
             r = client.chat.completions.create(model=model, max_tokens=OPEN_TOKENS, messages=[
-                {"role": "system", "content": OPEN_SYSTEM + "\n\nBench facts:\n" + "\n".join(facts)},
+                {"role": "system", "content": OPEN_SYSTEM + "\n\nBench facts:\n" + "\n".join(facts)
+                 + self._open_context(user_text)},
                 {"role": "user", "content": user_text}])
             self.budget.add_tokens(model, r.usage)
             text = re.sub(r"<think>.*?</think>", "", r.choices[0].message.content or "", flags=re.S).strip()
@@ -316,6 +322,20 @@ class _RouterBase:
         self._record(user_text, [], text, live=True)
         return text
 
+    def _open_context(self, user_text: str) -> str:
+        """What Spark Open gets of the conversation, which it isn't part of: the last OPEN_TURNS turns, and the
+        earlier ones the question's words point to, so "what did it read before the fix?" has an answer."""
+        if self.memory is None:
+            return ""
+        parts = []
+        recent = self.memory.session.turns[-OPEN_TURNS:]
+        if recent:
+            parts.append("Recent turns, oldest first:\n" + render(recent, OPEN_TURNS_MAX))
+        recalled = self.memory.recalled(user_text)
+        if recalled:
+            parts.append("Earlier turns the question's words point to:\n" + recalled)
+        return "".join(f"\n\n{p}" for p in parts)
+
     def _join(self, user_text: str, reply: str) -> None:
         """A turn the fast path answered, added to the conversation the next call sends."""
         raise NotImplementedError
@@ -330,7 +350,7 @@ class _RouterBase:
         self._record(user_text, done + cut, f"({why})", live=False)
 
     def _instructions(self) -> str:
-        remembered = self.memory.prompt() if self.memory else ""
+        remembered = self.memory.prompt(self._request) if self.memory else ""
         return f"{self.system}\n\n{remembered}" if remembered else self.system
 
     def _records(self, calls: list, results: list) -> list:
