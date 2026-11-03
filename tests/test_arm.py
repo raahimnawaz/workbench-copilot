@@ -136,16 +136,16 @@ class FakeBus:
         arm.events.append(f"{name} {motor} {value}")
         if (name, motor) not in arm.deaf:
             registers = {"Goal_Position": arm.goal, "P_Coefficient": arm.gain, "Torque_Limit": arm.limit,
-                         "Lock": arm.lock}
+                         "Lock": arm.lock, "Overload_Torque": arm.overload}
             registers[name][motor] = value
             if name == "Goal_Position":  # the servo turns its torque on for it (Oct 29)
                 arm.come_on(motor)
         arm.reply(name, motor, value)
 
     def read(self, name, motor, *, normalize=True, num_retry=0):
-        assert name == "P_Coefficient" and not normalize
+        assert name in ("P_Coefficient", "Overload_Torque") and not normalize
         self.request()
-        return self.arm.gain[motor]
+        return (self.arm.gain if name == "P_Coefficient" else self.arm.overload)[motor]
 
     def enable_torque(self, motors=None, num_retry=0):  # LeRobot's writes Torque_Enable 1, then Lock 1
         self.request()
@@ -178,6 +178,7 @@ class FakeFollower:
         self.limit = {m: 500 if m == "gripper" else 1000 for m in JOINTS}
         self.gain = {m: 32 if m == "elbow_flex" else 16 for m in JOINTS}  # in EEPROM: the elbow kept its 32
         self.lock = {m: 1 for m in JOINTS}
+        self.overload = {m: 25 if m == "gripper" else 80 for m in JOINTS}  # Overload_Torque, in EEPROM
         self.load = {m: 0 for m in JOINTS}
         self.temperature, self.temps = {m: 27 for m in JOINTS}, []
         self.calibration = {m: SimpleNamespace(**c) for m, c in CALIBRATION.items()} if calibration else {}
@@ -194,13 +195,15 @@ class FakeFollower:
                                                                     # the driver's clock to tell
         self.bus = FakeBus(self)
 
-    def configure(self):  # like LeRobot's: every motor off and unlocked, P 16 on all six, then torque on
+    def configure(self):  # like LeRobot's: every motor off and unlocked, P 16 on all six, the gripper's overload
+                          # threshold 25%, then torque on
         self.bus.disable_torque()
         if self.flagged.get("configure"):  # as at 15:32 on Oct 29, before anything else was set
             self.flagged["configure"] -= 1
             raise RuntimeError("Failed to write 'Torque_Enable' on id_=6 with '0' after 1 tries. [RxPacketError] Input "
                                "voltage error!")
         self.gain = {m: 16 for m in JOINTS}
+        self.overload["gripper"] = 25
         self.events.append("configured")
         self.bus.enable_torque()
 
@@ -326,9 +329,27 @@ def test_power_on_sets_gains_and_caps_before_any_torque_then_brings_the_joints_o
     for m in JOINTS:
         assert events[events.index(f"torque on {m}") - 1] == f"Goal_Position {m} {pose(START)[m]}"
     assert robot.gain == {**{m: 16 for m in JOINTS}, "elbow_flex": 32}  # configure() set 16, then the elbow's 32
-    assert robot.limit == {**{m: 500 for m in ARM}, "gripper": 240}
+    assert robot.limit == {**{m: 500 for m in ARM}, "gripper": 500}  # the gripper at LeRobot's own 50% ceiling
     assert arm.powered == set(JOINTS) and max(shift.values()) < 0.1
     assert robot.pos == pytest.approx(pose(START))
+
+
+def test_power_on_raises_the_grippers_overload_threshold_over_its_cap_before_any_torque():
+    """configure() sets 25%, and the servo cuts an output over it for 2 s to 20%: a 50% squeeze would weaken 2 s in."""
+    arm, robot, said = make()
+    arm.power_on()
+    events = robot.events
+    assert events.index("configured") < events.index("Overload_Torque gripper 60") < events.index("torque on shoulder_pan")
+    assert robot.overload == {**{m: 80 for m in ARM}, "gripper": 60} and robot.limit["gripper"] == 500
+    assert robot.overload["gripper"] > robot.limit["gripper"] / 10
+
+
+def test_close_puts_the_grippers_overload_threshold_back_unlocked_and_then_locks_it():
+    arm, robot, said = powered()
+    arm.close()
+    events = robot.events
+    assert robot.overload["gripper"] == 25 and robot.lock == {m: 1 for m in JOINTS}
+    assert events.index("Lock gripper 0") < events.index("Overload_Torque gripper 25") < events.index("Lock gripper 1")
 
 
 def test_without_the_hold_here_goals_lerobots_setup_would_drive_every_joint_to_0():
@@ -353,6 +374,7 @@ def test_powering_the_base_alone_leaves_the_other_five_off():
 @pytest.mark.parametrize("register, joint, match", [
     ("P_Coefficient", "elbow_flex", "the elbow's gain didn't take"),
     ("Torque_Limit", "shoulder_lift", "the torque cap didn't take on the shoulder lift"),
+    ("Overload_Torque", "gripper", "the gripper's overload threshold didn't take"),
 ])
 def test_a_setting_that_doesnt_take_keeps_torque_off(register, joint, match):
     arm, robot, said = make(FakeFollower(deaf={(register, joint)}))
@@ -1273,16 +1295,17 @@ def test_close_locks_every_servo_after_a_power_on_that_tripped():
 
 def test_close_sends_a_lock_again_when_its_reply_flags_the_input_voltage():
     arm, robot, said = powered()
-    robot.flagged = {("Lock", "gripper"): 1}
+    robot.flagged = {("Lock", "wrist_roll"): 1}  # the gripper's first Lock write is now its unlock, for its threshold
     arm.close()
-    assert robot.events.count("Lock gripper 1") == 2 and robot.lock == {m: 1 for m in JOINTS}
+    assert robot.events.count("Lock wrist_roll 1") == 2 and robot.lock == {m: 1 for m in JOINTS}
 
 
 def test_close_leaves_the_caps_when_the_cut_isnt_confirmed():
     arm, robot, said = powered()
     robot.lost_cuts = 99
     arm.close()
-    assert robot.limit == {**{m: 500 for m in ARM}, "gripper": 240} and robot.events[-1].startswith("disconnect")
+    assert robot.limit == {**{m: 500 for m in ARM}, "gripper": 500} and robot.events[-1].startswith("disconnect")
+    assert robot.overload["gripper"] == 60  # left raised too, with the motors maybe still on
     assert len(said) == 1 and "so the torque caps stay as they are" in said[0]
 
 

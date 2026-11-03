@@ -1,5 +1,5 @@
 """Run the bench agent: python -m wbc.agent [--sim] [--voice] [--hear] [--speak] [--backup] [--arm] [--enter]
-[--no-prefetch]
+[--no-prefetch] [--hud] [--show]
 
 Typed lines and spoken requests go on one queue, and the router handles them one turn at a time. Before each turn,
 code fetches the bench facts in models.yaml's router.prefetch: pins.h and the sensor, and Act 1's board read, which is
@@ -21,6 +21,7 @@ Every turn is recorded in .wbc/session.json (wbc/agent/memory.py), however it en
 
 With --hud, the HUD's orb page shows each turn live at http://127.0.0.1:8766/ (wbc/agent/web_hud.py): the mic
 listening, the request, every model call with its time, the reply and its speech, and the turn's time and spend.
+With --show, for a take, it opens in a window of its own, and the board's schematic opens in KiCad (wbc/agent/show.py).
 """
 from __future__ import annotations
 
@@ -132,6 +133,8 @@ def main(argv=None) -> int:
                     help="pick up the last session (.wbc/session.json) instead of starting a new one")
     ap.add_argument("--hud", nargs="?", const=8766, type=int, metavar="PORT",
                     help="show each turn live on the HUD's orb page, at http://127.0.0.1:8766/ (or PORT)")
+    ap.add_argument("--show", action="store_true",
+                    help="for a take: the HUD (with --hud) in a window of its own, and the schematic in KiCad")
     args = ap.parse_args(argv)
 
     try:
@@ -209,6 +212,15 @@ def main(argv=None) -> int:
                                  "question": None if args.hear else question}).start()
     if args.hear:
         hud.note("mic check: nothing goes to the router. Ctrl-D quits.")
+    window = None
+    if args.show:
+        from wbc.agent import show
+        if args.hud:
+            window = show.hud_window(f"http://127.0.0.1:{args.hud}/", config.ROOT / ".wbc" / "hud-window")
+            hud.note("HUD: in a window of its own" if window else "HUD: no Chrome for its window, so open the page")
+        drawn = (bench.layout or {}).get("schematic")
+        if drawn and not args.sim:
+            hud.note(show.schematic(config.ROOT / drawn))
 
     home = True  # at the end of the input (Ctrl-D) the arm goes back to rest before its motors go off, as --help says
     try:
@@ -265,6 +277,8 @@ def main(argv=None) -> int:
         stream = getattr(bench, "desk_stream", None)
         if stream is not None:
             stream.close()
+        if window is not None:
+            window.terminate()
 
 
 def cli() -> None:

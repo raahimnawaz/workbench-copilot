@@ -32,12 +32,15 @@ TOUCHED = Path(".wbc") / "desk_tags.json"  # where touch saves the tags' centers
 NOMINAL_WIDTH = 1920  # config/desk.yaml's focal_px is for frames this wide
 STRAIGHT_DOWN = 20.0  # degrees of tilt under which one view can't tell the focal length from the camera's height
 OWN_TAGS = 2  # of the desk's own tags a camera has to show for the carrier's to count: the board camera sees those
-GRIP_STEP_MM = 2.0  # the slices along a flat thing's long axis its width is measured in, to find where to grip it
-EVEN_MM = 1.6       # how much a stretch's width may vary and still be even: two of the 0.7 mm steps a slice's width
-                    # comes in at 1 px/mm on a slant (a screwdriver's: 11.4-12.8 mm along the front of its handle,
-                    # 13.5-15.0 along its main grip, tapering between)
-WIDE = 0.75         # of its widest that an even stretch has to be to be gripped: the handle, not the shaft
-MIN_GRIP_MM = 10.0  # the shortest even stretch worth gripping, about as wide as the jaw tips
+GRIP_STEP_MM = 2.0   # the slices along a flat thing's long axis its width is measured in
+GRIP_OFF_MM = 10.0   # how far from its middle toward its narrow end a pick grips something lying flat: on a
+                     # screwdriver, its handle 1 cm from the middle toward the tip, near where it balances, so it
+                     # doesn't tip in the jaws
+GRIP_SPAN_MM = 10.0  # how much of it around there its width is measured over, about as wide as the jaw tips
+END_SHARE = 0.25     # of its length at each end that's compared to tell its narrow end (a screwdriver's shaft,
+                     # 4-8 mm) from its wide one (the handle's cap end, 12-13)
+NARROWER_MM = 2.0    # how much narrower one end has to be to count as the narrow end: a mask's edges come in
+                     # 0.7 mm steps at 1 px/mm on a slant
 
 
 @dataclass
@@ -267,36 +270,29 @@ def _lying(shadow: np.ndarray) -> tuple:
 
 
 def _grip(d: np.ndarray, middle: np.ndarray, major: np.ndarray, minor: np.ndarray) -> tuple | None:
-    """((x, y), width) where a pick grips something flat whose mask's points are `d` from its `middle`: the middle of
-    its widest even stretch (the longer of two as wide), measured in GRIP_STEP_MM slices along its long axis, among
-    stretches WIDE of its widest or more and MIN_GRIP_MM long; None when it has none. Jaws closing where a handle
-    tapers squeeze it out (a screwdriver's middle is where its handle narrows toward the shaft), and a tool's widest
-    even stretch is usually its grip."""
+    """((x, y), width) where a pick grips something flat whose mask's points are `d` from its `middle`: GRIP_OFF_MM
+    from the middle along its long axis toward its narrow end, on its centre line there, with its width over
+    GRIP_SPAN_MM around that, measured in GRIP_STEP_MM slices. The narrow end is the one whose END_SHARE of its length
+    is NARROWER_MM narrower or more. None when it's too short to grip that far off its middle, or about as wide at both
+    ends: then a pick grips its middle."""
     s, t = _along(d, major), _along(d, minor)
     lo, hi = _span(s)
     starts = np.arange(lo, hi, GRIP_STEP_MM)
-    widths, centres = np.zeros(len(starts)), np.zeros(len(starts))
+    widths, centres = np.full(len(starts), np.nan), np.full(len(starts), np.nan)
     for k, a in enumerate(starts):
         across = t[(s >= a) & (s < a + GRIP_STEP_MM)]
         if len(across):
             widths[k], centres[k] = across.max() - across.min(), (across.max() + across.min()) / 2
-    wide = widths >= WIDE * widths.max()
-    best = None
-    for i in range(len(starts)):
-        j = i
-        while wide[j] and j + 1 < len(starts) and wide[j + 1] and np.ptp(widths[i:j + 2]) <= EVEN_MM:
-            j += 1
-        length = (j - i + 1) * GRIP_STEP_MM
-        if not wide[i] or length < MIN_GRIP_MM:
-            continue
-        key = (round(float(widths[i:j + 1].mean()), 1), length)
-        if best is None or key > best[0]:
-            best = (key, i, j)
-    if best is None:
+    end = max(1, round(END_SHARE * len(starts)))
+    low_end, high_end = np.nanmedian(widths[:end]), np.nanmedian(widths[-end:])
+    if not (abs(low_end - high_end) >= NARROWER_MM and lo + GRIP_SPAN_MM / 2 <= -GRIP_OFF_MM
+            and GRIP_OFF_MM <= hi - GRIP_SPAN_MM / 2):
         return None
-    _, i, j = best
-    along, across = (starts[i] + starts[j] + GRIP_STEP_MM) / 2, float(centres[i:j + 1].mean())
-    return middle + along * major + across * minor, float(np.median(widths[i:j + 1]))
+    at = GRIP_OFF_MM if high_end < low_end else -GRIP_OFF_MM
+    near = np.abs(starts + GRIP_STEP_MM / 2 - at) <= GRIP_SPAN_MM / 2
+    if not np.any(near & ~np.isnan(widths)):
+        return None
+    return middle + at * major + float(np.nanmean(centres[near])) * minor, float(np.nanmedian(widths[near]))
 
 
 def _standing(shadow: np.ndarray, desk: DeskFit, height_mm: float) -> tuple:

@@ -57,7 +57,7 @@ past its target by how far its joint stopped short, ramped under the same speed 
 until each joint is within AIM of its target, for up to AIM_ROUNDS rounds.
 
 The gripper moves on its own goal. release() opens it to a share of its range, and grip() closes it on what's between
-its jaws and keeps squeezing, under its 24% cap, saying whether the jaws stopped on something. While it grips, jaws
+its jaws and keeps squeezing, under its GRIPPER_CAP, saying whether the jaws stopped on something. While it grips, jaws
 closing further because what they held slipped out are following their goal, not straying, so a move doesn't cut the
 arm for it, and hold() keeps the squeeze.
 
@@ -82,7 +82,12 @@ from .trajectory import PEAK, joint_path, lowest, min_seconds
 
 HZ = 50.0               # goal writes per second during a move
 TORQUE_CAP = 50         # percent of full torque on the arm joints (each servo's Torque_Limit)
-GRIPPER_CAP = 24        # percent on the gripper: under the 25% where the overload protection configure() sets starts
+GRIPPER_CAP = 50        # percent on the gripper: LeRobot's own ceiling for it (Max_Torque_Limit 500, "to avoid
+                        # burnout"), twice the 24% it squeezed at before, so a screwdriver held by its handle stays put.
+                        # At P 32 a ~12 mm handle stops the jaws far enough from closed for the cap to set the squeeze
+GRIPPER_OVERLOAD = 60   # percent: the gripper's overload threshold (Overload_Torque) while powered. configure() sets
+                        # 25, and the servo cuts an output over it for its Protection_Time (2 s) to its Protective_Torque
+                        # (20%), as read from the servo, so a squeeze at GRIPPER_CAP would weaken 2 s in
 MAX_JUMP = 3.0          # degrees a joint may move on its own as its torque comes on before every motor is cut
 MAX_STRAY = 5.0         # degrees a joint may be from where it should be during a move before every motor is cut
 MAX_STEP = 5.0          # degrees: no goal goes further than this from where its joint is (LeRobot's max_relative_target)
@@ -126,8 +131,8 @@ GRIP_FLOOR = 0.001      # metres over the table (its margin included) the tool p
                         # over it). The cut for sagging SAG under this floor would come only under the desk,
                         # which stops the tips first; the stray cut still guards every joint on the short way down
 GRIPPER_SPEED = 60.0    # degrees per second the gripper's goal may reach at a release's peak: fully open in about 4 s.
-                        # The jaw pushes about 2.4% of drive per degree it trails its goal, so under its 24% cap it
-                        # tops out about 110°/s, 10° behind, where GRIP_LAG stops it; at 60°/s it trails 4-6°
+                        # The jaw pushes about 2.4% of drive per degree it trails its goal, so under a 24% cap it
+                        # topped out about 110°/s, 10° behind, where GRIP_LAG stops it; at 60°/s it trailed 4-6°
 GRIP_SPEED = 60.0       # and at a grip's, so the jaws meet what they close on without a knock
 GRIP_LAG = 10.0         # degrees the jaw may trail its goal before release() stops it where it is: something's in the way
 GRIP_CLEAR = 30         # raw ticks from its closed end the jaw has to start a grip at
@@ -267,6 +272,7 @@ class Arm:
         self.powered = set()
         self._jaw_goal, self._gripping = None, False  # the gripper's goal in raw ticks, and whether grip() set it
         self._limits = None  # each servo's Torque_Limit before the first power-on, for close() to put back
+        self._overload = None  # the gripper's Overload_Torque as configure() set it, for close() to put back
         # How far each arm joint stopped short of the last move_to's target before any re-aim, radians in ARM order:
         # its load over its P gain, so a pose nearby with about the same load stops about as short. None until a move
         self.stopped_short = None
@@ -359,7 +365,7 @@ class Arm:
         brings it on, and confirms its torque-on. The other joints' goals aren't written, so they stay off. Refused,
         with nothing written, after a cut until clear_stop(), if torque is already on anywhere (configure() turns every
         motor off first, which would drop a held arm), or if check() refuses. RuntimeError, with torque still off, if
-        LeRobot's setup fails or a gain or a cap doesn't read back. Tripped, with every motor cut, if a joint's goal
+        LeRobot's setup fails or a gain, a cap or the gripper's overload threshold doesn't read back. Tripped, with every motor cut, if a joint's goal
         doesn't read back, it moves more than MAX_JUMP as it comes on, a cut arrives from elsewhere, or the bus fails.
         A reply that flags the input voltage is sent again (_flagged). `samples`, when given, gets every reading of
         the watch."""
@@ -395,6 +401,10 @@ class Arm:
                 self._flagged(bus.write, "P_Coefficient", m, p, normalize=False, num_retry=2)
                 if self._flagged(bus.read, "P_Coefficient", m, normalize=False, num_retry=2) != p:
                     raise RuntimeError(f"the {NAMES[m]}'s gain didn't take, so torque stayed off")
+            self._overload = self._flagged(bus.read, "Overload_Torque", "gripper", normalize=False, num_retry=2)
+            self._flagged(bus.write, "Overload_Torque", "gripper", GRIPPER_OVERLOAD, normalize=False, num_retry=2)
+            if self._flagged(bus.read, "Overload_Torque", "gripper", normalize=False, num_retry=2) != GRIPPER_OVERLOAD:
+                raise RuntimeError("the gripper's overload threshold didn't take, so torque stayed off")
             for m in JOINTS:
                 self._flagged(bus.write, "Torque_Limit", m, self.caps[m], normalize=False, num_retry=2)
             caps = bus.sync_read("Torque_Limit", normalize=False, num_retry=2)
@@ -583,6 +593,13 @@ class Arm:
                     try:
                         self._flagged(bus.write, "Torque_Limit", m, value, normalize=False, num_retry=2)
                     except Exception:  # noqa: BLE001 - Torque_Limit is in RAM, so a power cycle restores it anyway
+                        pass
+                if self._overload is not None:  # EEPROM, locked again at torque-on, so unlocked to write
+                    try:
+                        self._flagged(bus.write, "Lock", "gripper", 0, normalize=False, num_retry=2)
+                        self._flagged(bus.write, "Overload_Torque", "gripper", self._overload, normalize=False,
+                                      num_retry=2)
+                    except Exception:  # noqa: BLE001 - configure() sets it back at the next power-on anyway
                         pass
             if self._limits is not None:  # this Arm ran LeRobot's setup, which unlocks every servo
                 for m in JOINTS:

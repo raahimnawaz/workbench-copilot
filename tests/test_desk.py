@@ -192,38 +192,45 @@ def test_a_flat_things_middle_size_and_heading():
     assert f.heading_deg == pytest.approx(30, abs=1) and f.top_z == pytest.approx(0)
     assert f.reach_mm == pytest.approx(math.hypot(280, 60), abs=1)
     assert f.summary()["x_mm"] == pytest.approx(280, abs=1)
-    assert np.linalg.norm(f.grip - (280, -60)) < 2 and f.grip_width_mm == pytest.approx(22, abs=2)  # even all along
+    assert f.grip is None and "grip_x_mm" not in f.summary()  # as wide at both ends: gripped at its middle
 
 
-@pytest.mark.parametrize("heading", [0, 49, -70])
-def test_something_flat_is_gripped_at_its_widest_even_stretch_not_where_it_tapers(heading):
-    # the Nov 2 screwdriver, along its axis from the tip: a 36 mm shaft tapering 4 to 8 mm, the front of its handle
-    # 26 mm at 12, a taper, then its main grip 24 mm at 15, and its cap end at 13
-    fit = desk.fit(detections(Camera(*OVERHEAD)), TOUCHED, SIZE, F)
+def screwdriver_mask(heading, start=(200.0, -60.0)):
+    """The Nov 2 screwdriver's footprint in the top-down view, along its axis from the tip: a 36 mm shaft tapering 4
+    to 8 mm, the front of its handle 26 mm at 12, a taper, then its main grip 24 mm at 15, and its cap end at 13."""
     M = desk.view_matrix(CFG["region_mm"], CFG["px_per_mm"])
     a = math.radians(heading)
     axis, across = np.array([math.cos(a), math.sin(a)]), np.array([-math.sin(a), math.cos(a)])
     mask = np.zeros((580, 900), np.uint8)
-    start = np.array([200.0, -60.0])
+    start = np.asarray(start)
     for s0, length, w0, w1 in ((0, 36, 4, 8), (36, 26, 12, 12), (62, 4, 12, 15), (66, 24, 15, 15), (90, 20, 13, 13)):
         corners = [start + (s0 * axis) + (w0 / 2) * across, start + ((s0 + length) * axis) + (w1 / 2) * across,
                    start + ((s0 + length) * axis) - (w1 / 2) * across, start + (s0 * axis) - (w0 / 2) * across]
         cv2.fillConvexPoly(mask, np.round(tagmap.to_mm(M, np.array(corners))).astype(np.int32), 1)
-    f = desk.found(mask.astype(bool), np.linalg.inv(M), fit, 0.0, "screwdriver", 0.9)
+    return mask.astype(bool), np.linalg.inv(M), start, axis, across
+
+
+@pytest.mark.parametrize("heading", [0, 49, -70, 115])
+def test_something_flat_is_gripped_1_cm_off_its_middle_toward_its_narrow_end(heading):
+    # Nov 2: on the screwdriver, its handle 1 cm from the middle toward the tip, near where it balances
+    fit = desk.fit(detections(Camera(*OVERHEAD)), TOUCHED, SIZE, F)
+    mask, to_arm, start, axis, across = screwdriver_mask(heading)
+    f = desk.found(mask, to_arm, fit, 0.0, "screwdriver", 0.9)
 
     def along(p):
         return float(np.dot(np.asarray(p) - start, axis))
-    assert 66 + 4 <= along(f.grip) <= 90 - 4 and f.grip_width_mm == pytest.approx(15, abs=1.5)  # on the main grip
+    assert 58 <= along(f.center) <= 70  # its middle, on the handle
+    assert along(f.grip) == pytest.approx(along(f.center) - desk.GRIP_OFF_MM, abs=1)  # toward the tip, not the cap
     assert abs(float(np.dot(f.grip - start, across))) < 2  # on its centre line
-    assert 58 <= along(f.center) <= 70  # its middle, where a pick went before, is on the taper
+    assert f.grip_width_mm == pytest.approx(12, abs=1.5)  # the front of the handle
     assert f.summary()["grip_x_mm"] == pytest.approx(f.grip[0], abs=0.1)
 
 
-def test_something_with_no_even_stretch_long_enough_is_gripped_at_its_middle():
+def test_something_too_short_to_grip_off_its_middle_is_gripped_at_its_middle():
     fit = desk.fit(detections(Camera(*OVERHEAD)), TOUCHED, SIZE, F)
     M = desk.view_matrix(CFG["region_mm"], CFG["px_per_mm"])
     mask = np.zeros((580, 900), np.uint8)
-    wedge = np.array([[200.0, -60.0], [300.0, -40.0], [300.0, -80.0]])  # 40 mm wide at one end, a point at the other
+    wedge = np.array([[200.0, -60.0], [218.0, -50.0], [218.0, -70.0]])  # 18 mm long, 20 mm wide at one end
     cv2.fillConvexPoly(mask, np.round(tagmap.to_mm(M, wedge)).astype(np.int32), 1)
     f = desk.found(mask.astype(bool), np.linalg.inv(M), fit, 0.0, "wedge", 0.9)
     assert f.grip is None and "grip_x_mm" not in f.summary()
