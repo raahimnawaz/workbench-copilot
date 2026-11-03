@@ -188,6 +188,8 @@ class Hand:
         hand = robot_cfg.get("hand") or {}
         self.across_roll = float(hand.get("across_roll_deg", 0.0))
         self.rest = None   # where power_on found the arm, just inside its ranges: home() goes back there
+        idle = hand.get("idle_deg")
+        self.idle_q = np.radians(np.asarray(idle, float)) if idle is not None else None  # see idle()
         self.held = None   # the name of what the jaws hold, from pick_up until put_down
         self.held_thing = None  # it, as locate found it, for a put into a container: its length and narrow end
         self.held_tip = None    # where its narrow end points, degrees from the jaw axis; None when it has none
@@ -398,6 +400,16 @@ class Hand:
     def move_to(self, xyz_mm, pitch_deg: float = 90.0, jaws_deg: float | None = None, seconds: float | None = None):
         """Move the tool point to xyz_mm, solved by solve(), through the driver's move_to. Returns its last reading."""
         return self.arm.move_to(self.solve(xyz_mm, pitch_deg, jaws_deg), seconds)
+
+    def idle(self):
+        """Wait in the idle pose, robot.yaml's hand.idle_deg (the L pose with the gripper pointing down), with the
+        motors on. Only empty-handed: holding something, the arm waits where the pick left it. None without an idle
+        pose. Unlike rest, the arm can't stay here with its motors off, so the end of a session parks it at rest."""
+        if self.idle_q is None:
+            return None
+        if self.held:
+            raise Refused(f"it holds the {self.held}, so it waits where it is instead of in the idle pose")
+        return self.arm.move_to(self.idle_q, samples=self._samples("idle"))
 
     def home(self):
         """Back to where power_on found the arm, just inside its ranges."""

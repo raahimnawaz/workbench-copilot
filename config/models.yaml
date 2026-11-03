@@ -30,6 +30,7 @@ coder:
   compile_cmd: pio run -d firmware/dut_demo   # runs in a sandbox copy; leave empty to skip
   compile_dir: firmware/dut_demo
   compile_timeout_s: 180
+  retries: 1                        # a diff that doesn't apply or compile goes back once, with the error
 
 eyes:
   model: sam-3.1                    # request format from dev.meta.ai/docs/sam: one noun phrase per request
@@ -77,6 +78,7 @@ open:                               # Muse Spark Open on Baseten: questions no t
   base_url: https://inference.baseten.co/v1
   key_env: BASETEN_API_KEY          # from the environment or .env; without it, every question goes to the router
   label: Spark Open
+  timeout_s: 20                     # then the router answers instead
 
 backup:                             # open-weights router served on your own machine
   model: muse-glimmer-30b           # the name your local server registers
@@ -91,6 +93,7 @@ memory:                             # what outlives a conversation (wbc/agent/me
   compact_at_tokens: 60000
   keep_turns: 40                    # ...or once this many turns have piled up since the last summary
   notebook_in_prompt: 20            # newest notes the router sees every turn; recall finds the rest
+  # embeddings: {base_url: http://127.0.0.1:8091/v1, model: <name>}   # optional: matches by meaning beside words
 
 budget:
   # Hard stop. Every paid call checks it first, and the agent, coder, voice and smoke test stop once

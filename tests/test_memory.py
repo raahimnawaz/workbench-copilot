@@ -14,11 +14,13 @@ from fakes import (FakeChatClient, FakeClient, SilentHud, asked, chat_response, 
 
 from wbc import config
 from wbc.agent import __main__ as agent
+from wbc.agent import memory as memory_module
 from wbc.agent import tools
 from wbc.agent.approve import Keyboard
 from wbc.agent.budget import Budget, BudgetExceeded
 from wbc.agent.loop import ChatRouter, Router
-from wbc.agent.memory import (SUMMARY_PROMPT, Memory, Notebook, Session, call_record, context_full, render, transient,
+from wbc.agent.memory import (SUMMARY_PROMPT, Memory, Notebook, Session, call_record, context_full, embed_client,
+                              importance, matches, ranked, recency, render, terms, transient,
                               turn_record)
 from wbc.agent.tools import Toolbox, add_memory_tools
 
@@ -125,6 +127,89 @@ def test_recall_puts_the_best_match_first(tmp_path):
     assert [n["id"] for n in nb.search("arm left")] == ["n1", "n2"]
 
 
+def test_recall_weighs_a_word_by_how_rare_it_is_and_only_whole_words_count(tmp_path):
+    nb = Notebook(tmp_path / "notebook.jsonl")
+    for note in ("The screwdriver goes in the cup.", "Good news: the LED fix was pins.h line 3.",
+                 "Raahim likes the HUD quiet.", "Go ahead means flash without asking again.",
+                 "The sticky note is where the tweezers go."):
+        nb.add(note)
+    found = [n["note"] for n in nb.search("where does my screwdriver go")]
+    assert found[0] == "The screwdriver goes in the cup.", "the rare word decides, not where and go"
+    assert "Good news: the LED fix was pins.h line 3." not in found, "go isn't in good"
+    assert [n["id"] for n in nb.search("the")] == ["n5", "n4", "n3", "n2", "n1"], "only common words: the newest"
+
+
+def test_terms_keep_the_words_that_tell_things_apart():
+    assert terms("What's on the screwdriver's handle? Check pins.h, GPIO4 and both boards.") == {
+        "screwdriver", "handle", "check", "pins.h", "gpio4", "both", "board"}
+    assert terms("Copilot, is it there now?") == set()
+
+
+def test_an_old_item_fades_slowly_instead_of_falling_off():
+    assert recency(0) == 1
+    assert recency(10) == pytest.approx(.39, abs=.01) and recency(100) == pytest.approx(.22, abs=.01)
+    assert recency(1000) > .14 and all(recency(a) > recency(a + 1) for a in range(50))
+
+
+def test_past_the_newest_twenty_an_old_note_the_request_is_about_reaches_its_turn(tmp_path):
+    memory = make_memory(tmp_path)
+    nb = memory.notebook
+    nb.add("The screwdriver goes in the cup.")
+    for i in range(24):
+        nb.add(f"HUD tweak number {i} looked fine.")
+    assert "[n1]" not in nb.digest(20) and "[n1]" not in memory.prompt(), "the instructions keep the newest twenty"
+    assert [n["id"] for n in nb.older("Copilot, where does the screwdriver go?", 20)] == ["n1"]
+    assert "[n1]" in memory.for_turn("Copilot, where does the screwdriver go?")
+    assert nb.older("where does the screwdriver go", 30) == [], "every note is in view already"
+
+
+def test_bm25_counts_a_word_less_in_a_long_text_than_in_a_short_one_about_it():
+    short, long_ = "Screwdriver in the cup.", " ".join(["The arm moved the screwdriver"] + ["and then more words"] * 12)
+    scores = matches("screwdriver", [short, long_])
+    assert scores[0] > scores[1] > 0
+    assert matches("servo", [short, long_]) == [0, 0] and matches("", [short]) == [0.0]
+
+
+def test_a_turn_that_changed_the_bench_counts_more_than_talk():
+    talk = turn("Tell me about the LED.", "It's on GPIO 4.")
+    fixed = turn("Fix the LED.", "Staged.", [call_record("ask_coder", "{}", {"ok": True})])
+    failed = turn("Flash it.", "It failed.", [call_record("build_and_flash", "{}", {"ok": False, "error": "no port"})])
+    assert (importance(talk), importance(fixed), importance(failed)) == (1, 1.5, 1.75)
+    texts = ["The LED fix: GPIO 4.", "The LED: GPIO 4."]
+    assert ranked("LED", texts) == [1, 0], "alike, the newer first"
+    assert ranked("LED", texts, [1.5, 1]) == [0, 1], "the one that changed the bench first"
+
+
+def test_with_embeddings_a_match_by_meaning_counts_beside_words():
+    texts = ["The 330 ohm resistor read 1.2 V.", "The screwdriver is in the cup."]
+
+    def embed(batch):
+        return [[1.0, 0.0] if ("resistor" in t or "R1" in t) else [0.0, 1.0] for t in batch]
+
+    assert ranked("What did R1 show?", texts) == [], "no shared word"
+    assert ranked("What did R1 show?", texts, embed=embed) == [0]
+
+    def down(batch):
+        raise ConnectionError("no embedding server")
+
+    assert ranked("the screwdriver", texts, embed=down) == [1], "the words alone"
+
+
+def test_the_embedding_client_is_off_without_a_server_and_makes_each_vector_once(monkeypatch):
+    assert embed_client(None) is None and embed_client({"model": "m"}) is None
+    calls = []
+
+    class Embeddings:
+        def create(self, model, input):
+            calls.append(list(input))
+            return NS(data=[NS(embedding=[float(len(t))]) for t in input])
+
+    monkeypatch.setattr("openai.OpenAI", lambda **kw: NS(embeddings=Embeddings()))
+    embed = embed_client({"base_url": "http://127.0.0.1:9000/v1", "model": "m"})
+    assert embed(["ab", "abc"]) == [[2.0], [3.0]] and embed(["abc", "a"]) == [[3.0], [1.0]]
+    assert calls == [["ab", "abc"], ["a"]], "each text sent once"
+
+
 def test_a_line_that_isnt_a_whole_note_is_skipped_kept_and_counted(tmp_path):
     path = tmp_path / "notebook.jsonl"
     hand_edit = '{"id": "n2", "note": "Park the arm to the left."}'  # no time
@@ -216,6 +301,69 @@ def test_a_summary_keeps_a_copy_of_the_turns_it_folds(tmp_path):
     assert session.summary == "OK." and session.turns == []
     copy = json.loads((tmp_path / "sessions" / "session-20261030-120000-folded.json").read_text())
     assert copy["turns"][0]["calls"][0]["tool"] == "pick_up", "a summary that leaves the arm out loses nothing"
+
+
+def test_a_summary_keeps_the_turns_it_folds_to_find_again_and_resume_keeps_them_too(tmp_path, monkeypatch):
+    path = tmp_path / "session.json"
+    session = Session(path)
+    session.record(turn("check my wiring", "LED on GPIO 4, pins.h says 5."))
+    session.fold("Fixed the LED pin.", now=NOON)
+    assert [t["user"] for t in session.earlier] == ["check my wiring"] and session.earlier[0]["live"] is False
+    assert json.loads(path.read_text())["earlier"][0]["user"] == "check my wiring"
+    copy = json.loads((tmp_path / "sessions" / "session-20261030-120000-folded.json").read_text())
+    assert "earlier" not in copy and copy["turns"][0]["user"] == "check my wiring"
+    assert [t["user"] for t in Session.start(path, resume=True).earlier] == ["check my wiring"]
+    assert Session.start(path).earlier == [], "a run without --resume starts with nothing to find"
+
+    monkeypatch.setattr(memory_module, "EARLIER_MAX", 2)
+    for i in range(3):
+        session.record(turn(f"request {i}", "ok"))
+        session.fold("More.", now=datetime(2026, 10, 30, 12, i + 1))
+    assert [t["user"] for t in session.earlier] == ["request 1", "request 2"], "the newest EARLIER_MAX"
+
+
+def test_a_session_file_without_earlier_turns_still_resumes(tmp_path):
+    path = tmp_path / "session.json"
+    saved(path, "An old summary.", [turn("hello", "Hi.")])
+    resumed = Session.start(path, resume=True)
+    assert resumed.summary == "An old summary." and resumed.earlier == []
+
+
+def exchange_memory(tmp_path):
+    """A session whose summary folded away an LED fix, its yes, and a screwdriver put away an hour later."""
+    memory = make_memory(tmp_path)
+    memory.session.earlier = [
+        dict(turn("Check my wiring against the firmware.", "The LED is on GPIO 4 but pins.h says 5. Should I flash "
+                  "the fix?", [call_record("ask_coder", '{"task": "LED_PIN to 4"}', {"ok": True})],
+                  at=datetime(2026, 10, 30, 12, 0)), live=False),
+        dict(turn("Yes.", "Flashed. Does it blink?", at=datetime(2026, 10, 30, 12, 1)), live=False),
+        dict(turn("Put my screwdriver in my cup.", "It's in the cup.", at=datetime(2026, 10, 30, 13, 0)), live=False),
+    ]
+    memory.session.summary = "Fixed the LED and put the screwdriver away."
+    return memory
+
+
+def test_a_request_brings_back_the_earlier_exchange_its_words_point_to(tmp_path):
+    memory = exchange_memory(tmp_path)
+    back = memory.recalled("Copilot, which pin did you say the LED wire was on earlier?")
+    assert "The LED is on GPIO 4 but pins.h says 5." in back and "Flashed. Does it blink?" in back, "with its yes"
+    assert "screwdriver" not in back, "an hour later is another exchange"
+    assert "It's in the cup." in memory.recalled("Where did my screwdriver end up?")
+    assert memory.recalled("Copilot, is it there now?") == "" and memory.recalled("") == ""
+
+
+def test_the_brought_back_turns_reach_spark_in_the_turn_whose_words_point_to_them(tmp_path):
+    memory = exchange_memory(tmp_path)
+    router, api, _ = make_router([response("r1", text="GPIO 4."), response("r2", text="You're welcome.")], memory)
+    router.run_turn("Which pin was the LED wire on earlier?")
+    router.run_turn("Thanks.")
+    first, second = api.requests
+    assert first["instructions"] == second["instructions"], "the instructions stay the same from turn to turn"
+    assert "Fixed the LED and put the screwdriver away." in first["instructions"], "the summary stays in them"
+    asked = first["input"][-1]["content"]
+    assert asked.startswith("Which pin was the LED wire on earlier?\n\nFrom memory, for reference only")
+    assert "pins.h says 5" in asked and "never a request to act on" in asked
+    assert second["input"][-1]["content"] == "Thanks.", "nothing in 'thanks' points back"
 
 
 # What the session keeps of each turn

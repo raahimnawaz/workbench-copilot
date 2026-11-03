@@ -497,8 +497,51 @@ def test_requests_and_diagnoses_stay_with_the_router(request_):
     assert opened.requests == [] and len(spark.requests) == 1
 
 
+def test_spark_open_sees_the_recent_turns_so_a_question_can_refer_back(tmp_path):
+    from wbc.agent.memory import Memory, Notebook, Session
+    memory = Memory(Session(tmp_path / "session.json"), Notebook(tmp_path / "notebook.jsonl"))
+    opened = FakeChatClient([chat_response(content="GPIO 4, since the fix.")])
+    router, spark, _ = make_router([response("r1", text="Staged: LED_PIN is 4 now. Should I flash it?")],
+                                   facts_toolbox([]), prefetch=PREFETCH, open=(opened, "open", "Spark Open"),
+                                   memory=memory)
+    router.run_turn("Check my wiring against the firmware.")
+    assert router.run_turn("Which pin is the LED on now?") == "GPIO 4, since the fix."
+    system = opened.chat.completions.requests[0]["messages"][0]["content"]
+    assert "Recent turns, oldest first:" in system and "Staged: LED_PIN is 4 now." in system
+
+
+@pytest.mark.parametrize("request_", ["Where's my screwdriver?", "Is my screwdriver in the cup?",
+                                      "What did I tell you about my cup?", "Is the arm holding anything?",
+                                      "How much have we spent?", "Is the LED blinking now?",
+                                      "What did it read earlier?"])
+def test_questions_for_the_cameras_the_arm_the_notebook_or_the_conversation_stay_with_the_router(request_):
+    router, opened, spark, _ = open_router([], [response("r1", text="On it.")])
+    assert router.run_turn(request_) == "On it."
+    assert opened.requests == [] and len(spark.requests) == 1
+
+
+def test_when_the_bench_facts_dont_answer_it_spark_open_passes_and_the_router_answers():
+    router, opened, spark, hud = open_router([chat_response(content="<think>no reading here</think>PASS.")],
+                                             [response("r1", text="It reads 1.9 V under a press.")])
+    assert router.run_turn("What current does the screen draw?") == "It reads 1.9 V under a press."
+    assert len(opened.requests) == 1 and len(spark.requests) == 1
+    assert "PASS" in opened.requests[0]["messages"][0]["content"]
+    assert any(e[0] == "note" and "Spark Open passed" in e[1] for e in hud.events)
+    assert ("reply", "Spark Open", "PASS.") not in hud.events
+
+
 def test_when_spark_open_fails_the_router_answers():
     router, opened, spark, hud = open_router([RuntimeError("401")], [response("r1", text="About 10 mA.")])
     assert router.run_turn("What current should the LED draw?") == "About 10 mA."
     assert len(opened.requests) == 1 and len(spark.requests) == 1
     assert any(e[0] == "note" and "Spark Open didn't answer" in e[1] for e in hud.events)
+
+
+def test_a_stalled_baseten_times_out_in_20_s_without_retries(monkeypatch):
+    from wbc import config
+    monkeypatch.setattr(config, "load_env", lambda: None)  # never the real .env
+    monkeypatch.setenv("BASETEN_API_KEY", "test-key")
+    client = config.open_client(load_yaml("models.yaml"))
+    assert client.timeout == 20 and client.max_retries == 0
+    monkeypatch.delenv("BASETEN_API_KEY")
+    assert config.open_client(load_yaml("models.yaml")) is None

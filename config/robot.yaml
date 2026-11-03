@@ -64,6 +64,13 @@ hand:
   # from straight down until it's on end over the opening and lets go once its lower end is inside the rim. The
   # height here wins over any given in the request, since it's measured: the mug, just under 4 in.
   containers: {cup: 98, mug: 98}
+  # Where the arm waits between requests, empty-handed, with its motors on (URDF degrees: pan, lift, elbow, wrist flex,
+  # wrist roll): the L pose with the gripper pointing straight down, the jaw tips about 230 mm out and 100 mm over the
+  # desk. A move that worked and left the jaws empty ends here, and arm_home comes here. Holding gravity there takes
+  # about 0.42 N·m on the shoulder lift and 0.34 on the elbow (from the URDF's masses), where the folded rest takes
+  # 0.16 and 0.25. The arm can't stay here unpowered, so the end of a session still parks it at rest before the
+  # motors go off. Delete the line to have the arm wait where its last move ended.
+  idle_deg: [0, 0, 0, 90, 0]
 
 # Servo ids, and the signs wbc/motion/joints.py maps raw ticks with: q = sign * (raw - 2047) * 2 pi / 4096 radians.
 # The URDF's zero is lerobot-calibrate's Part 1 L pose (base facing forward, upper arm straight up, forearm and
