@@ -3,7 +3,7 @@
 The schematic is the design: what the board should be. `read_schematic` gives Spark its nets beside the board read (what
 the board is) and pins.h (what the firmware thinks), so a fault shows as the three disagreeing. Both come from KiCad's
 own command line (kicad-cli, from KiCad 10 at /Applications/KiCad), so nothing here parses the drawing itself.
-scripts/make_schematic.py draws hardware/demo_led.kicad_sch and demo_sensor.kicad_sch from KiCad's symbols.
+scripts/make_schematic.py draws hardware/demo_sensor.kicad_sch from KiCad's symbols.
 """
 from __future__ import annotations
 

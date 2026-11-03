@@ -21,7 +21,7 @@ echo "My force sensor isn't reading anything. Check my wiring against the firmwa
 .venv/bin/python -m wbc.agent --arm --no-prefetch               # PAID: each turn, plus $0.0025 a locate; the arm moves on the request (--enter: after Enter)
 mlx_lm.server --model mlx-community/Llama-3.2-3B-Instruct-4bit --port 8090 --prompt-cache-bytes 536870912   # free, in its own venv (pip install mlx-lm==0.32.2): the arm's fast path
 ~/kokoro-venv/bin/python -I scripts/kokoro_server.py           # free, in its own venv (pip install kokoro-onnx==0.6.1; keep its path short for espeak-ng): the voice on :8767
-.venv/bin/python scripts/make_schematic.py sensor hardware/demo_sensor.kicad_sch   # free: draws the schematic from KiCad 10's symbols (led for the LED board)
+.venv/bin/python scripts/make_schematic.py                      # free: draws hardware/demo_sensor.kicad_sch from KiCad 10's symbols
 .venv/bin/python scripts/read_board.py cameras                  # free, from Terminal.app: the cameras macOS and OpenCV see
 .venv/bin/python scripts/read_board.py check                    # free, from Terminal.app: tags and the fitted hole grid (or --photo PATH)
 .venv/bin/python scripts/read_board.py read                     # PAID, $0.0025: the whole board read, as read_breadboard does it

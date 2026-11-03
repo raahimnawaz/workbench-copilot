@@ -35,15 +35,15 @@ def fake_run(running: bool, calls: list):
 
 
 def test_the_schematic_opens_in_kicads_schematic_editor(tmp_path):
-    editor, drawn, calls = tmp_path / "Schematic Editor.app", tmp_path / "demo_led.kicad_sch", []
+    editor, drawn, calls = tmp_path / "Schematic Editor.app", tmp_path / "demo_sensor.kicad_sch", []
     editor.mkdir()
     drawn.write_text("(kicad_sch)")
     said = show.schematic(drawn, run=fake_run(False, calls), editor=editor)
-    assert calls[-1] == ["open", "-a", str(editor), str(drawn)] and said == "schematic: demo_led.kicad_sch opened in KiCad"
+    assert calls[-1] == ["open", "-a", str(editor), str(drawn)] and said == "schematic: demo_sensor.kicad_sch opened in KiCad"
 
 
 def test_the_schematic_isnt_opened_twice(tmp_path):
-    editor, drawn, calls = tmp_path / "Schematic Editor.app", tmp_path / "demo_led.kicad_sch", []
+    editor, drawn, calls = tmp_path / "Schematic Editor.app", tmp_path / "demo_sensor.kicad_sch", []
     editor.mkdir()
     drawn.write_text("(kicad_sch)")
     said = show.schematic(drawn, run=fake_run(True, calls), editor=editor)
