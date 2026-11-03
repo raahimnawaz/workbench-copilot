@@ -42,12 +42,22 @@ def test_the_schematic_opens_in_kicads_schematic_editor(tmp_path):
     assert calls[-1] == ["open", "-a", str(editor), str(drawn)] and said == "schematic: demo_sensor.kicad_sch opened in KiCad"
 
 
-def test_the_schematic_isnt_opened_twice(tmp_path):
-    editor, drawn, calls = tmp_path / "Schematic Editor.app", tmp_path / "demo_sensor.kicad_sch", []
+def test_a_running_editor_is_closed_and_its_locks_cleared_before_the_schematic_opens(tmp_path):
+    editor, drawn, calls, running = tmp_path / "Schematic Editor.app", tmp_path / "demo_led.kicad_sch", [], [True]
     editor.mkdir()
     drawn.write_text("(kicad_sch)")
-    said = show.schematic(drawn, run=fake_run(True, calls), editor=editor)
-    assert [c[0] for c in calls] == ["pgrep"] and "open already" in said
+    (tmp_path / "~demo_led.kicad_sch.lck").write_text("{}")
+
+    def run(args, **kw):
+        calls.append(args)
+        if args[0] in ("pkill", "open"):
+            running[0] = args[0] == "open"
+        return SimpleNamespace(returncode=1 if args[0] == "pgrep" and not running[0] else 0)
+
+    said = show.schematic(drawn, run=run, editor=editor, sleep=lambda s: None)
+    assert calls == [["pgrep", "-x", "eeschema"], ["pkill", "-x", "eeschema"], ["pgrep", "-x", "eeschema"],
+                     ["open", "-a", str(editor), str(drawn)], ["pgrep", "-x", "eeschema"]]
+    assert not (tmp_path / "~demo_led.kicad_sch.lck").exists() and said == "schematic: demo_led.kicad_sch opened in KiCad"
 
 
 def test_without_kicad_or_the_file_it_says_so_and_opens_nothing(tmp_path):

@@ -61,9 +61,18 @@ def test_read_schematic_says_when_bench_yaml_names_none():
 
 
 @pytest.mark.skipif(schematic.kicad_cli() is None, reason="needs KiCad 10's kicad-cli")
-def test_the_sensor_boards_schematic_puts_gpio_4_between_the_sensor_and_its_resistor():
+def test_the_led_boards_schematic_runs_gpio_4_through_the_resistor_to_the_led():
     read = toolbox(load_yaml("bench.yaml")).dispatch("read_schematic", {})
     assert read["ok"] and read["erc"] == {"errors": 0}
+    nets = {n["net"]: n["connects"] for n in read["nets"]}
+    assert nets["GPIO4"] == ["R1 pin 1 (330)", "U1 IO4"] and nets["LED_A"] == ["D1 A", "R1 pin 2 (330)"]
+    assert nets["GND"] == ["D1 K", "U1 GND"] and "U1 VDD" in nets["+3V3"]
+
+
+@pytest.mark.skipif(schematic.kicad_cli() is None, reason="needs KiCad 10's kicad-cli")
+def test_the_sensor_boards_schematic_puts_gpio_4_between_the_sensor_and_its_resistor():
+    read = schematic.read(ROOT / "hardware" / "demo_sensor.kicad_sch")
+    assert read["erc"] == {"errors": 0}
     nets = {n["net"]: n["connects"] for n in read["nets"]}
     assert nets["GPIO4"] == ["R1 pin 2 (TFS-100 force sensor)", "R2 pin 1 (10k)", "U1 IO4"]
     assert "U1 GND" in nets["GND"] and "U1 VDD" in nets["+3V3"]

@@ -3,20 +3,20 @@
  "sim": true,
  "note": "Recorded scene for --sim runs: the Act 1 board.",
  "wires": [
-  {"id": "wire:1", "color": "orange", "ends": ["a5", "a26"], "residual_mm": [0.3, 0.4]},
-  {"id": "wire:2", "color": "white", "ends": ["b26", "b30"], "residual_mm": [0.5, 0.4]},
-  {"id": "wire:3", "color": "red", "ends": ["a27", "a+"], "residual_mm": [0.3, 0.2]},
-  {"id": "wire:4", "color": "black", "ends": ["a30", "a-"], "residual_mm": [0.2, 0.1]}
+  {"id": "wire:1", "color": "black", "ends": ["a-", "a2"], "residual_mm": [0.81, 1.12]},
+  {"id": "wire:2", "color": "red", "ends": ["a26", "a5"], "residual_mm": [0.88, 0.43]},
+  {"id": "wire:3", "color": "gray", "ends": ["b42", "b26"], "residual_mm": [1.22, 1.27]},
+  {"id": "wire:4", "color": "black", "ends": ["a-", "d43"], "residual_mm": [0.49, 0.79]}
  ],
  "netlist": [
-  {"signal": "SENSOR_PIN", "wire": "wire:1", "pin": "fsr.OUT", "esp32_gpio": 4}
+  {"signal": "LED_PIN", "wire": "wire:2", "pin": "led.A", "esp32_gpio": 4}
  ],
  "mismatches": [
   {
-   "signal": "SENSOR_PIN",
-   "pins_h": 15,
+   "signal": "LED_PIN",
+   "pins_h": 5,
    "wired_to": 4,
-   "wire": "wire:1",
+   "wire": "wire:2",
    "file": "firmware/dut_demo/include/pins.h",
    "line": 5,
    "problem": "wired to a different GPIO",
@@ -24,6 +24,6 @@
    "row": "row:5"
   }
  ],
- "endpoint_residual_mm": {"mean": 0.3, "max": 0.5},
+ "endpoint_residual_mm": {"mean": 0.88, "max": 1.27},
  "problems": []
 }

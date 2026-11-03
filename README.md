@@ -6,6 +6,26 @@ An AI lab partner for the electronics bench. You talk to it hands free: say "Cop
 
 Built for the Meta Global AI Developer Hackathon (Indie track, Push the Frontier), Oct 26 – Nov 4, 2026.
 
+## How it fits together
+
+```mermaid
+flowchart TD
+  mic["Bench mic"] --> ears["Muse Voice Transcribe<br>hears every utterance"]
+  ears -->|"“Copilot, …”"| spark["Muse Spark 1.3<br>the router"]
+  ears -.->|"an arm command"| llama["Llama 3.2 3B on this Mac<br>the arm's fast path"]
+  ears -.->|"a question no tool<br>is needed for"| open["Muse Spark Open<br>on Baseten"]
+  spark -->|"ask_coder"| wonder["Muse Wonder 1.0<br>writes the firmware fix"]
+  wonder --> check["git apply --check<br>and a sandbox build"]
+  check -->|"build_and_flash,<br>once you say go"| board["ESP32 demo board"]
+  spark -->|"read_breadboard, locate"| sam["SAM 3.1 on the board<br>and desk cameras"]
+  spark -->|"pick_up, put_down,<br>move_thing"| arm["SO-101 arm"]
+  llama --> arm
+  spark -->|"add_part"| open
+  open --> kicad["KiCad: the part drawn<br>into a schematic copy,<br>rules checked"]
+```
+
+Every reply shows on the HUD, and Kokoro says it on this Mac. The dashed lines are the two routes that skip Spark; [how the router works](#how-the-router-works) gives the rules.
+
 ## Built during the hackathon, and what it builds on
 
 Everything in this repository was written during the hackathon, starting Oct 26, 2026, and the commit history dates every change. The exceptions are the vendored URDF and the two pieces of MIT-licensed code the HUD's page adapts, all listed below.
@@ -23,10 +43,11 @@ Everything in this repository was written during the hackathon, starting Oct 26,
 | `wbc/motion/carrier.py`, `scripts/register_arm.py` | Registering the arm to the carrier from points touched with the motors off, and the touch test |
 | `wbc/perception/` | The SAM 3.1 client, camera capture, the board reader (the carrier's tags, the top-down view, the hole grid fit, wire tracing, the netlist and its check against `pins.h`) and the desk camera's `locate` |
 | `scripts/` | The smoke test, the board reader and its carrier sheet, the desk camera, the joint map check and arm registration |
-| `wbc/perception/schematic.py`, `scripts/make_schematic.py`, `hardware/demo_sensor.kicad_sch` | The demo board's KiCad schematic, drawn from KiCad's own symbols, and `read_schematic`: its nets and KiCad's electrical rules check, through `kicad-cli` |
+| `wbc/perception/schematic.py`, `scripts/make_schematic.py`, `hardware/*.kicad_sch` | The demo boards' KiCad schematics, drawn from KiCad's own symbols, and `read_schematic`: their nets and KiCad's electrical rules check, through `kicad-cli` |
+| `wbc/agent/parts.py` | `add_part`: Muse Spark Open teaches itself a part from `parts.yaml` (its wiring to the DevKit's free GPIOs, its library and setup code, saved as a skill in `.wbc/skills/`), and the part is drawn into a copy of the schematic in `.wbc/schematics/`, kept only if KiCad's electrical rules check passes, and shown in KiCad with `--show` |
 | `scripts/kokoro_server.py`, `scripts/kokoro-say` | The co-pilot's voice: Kokoro-82M kept loaded on this Mac, and a stand-in for `say` that plays its audio |
-| `config/`, `fixtures/`, `tests/` | Model, bench and arm config, the recorded bench for `--sim`, 828 offline tests |
-| `firmware/dut_demo/` | Act 1's demo board: reads the force sensor and prints millivolts and the pin it reads |
+| `config/`, `fixtures/`, `tests/` | Model, bench and arm config, the recorded bench for `--sim`, 843 offline tests |
+| `firmware/dut_demo/` | Act 1's demo board: blinks an LED and logs each blink over serial |
 
 | Reused | License | Used for |
 |---|---|---|
@@ -41,7 +62,7 @@ Everything in this repository was written during the hackathon, starting Oct 26,
 | [AprilTag](https://april.eecs.umich.edu/software/apriltag)'s tag36h11 family, as built into OpenCV's ArUco module | BSD-2-Clause | The carrier's and the desk's tags |
 | [Kokoro-82M](https://huggingface.co/hexgrad/Kokoro-82M) weights, run by [kokoro-onnx](https://github.com/thewh1teagle/kokoro-onnx) with onnxruntime and espeak-ng (through espeakng-loader and phonemizer) | Apache-2.0; MIT; MIT; GPL-3.0 (espeak-ng, phonemizer) | The co-pilot's voice (Meta's API has no text-to-speech model), in its own venv: `pip install kokoro-onnx==0.6.1` |
 | macOS `say` | Part of macOS | The voice only when `mouth.command` is unset: its voices can't be in a published video |
-| [KiCad](https://www.kicad.org) 10 and its symbol libraries | GPL-3.0; CC-BY-SA-4.0 with KiCad's exception for designs | `kicad-cli` exports the schematic's netlist and runs its electrical rules check; the symbols are drawn into `hardware/demo_sensor.kicad_sch` |
+| [KiCad](https://www.kicad.org) 10 and its symbol libraries | GPL-3.0; CC-BY-SA-4.0 with KiCad's exception for designs | `kicad-cli` exports the schematics' netlists and runs their electrical rules checks; the symbols are drawn into `hardware/*.kicad_sch` |
 | Muse Spark Open (`meta-models/muse-spark-open-1026`) on [Baseten](https://www.baseten.co) | Meta's open weights, served by Baseten | Questions no tool is needed for (`open` in `models.yaml`) |
 | openai, numpy, PyYAML, httpx, sounddevice, pyserial, pytest, OpenCV, Pillow | Apache-2.0, BSD-3, MIT, BSD-3, MIT, BSD-3, MIT, Apache-2.0, MIT-CMU | Python dependencies |
 | [PlatformIO](https://platformio.org) and the [Arduino core for ESP32](https://github.com/espressif/arduino-esp32) | Apache-2.0, LGPL-2.1 | Building and flashing the demo board's firmware |
@@ -60,8 +81,9 @@ Everything in this repository was written during the hackathon, starting Oct 26,
 | Arm driver | Runs on the real arm: power-on without a jump, moves at up to 45°/s and 180 mm/s, every motor cut on a stray. |
 | Picks and puts | Run on the real arm by voice: "put my screwdriver on my sticky note" worked in 4 of its last 6 tries, the quickest 31.5 s from the request. The other two: the wrist roll's stop, which moves keep clear of now, and a note out of reach straight down. "Put my screwdriver in my cup" stood it in the mug on end, handle first, in 43 s. |
 | Board reader | Runs live: it reads the flat wires, traces the nets, and reports a wire on the wrong GPIO with the line to fix. |
-| Schematic | Offline: `read_schematic` gives the demo board's nets and a clean electrical rules check in under 1 s, and Spark gets them with the board read. Not run live yet. |
+| Schematic | Runs at start-up: `read_schematic` gives the LED board's nets and a clean electrical rules check in under 1 s, and Spark and Spark Open get them with the board read. Spark Open's answer below came from them. |
 | Spark Open | Runs live on Baseten: a question no tool is needed for goes to Spark Open with the bench facts, which answered "what should I read on GPIO4 when the LED is on?" from the schematic and the firmware in 7.4 s; anything else, or a failure, goes to Spark. |
+| Add a part | Ran live on Baseten against the LED board's schematic: Spark Open worked out the screen's wiring in 8.7 s on its first try (the ESP32's hardware SPI pins for the clock and data, free GPIOs for the rest), and KiCad's check passed on the drawn copy, about 1¢ a run. Not in a take yet. |
 | Desk camera and `locate` | Runs live: a screwdriver or a sticky note found on the desk and placed in the arm's frame. |
 | FK/IK and the joint map | 200 of 200 bench poses round-trip within 0.2 mm and 0.5°. All five joint signs checked by hand on the arm. |
 | Budget guard | Every paid call checks tracked spend first. |
@@ -84,7 +106,7 @@ The smoke test makes one small call to each hosted model and reports which model
 python -m wbc.agent --sim
 ```
 
-Then type `My force sensor isn't reading anything. Check my wiring against the firmware.` With `--sim`, `read_breadboard` returns the recorded Act 1 scene from `fixtures/`, `read_sensor` answers a press only once firmware reading the right GPIO has been "flashed", and `build_and_flash` pretends. That runs the real router and the real Wonder coder with no hardware attached.
+Then type `My LED isn't blinking. Check my wiring against the firmware.` With `--sim`, `read_breadboard` returns the recorded Act 1 scene from `fixtures/`, and `build_and_flash` pretends. That runs the real router and the real Wonder coder with no hardware attached.
 
 - `--voice` also listens on the bench mic (`ears.input_device`). Say "Copilot," and your request, or "Copilot." and then the request. Every utterance is transcribed, and only the ones addressed to the co-pilot go to the router. After a reply that asks something, a short answer such as "Yes." or "Go." needs no "Copilot," for 8 s. `--hear` is a mic check: it prints what it heard and routes nothing. The first time, macOS asks to let your terminal use the microphone.
 - With `--voice`, replies are said out loud: the first sentence or two of each, while the HUD shows all of it. The mic drops what it hears while the co-pilot speaks, so it never answers itself. `--no-speak` keeps replies on the HUD, and `--speak` says them without `--voice`. The voice is Kokoro-82M on this Mac: install it in a venv of its own with a short path (`python3 -m venv ~/kokoro-venv && ~/kokoro-venv/bin/pip install kokoro-onnx==0.6.1`), and leave `~/kokoro-venv/bin/python -I scripts/kokoro_server.py` running (`--models` names the folder with kokoro-onnx's v1.0 model files). `mouth:` in `config/models.yaml` picks the voice (the server's `/voices` lists them).
@@ -98,10 +120,37 @@ Then type `My force sensor isn't reading anything. Check my wiring against the f
 
 ## How the router works
 
-Muse Spark is the only model that talks to you and the only one that decides. Every other model sits behind a tool:
+Every utterance is transcribed, and each one takes the first path that fits:
 
-- Before Spark's first call of a turn, code fetches the bench facts it will need (`router.prefetch`): `pins.h`, the force sensor's live readings, and the board read, which is made once at start-up and kept for the session. Spark calls `read_breadboard` itself when you say the wiring changed.
-- `ask_coder` sends a task, the bench facts and up to 4 files to Muse Wonder. The diff it returns must pass `git apply --check` and a PlatformIO build in a sandbox copy, and then it's staged in the working tree, never committed. `build_and_flash` uploads it to the demo board once you say go, and `read_sensor` checks the readings answer a press.
+```mermaid
+flowchart TD
+  heard["An utterance, transcribed"] --> stop{"A stop?"}
+  stop -->|"yes, even mid-turn"| halt["The arm holds where it is;<br>waiting requests<br>are dropped"]
+  stop -->|no| wake{"Addressed<br>to it?"}
+  wake -->|no| ignored["Ignored"]
+  wake -->|yes| rules{"An arm<br>command?"}
+  rules -->|yes| llama{"Llama<br>agrees?"}
+  llama -->|yes| move["The tool runs<br>with no Spark call,<br>decided in about 0.25 s"]
+  move -->|"it worked"| reply
+  move -->|"the move failed"| spark
+  llama -->|"no, or the server is off"| spark
+  rules -->|no| question{"A question with<br>no tool needed?"}
+  question -->|yes| open["Muse Spark Open<br>on Baseten answers<br>from the bench facts"]
+  open -->|"it answered"| reply
+  open -->|"it failed"| spark
+  question -->|no| spark["Muse Spark 1.3, given<br>pins.h, the schematic<br>and the board read,<br>calling tools in parallel"]
+  spark --> reply["The reply on the HUD,<br>its first two sentences<br>said by Kokoro"]
+```
+
+- **A stop** is "Copilot, stop", or "Stop!" on its own. It's heard while a turn runs and while the co-pilot speaks, and goes straight to `Bench.halt()`.
+- **Addressed to it** means it starts with "Copilot", or answers the co-pilot's question in up to five words within 8 s.
+- **An arm command** is found by plain rules (`wbc/agent/fast_arm.py`): its kind from trigger words, its thing and place from `fast_arm` in `config/models.yaml` or a note's quoted place. Questions, a "not", "I" and "we" statements, a bare "that" and unknown things aren't. Llama 3.2 3B on `mlx_lm.server` then has to name the same kind of command.
+- **A question with no tool needed** starts with "what", "how", "is" and the like, and has none of "why", "fix", "flash", "move" and the rest.
+
+Once a request reaches Muse Spark, it decides what runs, and every other model sits behind a tool:
+
+- Before Spark's first call of a turn, code fetches the bench facts it will need (`router.prefetch`): `pins.h`, the schematic, and the board read, which is made once at start-up and kept for the session. Spark calls `read_breadboard` itself when you say the wiring changed.
+- `ask_coder` sends a task, the bench facts and up to 4 files to Muse Wonder. The diff it returns must pass `git apply --check` and a PlatformIO build in a sandbox copy, and then it's staged in the working tree, never committed. `build_and_flash` uploads it to the demo board once you say go, and Spark asks whether the LED blinks.
 - Tool calls in one round run in parallel. Every model id and price lives in `config/models.yaml`.
 - **Budget stop:** every paid call checks tracked spend first. Nothing more goes out once it reaches `budget.limit_usd` ($140, just under the $150 credit), and the HUD warns once past `budget.warn_usd` ($100). Tracked spend lives in `.wbc/spend.json` and uses the estimated prices in `models.yaml`. Calls made elsewhere aren't counted, so keep the spend alert on the Meta Billing page as the backstop.
 
@@ -112,10 +161,10 @@ Muse Spark is the only model that talks to you and the only one that decides. Ev
 1. **Tags.** The breadboard lies on a printed carrier sheet with four AprilTags (tag36h11, ids 10–13, 20 mm). Their corners map the photo onto the sheet in millimeters, so a bumped camera or a refocus doesn't move the hole grid, and there's no camera calibration to keep.
 2. **Top-down view.** Code cuts out the board area at 5.5 px/mm, about 970 × 360 px. That's under the 1008 px SAM works at, so thin wires keep their detail, and SAM's masks come back in board millimeters.
 3. **SAM 3.1 and the hole grid.** SAM segments `wire` in the view: one plain noun per request, since "jumper wire" matches nothing. Meanwhile code finds where the board really lies: it shifts, turns and scales the hole grid, within half a pitch, until the predicted holes sit on the darkest spots. The board's top stands about 10 mm above the sheet, so the camera sees it about 2% larger than life, and only the right scale lines up all 63 rows.
-4. **Wires.** Each mask is thinned to its center line and followed out to both tips. Each tip snaps to the nearest hole within 1.2 mm, and a tip farther from every hole is flagged.
-5. **Netlist and `pins.h`.** Each row's a–e and f–j strips and each rail is a node, wires join nodes, and the ESP32's and the sensor's pins sit in holes given in `config/bench.yaml`. Plain code follows each `pins.h` signal from its part's pin to the GPIO its net reaches, and reports any mismatch, its wire and hole, and the line to fix.
+4. **Wires.** Each mask is thinned to its center line and followed out to both tips. Each tip snaps to the nearest hole within 1.3 mm, and a tip farther from every hole is flagged.
+5. **Netlist and `pins.h`.** Each row's a–e and f–j strips and each rail is a node, wires join nodes, and the ESP32's and the LED's pins sit in holes given in `config/bench.yaml`. Plain code follows each `pins.h` signal from its part's pin to the GPIO its net reaches, and reports any mismatch, its wire and hole, and the line to fix.
 
-**The Act 1 board** is an ESP32 DevKit reading one force sensor through a divider: the sensor from the 3.3 V rail to a row, 10 kΩ from that row to ground, and one jumper from the DevKit's header to that row. The DevKit straddles the center channel, which leaves only column a free beside its pins, so the board carries one signal wire. Watch its readings with `.venv/bin/pio device monitor -b 115200`. The reader reads flat pre-cut jumpers: loose leads stand about 15 mm off the board, and their tips look up to 4 mm from where they go in.
+**The Act 1 board** is an ESP32 DevKit blinking an LED: one jumper from the DevKit's header to a row, 330 Ω from that row to the LED's anode, and the LED's cathode to ground. The DevKit straddles the center channel, which leaves only column a free beside its pins, so the board carries one signal wire. Watch its blinks with `.venv/bin/pio device monitor -b 115200`. A force sensor board on the same jumper (`hardware/demo_sensor.kicad_sch`) is what `read_sensor` reads. The reader reads flat pre-cut jumpers: loose leads stand about 15 mm off the board, and their tips look up to 4 mm from where they go in.
 
 ```bash
 python scripts/make_carrier.py          # .wbc/vision/carrier.pdf: print at 100%, check the 100 mm bar

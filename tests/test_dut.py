@@ -8,6 +8,9 @@ from wbc.agent.tools import Bench, build_toolbox
 from wbc.config import ROOT, load_yaml
 
 PINS = "firmware/dut_demo/include/pins.h"
+# read_sensor is the force sensor board's: Act 1's board is the LED's, so these tests bring that board's pins.h
+SENSOR_PINS_H = ("#pragma once\n\n#define SENSOR_PIN 15    // the sensor's divider, through its jumper\n"
+                 "#define SAMPLE_MS  20    // one reading every 20 ms, printed over serial\n")
 
 
 class FakePort:
@@ -65,6 +68,7 @@ def test_flash_runs_the_upload_command_on_the_port(tmp_path):
 def test_sim_sensor_answers_only_after_the_fix_is_flashed(tmp_path):
     shutil.copytree(ROOT / "firmware" / "dut_demo", tmp_path / "firmware" / "dut_demo",
                     ignore=shutil.ignore_patterns(".pio"))
+    (tmp_path / PINS).write_text(SENSOR_PINS_H)
     said = []
     tb = build_toolbox(Bench(tmp_path, load_yaml("models.yaml"), None, Budget(10, {}), sim=True, say=said.append))
     before = tb.dispatch("read_sensor", {})
@@ -76,5 +80,7 @@ def test_sim_sensor_answers_only_after_the_fix_is_flashed(tmp_path):
     assert after["responds"] and after["firmware_gpio"] == 4 and said == ["Press the sensor now."]
 
 
-def test_the_firmware_pin_is_read_from_pins_h():
-    assert dut.firmware_gpio(ROOT) == 15
+def test_the_firmware_pin_is_read_from_pins_h(tmp_path):
+    (tmp_path / PINS).parent.mkdir(parents=True)
+    (tmp_path / PINS).write_text(SENSOR_PINS_H)
+    assert dut.firmware_gpio(tmp_path) == 15

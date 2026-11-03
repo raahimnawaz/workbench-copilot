@@ -20,7 +20,6 @@ router:
     - {tool: read_breadboard, keep: true}
     - {tool: read_schematic, keep: true}   # the design, from KiCad: under 1 s
     - {tool: read_file, args: {path: firmware/dut_demo/include/pins.h}}
-    - {tool: read_sensor}               # the demo board's force sensor, live
 
 coder:
   model: muse-wonder-1.0

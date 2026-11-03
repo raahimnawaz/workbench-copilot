@@ -47,11 +47,11 @@ def test_parallel_tool_round_then_reply():
     router, api, hud = make_router([
         response("r1", [function_call("c1", "ask_coder", "{}"),
                         function_call("c2", "point_at", '{"target": "row:5"}')]),
-        response("r2", text="The sensor is on GPIO 4. Patch staged."),
+        response("r2", text="The LED is on GPIO 4. Patch staged."),
     ], slow_toolbox(log))
 
     t0 = time.monotonic()
-    assert router.run_turn("check my wiring") == "The sensor is on GPIO 4. Patch staged."
+    assert router.run_turn("check my wiring") == "The LED is on GPIO 4. Patch staged."
     assert time.monotonic() - t0 < 0.55, "tool calls should run in parallel"
     assert sorted(log) == ["coder", "row:5"]
 
@@ -63,7 +63,7 @@ def test_parallel_tool_round_then_reply():
     assert "_image" not in outputs[1]["output"]
     # the image goes after every function output, as a user message
     assert second["input"][-1]["content"][1]["image_url"].startswith("data:image/png;base64,")
-    assert router.history[-1] == {"role": "assistant", "content": "The sensor is on GPIO 4. Patch staged."}
+    assert router.history[-1] == {"role": "assistant", "content": "The LED is on GPIO 4. Patch staged."}
     assert ("call", "Wonder", "ask_coder") in hud.events
     assert router.budget.spent > 0
 
@@ -204,12 +204,12 @@ def facts_toolbox(log, board=None):
     @tb.register("read_breadboard", "", {"type": "object", "properties": {}}, label="SAM")
     def read_breadboard():
         log.append("board")
-        return dict(board or {"ok": True, "mismatches": [{"signal": "SENSOR_PIN"}]})
+        return dict(board or {"ok": True, "mismatches": [{"signal": "LED_PIN"}]})
 
     @tb.register("read_file", "", {"type": "object", "properties": {"path": {"type": "string"}}})
     def read_file(path):
         log.append(path)
-        return {"ok": True, "path": path, "text": "#define SENSOR_PIN 15"}
+        return {"ok": True, "path": path, "text": "#define LED_PIN 5"}
 
     return tb
 
@@ -217,11 +217,11 @@ def facts_toolbox(log, board=None):
 def test_bench_facts_go_out_with_the_first_call():
     """Act 1 on Oct 28 spent its first router round (4.4 s) only asking for the board read and pins.h."""
     log = []
-    router, api, hud = make_router([response("r1", text="The sensor is on 4.")], facts_toolbox(log), prefetch=PREFETCH)
+    router, api, hud = make_router([response("r1", text="The LED is on 4.")], facts_toolbox(log), prefetch=PREFETCH)
     router.run_turn("check my wiring")
     assert sorted(log) == ["board", "pins.h"] and len(api.requests) == 1
     first = api.requests[0]["input"][0]["content"]
-    assert first.startswith("check my wiring") and "SENSOR_PIN" in first and "#define SENSOR_PIN 15" in first
+    assert first.startswith("check my wiring") and "LED_PIN" in first and "#define LED_PIN 5" in first
     assert ("call", "SAM", "read_breadboard") in hud.events
 
 
@@ -233,10 +233,10 @@ def test_facts_the_conversation_has_are_not_sent_again():
     router.run_turn("two")
     second = asked(api.requests[1])
     assert second.count("unchanged since you last saw it") == 2 and "mismatches" not in second
-    board["mismatches"] = [{"signal": "SENSOR_PIN"}]
+    board["mismatches"] = [{"signal": "LED_PIN"}]
     router.run_turn("three")
     third = asked(api.requests[2])
-    assert "SENSOR_PIN" in third and third.count("unchanged") == 1  # only pins.h stayed the same
+    assert "LED_PIN" in third and third.count("unchanged") == 1  # only pins.h stayed the same
 
 
 def test_a_broken_chain_gets_every_fact_again():
@@ -268,7 +268,7 @@ def test_the_board_read_is_kept_for_the_session():
     for text in ("my LED isn't blinking", "go", "does it blink"):
         router.run_turn(text)
     assert log.count("board") == 1 and log.count("pins.h") == 3, "pins.h is still read every turn"
-    assert "SENSOR_PIN" in asked(api.requests[0])
+    assert "LED_PIN" in asked(api.requests[0])
     assert all("read_breadboard {}: unchanged since you last saw it" in asked(r) for r in api.requests[1:])
     assert sum(1 for e in hud.events if e[0] == "note" and e[1].startswith("read_breadboard: kept from")) == 2
 
@@ -374,7 +374,7 @@ def test_chat_router_gets_the_same_bench_facts():
     router = ChatRouter(FakeChatClient([chat_response(content="ok")]), "glimmer", facts_toolbox([]),
                         Budget(10, PRICES), SilentHud(), "system", prefetch=PREFETCH)
     router.run_turn("check my wiring")
-    assert "#define SENSOR_PIN 15" in router.messages[1]["content"]
+    assert "#define LED_PIN 5" in router.messages[1]["content"]
 
 
 def test_chat_router_message_order():
@@ -407,7 +407,7 @@ def test_sim_bench_tools():
     models = load_yaml("models.yaml")
     tb = build_toolbox(Bench(ROOT, models, client=None, budget=Budget(10, {}), sim=True))
     scene = tb.dispatch("read_breadboard", {})
-    assert scene["ok"] and scene["mismatches"][0]["signal"] == "SENSOR_PIN"
+    assert scene["ok"] and scene["mismatches"][0]["signal"] == "LED_PIN"
     assert "point_at" not in tb.names(), "Act 1 has no arm step: live, the stub only said it wasn't wired"
     assert "call ask_coder first" in tb.dispatch("propose_patch", {"patch_id": "p9"})["error"]
     assert set(tb.names()) >= {"read_file", "ask_coder", "propose_patch", "read_breadboard", "look"}
@@ -427,12 +427,12 @@ def test_a_kept_board_read_is_checked_against_pins_h_as_it_is_now(tmp_path, monk
 
     pins_h.write_text(buggy)  # as it was for the photo
     assert tb.recheck("read_breadboard", dict(read)) == read
-    pins_h.write_text(buggy.replace("SENSOR_PIN 15", "SENSOR_PIN 4"))  # the fix, staged
+    pins_h.write_text(buggy.replace("LED_PIN  5", "LED_PIN  4"))  # the fix, staged
     fixed = tb.recheck("read_breadboard", dict(read))
     assert fixed["mismatches"] == [] and fixed["wires"] == read["wires"] and fixed["netlist"] == read["netlist"]
     assert "_image" not in fixed, "its drawing still shows the mismatch in red"
-    pins_h.write_text(buggy.replace("SENSOR_PIN 15", "SENSOR_PIN 5"))  # another wrong pin: the same wire and hole
-    assert tb.recheck("read_breadboard", dict(read))["mismatches"] == [{**read["mismatches"][0], "pins_h": 5}]
+    pins_h.write_text(buggy.replace("LED_PIN  5", "LED_PIN  7"))  # another wrong pin: the same wire and hole
+    assert tb.recheck("read_breadboard", dict(read))["mismatches"] == [{**read["mismatches"][0], "pins_h": 7}]
 
     monkeypatch.setitem(sys.modules, "wbc.perception.netlist", None)  # --sim without the eyes extra
     monkeypatch.delattr("wbc.perception.netlist", raising=False)
@@ -455,7 +455,7 @@ def test_nothing_the_agent_reads_by_default_says_where_the_bug_is():
 def test_read_file_refuses_paths_outside_the_repo():
     tb = build_toolbox(Bench(ROOT, load_yaml("models.yaml"), None, Budget(10, {})))
     assert tb.dispatch("read_file", {"path": "../../etc/passwd"})["ok"] is False
-    assert "SENSOR_PIN" in tb.dispatch("read_file", {"path": "firmware/dut_demo/include/pins.h"})["text"]
+    assert "LED_PIN" in tb.dispatch("read_file", {"path": "firmware/dut_demo/include/pins.h"})["text"]
 
 
 def test_schemas_in_both_formats():
@@ -483,7 +483,7 @@ def test_a_question_no_tool_is_needed_for_goes_to_spark_open_with_the_bench_fact
     router, opened, spark, hud = open_router([chat_response(content="<think>3.3 V over 330</think>About 10 mA.")])
     assert router.run_turn("What current should the LED draw?") == "About 10 mA."
     system = opened.requests[0]["messages"][0]["content"]
-    assert "#define SENSOR_PIN 15" in system and "SENSOR_PIN" in system  # pins.h and the board read
+    assert "#define LED_PIN 5" in system and "LED_PIN" in system  # pins.h and the board read
     assert "tools" not in opened.requests[0] and spark.requests == []
     assert ("reply", "Spark Open", "About 10 mA.") in hud.events
     assert router.budget.spent > 0
