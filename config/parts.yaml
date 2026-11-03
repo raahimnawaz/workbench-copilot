@@ -23,6 +23,9 @@ modules:
   # so OUT is just the pin wired to the divider and the GPIO.
   tfs100:
     legs: [OUT, VCC]
+  # A 5 mm LED, Act 1's board. Its legs go in two neighboring rows, the anode (A, the longer leg) first.
+  led_5mm:
+    legs: [A, K]
   # 0.96" SSD1306 OLED, 7-pin SPI (the UMLIFE modules), left to right with the text upright. Not on the demo board:
   # add_part draws it into the schematic.
   ssd1306_spi_7:

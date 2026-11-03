@@ -1,6 +1,6 @@
-// Demo board wiring: a force sensor from 3.3 V to SENSOR_PIN, with 10 kOhm from SENSOR_PIN to GND.
-// Pressing the sensor lowers its resistance, so SENSOR_PIN's voltage rises from about 0 toward 3.3 V.
+// Demo board wiring: an LED from LED_PIN to GND, through a 330 ohm resistor.
+// Pins are for a classic ESP32 DevKit. On an ESP32-S3, pick a pin that board exposes.
 #pragma once
 
-#define SENSOR_PIN 15    // the sensor's divider, through its jumper
-#define SAMPLE_MS  20    // one reading every 20 ms, printed over serial
+#define LED_PIN  5     // the LED's anode, through its jumper
+#define BLINK_MS 250   // the LED is on this long, then off this long
