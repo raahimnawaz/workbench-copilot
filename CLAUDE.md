@@ -12,7 +12,7 @@ Entry for the Meta Global AI Developer Hackathon (Indie track, Push the Frontier
 ## Commands (Python 3.12 via uv, which lives in `~/.local/bin`)
 ```bash
 uv venv --clear --python 3.12 && uv pip install -e '.[voice,dev,arm,firmware,eyes]'   # also after moving the folder: .venv stores absolute paths
-.venv/bin/python -m pytest -q                                   # 875 offline tests; CI runs them on every push
+.venv/bin/python -m pytest -q                                   # 880 offline tests; CI runs them on every push
 .venv/bin/python scripts/smoke_test.py                          # PAID, about $0.01: one call to each hosted model
 echo "My LED isn't blinking. Check my wiring against the firmware." | .venv/bin/python -m wbc.agent --sim   # PAID, about $0.025
 .venv/bin/python -m wbc.agent --hear                            # PAID, about $0.0001 a sentence: prints what the mic hears, routes nothing
@@ -20,6 +20,9 @@ echo "My LED isn't blinking. Check my wiring against the firmware." | .venv/bin/
 .venv/bin/python -m wbc.agent --voice --arm --hud --show        # PAID: a take, the HUD in a Chrome app window of its own and the schematic in KiCad
 .venv/bin/python -m wbc.agent --arm --no-prefetch               # PAID: each turn, plus $0.0025 a locate; the arm moves on the request (--enter: after Enter)
 mlx_lm.server --model mlx-community/Llama-3.2-3B-Instruct-4bit --port 8090 --prompt-cache-bytes 536870912   # free, in its own venv (pip install mlx-lm==0.32.2): the arm's fast path
+.venv/bin/python scripts/toolformer_data.py --exclude <benchmark phrasings>   # PAID, about $1.20: Spark writes and labels the fast path's training data (.wbc/toolformer)
+.venv/bin/modal setup && .venv/bin/modal run scripts/toolformer_train.py   # PAID on Modal, under $1: a LoRA for the fast path's Llama on an A10G (uv pip install modal first)
+.venv/bin/python scripts/toolformer_mlx.py                      # free: that LoRA as an adapter mlx_lm.server loads with --adapter-path
 ~/kokoro-venv/bin/python -I scripts/kokoro_server.py           # free, in its own venv (pip install kokoro-onnx==0.6.1; keep its path short for espeak-ng): the voice on :8767
 .venv/bin/python scripts/make_schematic.py                      # free: draws hardware/demo_led.kicad_sch from KiCad 10's symbols (sensor: demo_sensor)
 .venv/bin/python scripts/read_board.py cameras                  # free, from Terminal.app: the cameras macOS and OpenCV see
