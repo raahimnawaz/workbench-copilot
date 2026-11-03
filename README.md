@@ -56,7 +56,7 @@ Everything in this repository was written during the hackathon, starting Oct 26,
 | `wbc/perception/schematic.py`, `scripts/make_schematic.py`, `hardware/*.kicad_sch` | The demo boards' KiCad schematics, drawn from KiCad's own symbols, and `read_schematic`: their nets and KiCad's electrical rules check, through `kicad-cli` |
 | `wbc/agent/parts.py` | `add_part`: Muse Spark Open teaches itself a part from `parts.yaml` (its wiring to the DevKit's free GPIOs, its library and setup code, saved as a skill in `.wbc/skills/`), and the part is drawn into a copy of the schematic in `.wbc/schematics/`, kept only if KiCad's electrical rules check passes, and shown in KiCad with `--show` |
 | `scripts/kokoro_server.py`, `scripts/kokoro-say` | The co-pilot's voice: Kokoro-82M kept loaded on this Mac, and a stand-in for `say` that plays its audio |
-| `config/`, `fixtures/`, `tests/` | Model, bench and arm config, the recorded bench for `--sim`, 880 offline tests |
+| `config/`, `fixtures/`, `tests/` | Model, bench and arm config, the recorded bench for `--sim`, 887 offline tests |
 | `firmware/dut_demo/` | Act 1's demo board: blinks an LED and logs each blink over serial |
 
 | Reused | License | Used for |
@@ -226,3 +226,12 @@ python scripts/register_arm.py --port /dev/cu.usbmodemXXXX touch       # motors 
 - The joint map is q = sign · (raw − 2047) · 2π / 4096, with every sign +1: lerobot-calibrate's L pose is the URDF's zero. `check_joint_map.py` repeats the hand test, so run it again after a recalibration or a servo swap. It only reads, and won't run with a motor on.
 - Keep to one program per serial port: LeRobot opens the port without locking it, so two would interleave their packets.
 - In the URDF the gripper approaches along its z-axis, and `config/robot.yaml` turns the tool frame so the approach is x and the tool point is the closed jaws' tips.
+
+## After the hackathon
+
+- **12 V servos.** The SO-101 runs on 7.4 V STS3215s. From the URDF's link masses, reaching all the way out with 50 g held takes about 1.06 N·m at the shoulder lift, around or past the 50% torque cap on these servos, so a move out there can end in a sag cut instead of being refused up front. The 12 V STS3215 has about half again the torque. All six servos change together, with a 12 V supply and a new calibration: the current ones must never see 12 V (the shoulder lift's limit is 8.0 V).
+- **Gravity-aware planning.** The same masses give each joint's gravity torque in any pose. Calibrated against the servos' own load readings, they would refuse a pose a joint can't hold before anything moves, and aim each joint past its target by its predicted sag, so a move needs fewer re-aim rounds.
+- **Toolformer for every route.** After Meta's Toolformer, the local Llama learns from tool-call labels a model writes, kept only when the call runs, first for the fast path's arm commands, then for every route: whether a request needs a tool at all, which one, and when Spark Open can answer, replacing the word rules that pick a route today.
+- **V-JEPA 2.** Meta's video world model, in two steps. First, its encoder on the desk camera's clip of a grip, telling a held thing from closed jaws, which the servos can't. Then its action-conditioned planner, trained on recorded runs of this arm, for moves the IK can't plan, such as turning a thing over before a put.
+- **Skills it writes and keeps.** `add_part` saves what Spark Open works out about a part, but nothing reads it back yet: next it reuses a saved skill whose checks still pass. Then motion skills: a named routine of the arm's own moves, saved as data, every pose solved before it's saved and before each run.
+- **ROS 2.** Each skill as its own node, with actions for long moves (progress, and cancelling for the spoken stop), rosbag logs, tf2 for the camera and arm frames, and MoveIt's collision checks. The driver stays the bus's one owner.

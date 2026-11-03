@@ -78,6 +78,11 @@ TRIGGER = {
     "put": re.compile(r"\b(put|place|set|stick|move|drop|bring|tidy|return|chuck)\b"),
 }
 AWAY = re.compile(r"\b(away|back|where (it|they) (goes|go|belongs?|lives?))\b")
+# A request in clauses ("put my screwdriver in my cup, and add my screen") is the fast path's only when every clause
+# moves the arm ("pick it up and put it on the note") or is a courtesy: one asking for anything else goes to Spark,
+# which runs the arm's tool and the other side by side in one round, instead of the fast path dropping half of it.
+CLAUSE = re.compile(r"[,;]|\b(?:and|then|while|also|after that|plus)\b")
+COURTESY = frozenset("please thanks thank you copilot now ok okay for me".split())
 NOTE = re.compile(r'\bthe (.+?) goe?s? .*?"(.+?)"', re.IGNORECASE)  # The screwdriver goes on the "sticky note" in ...
 INSIDE = ("cup", "mug", "tray", "box", "bin", "bowl", "jar", "case", "drawer")  # it goes in these, not on them
 
@@ -87,6 +92,16 @@ def plain(text: str) -> str:
     t = (wake_request(text, "copilot") or text).lower().replace("’", "'")
     t = " ".join(re.sub(r"[^a-z0-9' ]+", " ", t).split())
     return re.sub(r"^((um|uh|okay|ok|hey|so|and|well)\s+)+", "", t)
+
+
+def asks_more(text: str) -> bool:
+    """Whether a clause of the request asks for something besides moving the arm (see CLAUSE)."""
+    for part in CLAUSE.split(text.lower()):
+        part = plain(part)
+        words = set(part.split()) - COURTESY
+        if words and not any(r.search(part) for r in (*TRIGGER.values(), AWAY)):
+            return True
+    return False
 
 
 def named(table: dict, t: str) -> str | None:
@@ -116,7 +131,7 @@ def rules(text: str, holding: str | None, things: dict, places: dict, notes: lis
     """The arm command the rules find in `text`, with what the arm holds (a thing's name, or None), or not_mine.
     A thing has to be named: a bare "that" or "it" is Spark's."""
     t = plain(text)
-    if not t or NOT_A_COMMAND.search(t):
+    if not t or NOT_A_COMMAND.search(t) or asks_more(text):
         return call("not_mine")
     if TRIGGER["arm_home"].search(t):
         return call("arm_home")
