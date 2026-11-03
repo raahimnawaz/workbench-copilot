@@ -1,17 +1,22 @@
-"""The demo board's schematic as a KiCad 10 file, drawn from KiCad's own symbols: the LED board or the sensor board.
+"""The demo board's schematic as a KiCad 10 file, drawn from KiCad's own symbols.
 
-    python scripts/make_schematic.py led|sensor OUT.kicad_sch
+    python scripts/make_schematic.py [OUT.kicad_sch]     # hardware/demo_sensor.kicad_sch by default
 
-ESP32-WROOM-32 (the DOIT DevKit's module) as U1, its 3V3 and GND, EN tied high, and every other pin marked unused.
-led: GPIO 4 -> 330 ohm -> LED anode, cathode to GND (the LED board: jumper a5-a26, resistor b26-b42, LED 42-43).
-sensor: 3V3 -> TFS-100 -> row 26 (GPIO 4) -> 10 kohm -> GND. Nets are joined by labels at pin ends.
+ESP32-WROOM-32 (the DOIT DevKit's module) as U1, its 3V3 and GND, EN tied high, and every other pin marked unused:
+3V3 -> TFS-100 -> row 26 (GPIO 4) -> 10 kohm -> GND. Nets are joined by labels at pin ends. A schematic carries a copy
+of every library symbol it uses, which KiCad writes one token a line; here each pin and shape takes one line instead,
+and the ids come from each item's place in the drawing, so the same script always draws the same file.
 """
+import itertools
 import re
 import sys
 import uuid
 from pathlib import Path
 
 LIBS = Path("/Applications/KiCad/KiCad.app/Contents/SharedSupport/symbols")
+OUT = Path(__file__).resolve().parent.parent / "hardware" / "demo_sensor.kicad_sch"
+TOKEN = re.compile(r'"(?:\\.|[^"\\])*"|[()]|[^\s()"]+')  # a quoted string, a parenthesis or a bare word
+OWN_LINE = {"symbol", "property", "pin", "rectangle", "polyline", "circle", "arc", "text", "bezier", "embedded_fonts"}
 
 
 def sexpr_block(text: str, start: int) -> str:
@@ -33,11 +38,26 @@ def sexpr_block(text: str, start: int) -> str:
     raise ValueError("unbalanced")
 
 
+def compact(block: str) -> str:
+    """A library symbol's text with each of its units, properties, pins and shapes on a line of its own, instead of
+    KiCad's one token a line. Only whitespace outside quoted strings changes, so KiCad reads the same symbol."""
+    tokens = TOKEN.findall(block)
+    out, depth = [], 0
+    for k, tok in enumerate(tokens):
+        if tok == "(" and k and depth <= 2 and tokens[k + 1] in OWN_LINE:
+            out.append("\n" + "\t" * (depth + 1))
+        elif tok != ")" and out and out[-1] != "(":
+            out.append(" ")
+        out.append(tok)
+        depth += {"(": 1, ")": -1}.get(tok, 0)
+    return "\t" + "".join(out)
+
+
 def lib_symbol(lib: str, name: str) -> str:
     text = (LIBS / f"{lib}.kicad_sym").read_text()
     m = re.search(r'\n\t\(symbol "' + re.escape(name) + r'"\n', text)
     block = sexpr_block(text, m.start() + 2)
-    return block.replace(f'(symbol "{name}"', f'(symbol "{lib}:{name}"', 1)
+    return compact(block.replace(f'(symbol "{name}"', f'(symbol "{lib}:{name}"', 1))
 
 
 def pins(block: str) -> dict:
@@ -50,8 +70,12 @@ def pins(block: str) -> dict:
     return out
 
 
+IDS = itertools.count()
+
+
 def u() -> str:
-    return str(uuid.uuid4())
+    """The next item's id, from its place in the drawing."""
+    return str(uuid.uuid5(uuid.NAMESPACE_URL, f"workbench-copilot/demo_sensor/{next(IDS)}"))
 
 
 ROOT_UUID = u()
@@ -118,7 +142,7 @@ class Sheet:
 
 
 def main():
-    board, out = sys.argv[1], Path(sys.argv[2])
+    out = Path(sys.argv[1]) if len(sys.argv) > 1 else OUT
     s = Sheet()
     esp = s.place("RF_Module", "ESP32-WROOM-32", "U1", "ESP32-WROOM-32 (DOIT DevKit)", 101.6, 101.6)
     used = set()
@@ -134,22 +158,12 @@ def main():
     used.add(en)
     s.label("GPIO4", esp[io4])
     used.add(io4)
-    if board == "led":
-        r = s.place("Device", "R", "R1", "330", 152.4, 88.9)          # vertical: pin 1 up, pin 2 down
-        s.label("GPIO4", r["1"])
-        s.label("LED_A", r["2"])
-        d = s.place("Device", "LED", "D1", "LED", 152.4, 109.22, 90)  # turned: anode up, cathode down
-        a = next(n for n, (_, _, name) in d.items() if name == "A")
-        k = next(n for n, (_, _, name) in d.items() if name == "K")
-        s.label("LED_A", d[a])
-        s.power("GND", "#PWR04", d[k])
-    else:
-        f = s.place("Device", "R", "R1", "TFS-100 force sensor", 152.4, 83.82)
-        s.power("+3V3", "#PWR04", f["1"])
-        s.label("GPIO4", f["2"])
-        r = s.place("Device", "R", "R2", "10k", 152.4, 101.6)
-        s.label("GPIO4", r["1"])
-        s.power("GND", "#PWR05", r["2"])
+    f = s.place("Device", "R", "R1", "TFS-100 force sensor", 152.4, 83.82)  # vertical: pin 1 up, pin 2 down
+    s.power("+3V3", "#PWR04", f["1"])
+    s.label("GPIO4", f["2"])
+    r = s.place("Device", "R", "R2", "10k", 152.4, 101.6)
+    s.label("GPIO4", r["1"])
+    s.power("GND", "#PWR05", r["2"])
     for n, end in esp.items():
         if n not in used:
             s.no_connect(end)
