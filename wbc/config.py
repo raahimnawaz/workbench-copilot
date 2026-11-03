@@ -47,7 +47,10 @@ def open_client(models: dict):
     load_env()
     o = models.get("open") or {}
     key = os.environ.get(o.get("key_env", "BASETEN_API_KEY"), "")
-    return OpenAI(base_url=o["base_url"], api_key=key) if o and key else None
+    # A stalled Baseten mustn't hold a turn: the library's own defaults wait 10 min and retry twice. When it times
+    # out, the router answers instead.
+    return OpenAI(base_url=o["base_url"], api_key=key, timeout=o.get("timeout_s", 20), max_retries=0) if o and key \
+        else None
 
 
 def backup_client(models: dict):

@@ -25,8 +25,8 @@ from pathlib import Path
 
 from .budget import BudgetExceeded
 from .fast_arm import said
-from .memory import (SUMMARY_PROMPT, SUMMARY_RETRY_TURNS, call_record, context_full, input_tokens, summary_input,
-                     transient, turn_record)
+from .memory import (SUMMARY_PROMPT, SUMMARY_RETRY_TURNS, call_record, context_full, input_tokens, render,
+                     summary_input, transient, turn_record)
 
 # What the router's model gets after the fast path's move came back failed, with the request
 TRIED = ("The arm's fast path already ran {tool} {args} for this request, and it came back failed: {note}. Don't run "
@@ -50,11 +50,20 @@ def image_data_url(image) -> str:
 # nothing to be done. "why" stays with the router, which diagnoses with its tools, and so does "can you ...".
 OPEN_FIRST = re.compile(r"^(what|whats|what's|how|which|when|where|is|are|does|do|should|would)\b")
 OPEN_NOT = re.compile(r"\b(why|fix|flash|move|put|pick|grab|hold|stage|build|compile|remember|forget|again|wrong)\b")
+# Questions Spark Open can't answer from the design and the firmware: what the cameras or the arm would have to look
+# at now, what the notebook, the spend or the conversation holds. They go to the router, which has the tools and
+# the whole conversation.
+OPEN_ELSEWHERE = re.compile(r"\b(where|see|look|find|holding|arm|desk|cup|camera|notebook|note|notes|told|tell|said|"
+                            r"say|earlier|before|last|spent|spend|cost|budget|blinking|working|works)\b")
+OPEN_PASS = "PASS"  # Spark Open's whole reply when the bench facts don't answer the question
+OPEN_TURNS = 6  # recent turns Spark Open sees, so a question can refer back to them
+OPEN_TURNS_MAX = 2500  # characters of them
 OPEN_TOKENS = 2048  # its reply is two sentences; the rest is room for its reasoning (518 tokens on a one-line question)
 OPEN_SYSTEM = ("You are the voice co-pilot of an electronics bench, answering a question from the bench facts below: "
-               "the board read from the camera, the schematic (the design) and the firmware's pins. Answer in at most "
+               "the board read from the camera, the schematic (the design) and the firmware's pins, then the "
+               "conversation's recent turns, for what the question refers to. Answer in at most "
                "two short sentences of plain speech, no markdown, with numbers where they help. If the facts don't "
-               "answer it, say what you'd need to check.")
+               f"answer it, reply with the one word {OPEN_PASS}, and the assistant with the bench's tools will.")
 
 
 def _private(result: dict) -> dict:
@@ -291,7 +300,7 @@ class _RouterBase:
         said, and the turn joins the conversation as the fast path's do. None for anything else, or when it fails,
         and the router's model takes the request."""
         words = " ".join(re.sub(r"[^\w' ]+", " ", user_text.lower()).split())
-        if not OPEN_FIRST.match(words) or OPEN_NOT.search(words):
+        if not OPEN_FIRST.match(words) or OPEN_NOT.search(words) or OPEN_ELSEWHERE.search(words):
             return None
         client, model, label = self.open
         try:
@@ -300,7 +309,8 @@ class _RouterBase:
                 shown = {k: v for k, v in res.items() if not k.startswith("_")}
                 facts.append(f"{c.name} {c.arguments}: {json.dumps(shown)[:6000]}")
             r = client.chat.completions.create(model=model, max_tokens=OPEN_TOKENS, messages=[
-                {"role": "system", "content": OPEN_SYSTEM + "\n\nBench facts:\n" + "\n".join(facts)},
+                {"role": "system", "content": OPEN_SYSTEM + "\n\nBench facts:\n" + "\n".join(facts)
+                 + self._open_context(user_text)},
                 {"role": "user", "content": user_text}])
             self.budget.add_tokens(model, r.usage)
             text = re.sub(r"<think>.*?</think>", "", r.choices[0].message.content or "", flags=re.S).strip()
@@ -309,12 +319,35 @@ class _RouterBase:
             return None
         if not text:
             return None
+        if text.strip(" .").upper() == OPEN_PASS:
+            self.hud.note(f"{label} passed: the bench facts don't answer it, so the router takes it")
+            return None
         self.hud.reply(label, text)
         self._join(user_text, text)
         self.unfinished = None
         self._failures = 0
         self._record(user_text, [], text, live=True)
         return text
+
+    def _open_context(self, user_text: str) -> str:
+        """What Spark Open gets of the conversation, which it isn't part of: the last OPEN_TURNS turns, and the
+        earlier ones the question's words point to, so "what did it read before the fix?" has an answer."""
+        if self.memory is None:
+            return ""
+        parts = []
+        recent = self.memory.session.turns[-OPEN_TURNS:]
+        if recent:
+            parts.append("Recent turns, oldest first:\n" + render(recent, OPEN_TURNS_MAX))
+        recalled = self.memory.for_turn(user_text)
+        if recalled:
+            parts.append(recalled)
+        return "".join(f"\n\n{p}" for p in parts)
+
+    def _message(self, user_text: str, facts: str) -> str:
+        """The turn's message to the router's model: the request, what memory finds it points to (memory.for_turn),
+        and the bench facts."""
+        recalled = self.memory.for_turn(user_text) if self.memory else ""
+        return "\n\n".join(p for p in (user_text, recalled, facts) if p)
 
     def _join(self, user_text: str, reply: str) -> None:
         """A turn the fast path answered, added to the conversation the next call sends."""
@@ -445,7 +478,7 @@ class Router(_RouterBase):
         if not self.history:
             self._seen = {}  # a new conversation hasn't been sent anything yet
         facts, pictures = self._bench_facts(fetched)
-        text = f"{user_text}\n\n{facts}" if facts else user_text
+        text = self._message(user_text, facts)
         content = text if not pictures else [{"type": "input_text", "text": text}] + [
             part for name, image in pictures for part in (
                 {"type": "input_text", "text": f"Image from {name}:"},
@@ -536,7 +569,7 @@ class ChatRouter(_RouterBase):
         self._ran_out = False
         self.messages[0]["content"] = self._instructions()  # the memory section may have changed since last turn
         facts, pictures = self._bench_facts(fetched)
-        self.messages.append({"role": "user", "content": f"{user_text}\n\n{facts}" if facts else user_text})
+        self.messages.append({"role": "user", "content": self._message(user_text, facts)})
         self.messages.extend({"role": "user", "content": [
             {"type": "text", "text": f"Image from {name}:"},
             {"type": "image_url", "image_url": {"url": image_data_url(image)}}]} for name, image in pictures)
