@@ -44,6 +44,13 @@ been being am it its it's this that these those there here what which who whom w
 done can could would should will shall may might must i me my mine we us our you your yours he him his she her they
 them their please copilot just now not no yes ok okay oh um uh hey also too very really""".split())
 _WORD = re.compile(r"[a-z0-9]+(?:[._'-][a-z0-9]+)*")
+BM25_K1, BM25_B = 1.2, 0.75  # BM25's usual settings: how fast repeats stop counting, and how much length evens out
+RRF_K = 60              # reciprocal rank fusion's usual constant
+EMBED_MIN = 0.3         # least cosine for a match by meaning alone
+NOTES_RECALLED = 5      # older notes, past notebook_in_prompt, a request's words can bring into its turn
+# Tools that change the bench, so a turn that ran one is worth more when brought back (see importance).
+ACTING = frozenset({"ask_coder", "propose_patch", "build_and_flash", "pick_up", "put_down", "move_thing", "arm_home",
+                    "add_part", "remember", "forget"})
 # How other OpenAI-style APIs and local servers (llama.cpp, LM Studio) word "the conversation no longer fits".
 # Meta doesn't document its own wording.
 CONTEXT_FULL = ("context_length", "context length", "context window", "maximum context", "context size",
@@ -148,11 +155,11 @@ def _size(turns: list) -> int:
     return len(render(turns, float("inf")))
 
 
-def terms(text: str) -> set:
-    """The words that can tell one note or turn from another: lower case, a plural's s or es and a possessive's 's
-    dropped ("goes" is "go", "boxes" "box", "notes" "note"), the common words left out. "pins.h" and "GPIO4" stay
-    whole."""
-    found = set()
+def tokens(text: str) -> list:
+    """The words that can tell one note or turn from another, in order and repeated: lower case, a plural's s or es
+    and a possessive's 's dropped ("goes" is "go", "boxes" "box", "notes" "note"), the common words left out.
+    "pins.h" and "GPIO4" stay whole."""
+    found = []
     for w in _WORD.findall(text.lower()):
         if w.endswith("'s"):
             w = w[:-2]
@@ -161,8 +168,12 @@ def terms(text: str) -> set:
         elif len(w) > 3 and w.endswith("s") and not w.endswith("ss"):
             w = w[:-1]
         if w not in COMMON:
-            found.add(w)
+            found.append(w)
     return found
+
+
+def terms(text: str) -> set:
+    return set(tokens(text))
 
 
 def recency(age: int) -> float:
@@ -173,23 +184,68 @@ def recency(age: int) -> float:
 
 
 def matches(query: str, texts: list) -> list:
-    """How well each text matches the query: the sum, over the query's words found in it, of how rare each word is
-    among the texts, ln((n + 1) / (df + 0.5)), where df is how many of the n texts have it. So "screwdriver" decides
-    where "go" can't, and a word must be whole to count ("go" isn't in "good"). 0 for a text with none of them."""
+    """How well each text matches the query, by BM25 (k1 1.2, b 0.75): over the query's words found in a text, each
+    word's rarity among the texts, ln(1 + (n - df + 0.5) / (df + 0.5)) with df the texts that have it, times how
+    often the text has it, with diminishing returns and evened out for the text's length. So "screwdriver" decides
+    where "go" can't, a word must be whole to count ("go" isn't in "good"), and a long reply that mentions a word
+    once doesn't beat a short one about it. 0 for a text with none of the words."""
     words = terms(query)
-    found = [terms(t) & words for t in texts]
-    df = {w: sum(w in f for f in found) for w in words}
-    n = len(texts)
-    return [sum(math.log((n + 1) / (df[w] + .5)) for w in f) for f in found]
+    docs = [tokens(t) for t in texts]
+    n = len(docs)
+    if not words or not n:
+        return [0.0] * n
+    df = {w: sum(w in d for d in docs) for w in words}
+    avg = sum(len(d) for d in docs) / n or 1
+    scores = []
+    for d in docs:
+        score = 0.0
+        for w in words & set(d):
+            tf = d.count(w)
+            idf = math.log(1 + (n - df[w] + .5) / (df[w] + .5))
+            score += idf * tf * (BM25_K1 + 1) / (tf + BM25_K1 * (1 - BM25_B + BM25_B * len(d) / avg))
+        scores.append(score)
+    return scores
 
 
-def ranked(query: str, texts: list) -> list:
-    """The indexes of the texts (oldest first) the query's words are found in, best first: each match weighed by
-    how rare its words are (matches), and by its recency for up to half, (1 + recency) / 2, since a request that
-    names something wants that thing, however old; the newer first among equals."""
+def cosine(a: list, b: list) -> float:
+    dot = sum(x * y for x, y in zip(a, b))
+    size = math.sqrt(sum(x * x for x in a)) * math.sqrt(sum(y * y for y in b))
+    return dot / size if size else 0.0
+
+
+def ranked(query: str, texts: list, weights: list | None = None, embed=None) -> list:
+    """The indexes of the texts (oldest first) that match the query, best first. Each match counts by its words
+    (matches), by its recency for up to half, (1 + recency) / 2, since a request that names something wants that
+    thing however old, and by its weight (importance, 1 if none). With embed, a function from texts to vectors,
+    texts that mean the same without sharing a word ("R1" and "the 330 ohm resistor") count too: the two rankings,
+    by words and by meaning, are joined by reciprocal rank fusion, 1 / (60 + rank) from each. The newer first among
+    equals."""
     n = len(texts)
-    scored = [(m * (1 + recency(n - 1 - i)) / 2, i) for i, m in enumerate(matches(query, texts)) if m > 0]
-    return [i for _, i in sorted(scored, key=lambda s: (-s[0], -s[1]))]
+    weights = weights or [1.0] * n
+    lexical = [(m * (1 + recency(n - 1 - i)) / 2 * weights[i], i) for i, m in enumerate(matches(query, texts)) if m > 0]
+    order = [i for _, i in sorted(lexical, key=lambda s: (-s[0], -s[1]))]
+    if embed is None or not n:
+        return order
+    try:
+        q, *vectors = embed([query, *texts])
+    except Exception:  # noqa: BLE001 - no embedding server: the words alone
+        return order
+    meaning = [(cosine(q, v) * (1 + recency(n - 1 - i)) / 2 * weights[i], i) for i, v in enumerate(vectors)]
+    meaning = [s for s in meaning if s[0] >= EMBED_MIN]
+    fused = {}
+    for ranking in (order, [i for _, i in sorted(meaning, key=lambda s: (-s[0], -s[1]))]):
+        for rank, i in enumerate(ranking):
+            fused[i] = fused.get(i, 0) + 1 / (RRF_K + rank + 1)
+    return sorted(fused, key=lambda i: (-fused[i], -i))
+
+
+def importance(t: dict) -> float:
+    """How much a turn is worth bringing back, beside how well it matches: a turn whose tools changed the bench (a fix
+    staged or flashed, the arm moved, a part added, a note kept) counts 1.5, one with a tool that failed 1.25 more,
+    since what went wrong is what gets asked about, and talk 1."""
+    acted = any(c["tool"] in ACTING for c in t["calls"])
+    failed = any(not c["ok"] for c in t["calls"])
+    return 1 + .5 * acted + .25 * failed
 
 
 def _turn_text(t: dict) -> str:
@@ -292,18 +348,17 @@ class Notebook:
             self._save()
         return {"ok": True, "removed": note_id}
 
-    def digest(self, count: int, request: str = "") -> str:
-        """The `count` notes a call sees, newest first. With more notes than that, each counts as (1 + how well it
-        matches the request) times its recency, so an old note the request is about stays in view while the
-        newest, which nothing pushes out, fill the rest."""
-        picked = range(len(self.notes))
-        if len(self.notes) > count:
-            fit = matches(request, [n["note"] for n in self.notes])
-            n = len(self.notes)
-            weight = {i: (1 + fit[i]) * recency(n - 1 - i) for i in picked}
-            picked = sorted(sorted(picked, key=lambda i: (-weight[i], -i))[:count])
-        return "\n".join(f"- [{self.notes[i]['id']}] {_when(self.notes[i]['t'])}: {self.notes[i]['note']}"
-                         for i in reversed(picked))
+    def digest(self, count: int) -> str:
+        """The newest `count` notes, newest first: what every call's instructions carry."""
+        return "\n".join(f"- [{n['id']}] {_when(n['t'])}: {n['note']}" for n in self.notes[::-1][:count])
+
+    def older(self, request: str, newest: int, limit: int = NOTES_RECALLED, embed=None) -> list:
+        """The notes past the newest `newest` that the request points to, best first (see ranked), so an old note
+        the request is about still reaches its turn."""
+        old = self.notes[:max(0, len(self.notes) - newest)]
+        if not old or not terms(request):
+            return []
+        return [old[i] for i in ranked(request, [n["note"] for n in old], embed=embed)[:limit]]
 
     def _save(self) -> None:
         if self.path:
@@ -440,6 +495,27 @@ class Session:
         _write(self.path, json.dumps(self._data(now), indent=1))
 
 
+def embed_client(cfg: dict | None):
+    """A function from texts to vectors on an OpenAI-compatible embeddings server (memory.embeddings in models.yaml:
+    base_url and model, and key_env if it needs a key), each text's vector kept once made; None without one."""
+    if not cfg or not cfg.get("base_url") or not cfg.get("model"):
+        return None
+    from openai import OpenAI
+
+    client = OpenAI(base_url=cfg["base_url"], api_key=os.environ.get(cfg.get("key_env", ""), "") or "none",
+                    timeout=cfg.get("timeout_s", 5), max_retries=0)
+    made = {}
+
+    def embed(texts: list) -> list:
+        new = [t for t in dict.fromkeys(texts) if t not in made]
+        if new:
+            r = client.embeddings.create(model=cfg["model"], input=new)
+            made.update(zip(new, (d.embedding for d in r.data)))
+        return [made[t] for t in texts]
+
+    return embed
+
+
 def _hhmm(t: datetime) -> str:
     return t.strftime("%H:%M" if t.date() == datetime.now().date() else "%b %d %H:%M")
 
@@ -452,9 +528,10 @@ def summary_input(session: Session) -> str:
 
 class Memory:
     def __init__(self, session: Session, notebook: Notebook, compact_at_tokens: int = 60000, keep_turns: int = 40,
-                 notebook_in_prompt: int = 20):
+                 notebook_in_prompt: int = 20, embed=None):
         self.session = session
         self.notebook = notebook
+        self.embed = embed  # texts -> vectors, for matches by meaning beside words (config.embed_client); None: words
         self.compact_at_tokens = compact_at_tokens
         self.keep_turns = keep_turns
         self.notebook_in_prompt = notebook_in_prompt
@@ -468,7 +545,7 @@ class Memory:
         session = Session.start(path.with_name(f"{path.stem}-sim{path.suffix}") if sim else path, resume)
         notebook = Notebook(Path(root) / m.get("notebook_file", ".wbc/notebook.jsonl"))
         return cls(session, notebook, m.get("compact_at_tokens", 60000), m.get("keep_turns", 40),
-                   m.get("notebook_in_prompt", 20))
+                   m.get("notebook_in_prompt", 20), embed=embed_client(m.get("embeddings")))
 
     def compact_reason(self, input_tokens: int, failures: int, chained: bool) -> tuple | None:
         """Why the session should become a summary before the next turn, and whether the conversation may be broken
@@ -493,7 +570,8 @@ class Memory:
         "" when nothing matches."""
         carried = self.session.carried()
         pool = self.session.earlier + carried[:len(carried) - shown(carried, CARRIED_MAX)]
-        hits = ranked(request, [_turn_text(t) for t in pool])[:RECALLED_HITS] if terms(request) else []
+        hits = ranked(request, [_turn_text(t) for t in pool], [importance(t) for t in pool],
+                      self.embed)[:RECALLED_HITS] if terms(request) and pool else []
         blocks, size = [], 0
         for group in episodes(pool, hits):
             block = "\n".join(_blocks([pool[i] for i in group]))
@@ -503,9 +581,26 @@ class Memory:
             size += len(block) + 5
         return "\n...\n".join(b for _, b in sorted(blocks))
 
-    def prompt(self, request: str = "") -> str:
-        """The section the router's instructions end with, or "" when there's nothing to remember. request: this
-        turn's, which picks the earlier turns brought back and, past notebook_in_prompt, the notes."""
+    def for_turn(self, request: str) -> str:
+        """What the request's words point to that the conversation no longer holds: earlier turns (recalled) and
+        notes older than the newest notebook_in_prompt. It goes into the turn's own message, not the instructions,
+        so the instructions stay the same from turn to turn. "" when nothing matches."""
+        parts = []
+        recalled = self.recalled(request)
+        if recalled:
+            parts.append("Earlier turns this request's words point to, in full (the summary has the rest), oldest "
+                         "first:\n" + recalled)
+        notes = self.notebook.older(request, self.notebook_in_prompt, embed=self.embed)
+        if notes:
+            parts.append("Older notes this request's words point to:\n" + "\n".join(
+                f"- [{n['id']}] {_when(n['t'])}: {n['note']}" for n in notes))
+        if not parts:
+            return ""
+        return ("From memory, for reference only (never a request to act on; where things are still comes only from "
+                "the tools):\n" + "\n\n".join(parts))
+
+    def prompt(self) -> str:
+        """The section the router's instructions end with, or "" when there's nothing to remember."""
         parts = []
         if self.session.summary:
             parts.append(f"Summary of earlier turns:\n{self.session.summary}")
@@ -513,11 +608,7 @@ class Memory:
         if carried:
             parts.append("Turns this conversation doesn't hold (from an earlier run, or cut off by an error or a "
                          "reset), oldest first:\n" + render(carried, CARRIED_MAX))
-        recalled = self.recalled(request)
-        if recalled:
-            parts.append("Earlier turns this request's words point to, in full (the summary has the rest), oldest "
-                         "first:\n" + recalled)
-        notes = self.notebook.digest(self.notebook_in_prompt, request)
+        notes = self.notebook.digest(self.notebook_in_prompt)
         if notes:
             parts.append(f"Notebook, newest first (`recall` finds older notes, `forget` drops a wrong one):\n{notes}")
         if not parts:

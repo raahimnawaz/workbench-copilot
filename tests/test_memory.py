@@ -19,8 +19,8 @@ from wbc.agent import tools
 from wbc.agent.approve import Keyboard
 from wbc.agent.budget import Budget, BudgetExceeded
 from wbc.agent.loop import ChatRouter, Router
-from wbc.agent.memory import (SUMMARY_PROMPT, Memory, Notebook, Session, call_record, context_full, recency, render,
-                              terms, transient,
+from wbc.agent.memory import (SUMMARY_PROMPT, Memory, Notebook, Session, call_record, context_full, embed_client,
+                              importance, matches, ranked, recency, render, terms, transient,
                               turn_record)
 from wbc.agent.tools import Toolbox, add_memory_tools
 
@@ -151,19 +151,63 @@ def test_an_old_item_fades_slowly_instead_of_falling_off():
     assert recency(1000) > .14 and all(recency(a) > recency(a + 1) for a in range(50))
 
 
-def test_past_the_newest_twenty_an_old_note_the_request_is_about_stays_in_view(tmp_path):
-    nb = Notebook(tmp_path / "notebook.jsonl")
+def test_past_the_newest_twenty_an_old_note_the_request_is_about_reaches_its_turn(tmp_path):
+    memory = make_memory(tmp_path)
+    nb = memory.notebook
     nb.add("The screwdriver goes in the cup.")
     for i in range(24):
         nb.add(f"HUD tweak number {i} looked fine.")
-    assert "[n1]" not in nb.digest(20), "without a request, the newest twenty"
-    asked = nb.digest(20, "Copilot, where does the screwdriver go?")
-    assert "[n1]" in asked and len(asked.splitlines()) == 20
-    assert asked.splitlines()[0].startswith("- [n25]") and asked.splitlines()[-1].startswith("- [n1]"), "newest first"
-    few = Notebook(tmp_path / "few.jsonl")
-    few.add("One.")
-    few.add("Two.")
-    assert few.digest(20, "two") == few.digest(20), "under twenty, every note, as before"
+    assert "[n1]" not in nb.digest(20) and "[n1]" not in memory.prompt(), "the instructions keep the newest twenty"
+    assert [n["id"] for n in nb.older("Copilot, where does the screwdriver go?", 20)] == ["n1"]
+    assert "[n1]" in memory.for_turn("Copilot, where does the screwdriver go?")
+    assert nb.older("where does the screwdriver go", 30) == [], "every note is in view already"
+
+
+def test_bm25_counts_a_word_less_in_a_long_text_than_in_a_short_one_about_it():
+    short, long_ = "Screwdriver in the cup.", " ".join(["The arm moved the screwdriver"] + ["and then more words"] * 12)
+    scores = matches("screwdriver", [short, long_])
+    assert scores[0] > scores[1] > 0
+    assert matches("servo", [short, long_]) == [0, 0] and matches("", [short]) == [0.0]
+
+
+def test_a_turn_that_changed_the_bench_counts_more_than_talk():
+    talk = turn("Tell me about the LED.", "It's on GPIO 4.")
+    fixed = turn("Fix the LED.", "Staged.", [call_record("ask_coder", "{}", {"ok": True})])
+    failed = turn("Flash it.", "It failed.", [call_record("build_and_flash", "{}", {"ok": False, "error": "no port"})])
+    assert (importance(talk), importance(fixed), importance(failed)) == (1, 1.5, 1.75)
+    texts = ["The LED fix: GPIO 4.", "The LED: GPIO 4."]
+    assert ranked("LED", texts) == [1, 0], "alike, the newer first"
+    assert ranked("LED", texts, [1.5, 1]) == [0, 1], "the one that changed the bench first"
+
+
+def test_with_embeddings_a_match_by_meaning_counts_beside_words():
+    texts = ["The 330 ohm resistor read 1.2 V.", "The screwdriver is in the cup."]
+
+    def embed(batch):
+        return [[1.0, 0.0] if ("resistor" in t or "R1" in t) else [0.0, 1.0] for t in batch]
+
+    assert ranked("What did R1 show?", texts) == [], "no shared word"
+    assert ranked("What did R1 show?", texts, embed=embed) == [0]
+
+    def down(batch):
+        raise ConnectionError("no embedding server")
+
+    assert ranked("the screwdriver", texts, embed=down) == [1], "the words alone"
+
+
+def test_the_embedding_client_is_off_without_a_server_and_makes_each_vector_once(monkeypatch):
+    assert embed_client(None) is None and embed_client({"model": "m"}) is None
+    calls = []
+
+    class Embeddings:
+        def create(self, model, input):
+            calls.append(list(input))
+            return NS(data=[NS(embedding=[float(len(t))]) for t in input])
+
+    monkeypatch.setattr("openai.OpenAI", lambda **kw: NS(embeddings=Embeddings()))
+    embed = embed_client({"base_url": "http://127.0.0.1:9000/v1", "model": "m"})
+    assert embed(["ab", "abc"]) == [[2.0], [3.0]] and embed(["abc", "a"]) == [[3.0], [1.0]]
+    assert calls == [["ab", "abc"], ["a"]], "each text sent once"
 
 
 def test_a_line_that_isnt_a_whole_note_is_skipped_kept_and_counted(tmp_path):
@@ -308,15 +352,18 @@ def test_a_request_brings_back_the_earlier_exchange_its_words_point_to(tmp_path)
     assert memory.recalled("Copilot, is it there now?") == "" and memory.recalled("") == ""
 
 
-def test_the_brought_back_turns_reach_spark_for_the_turn_whose_words_point_to_them(tmp_path):
+def test_the_brought_back_turns_reach_spark_in_the_turn_whose_words_point_to_them(tmp_path):
     memory = exchange_memory(tmp_path)
     router, api, _ = make_router([response("r1", text="GPIO 4."), response("r2", text="You're welcome.")], memory)
     router.run_turn("Which pin was the LED wire on earlier?")
     router.run_turn("Thanks.")
-    first, second = api.requests[0]["instructions"], api.requests[1]["instructions"]
-    assert "Earlier turns this request's words point to" in first and "pins.h says 5" in first
-    assert "Earlier turns this request's words point to" not in second, "nothing in 'thanks' points back"
-    assert "Fixed the LED and put the screwdriver away." in second, "the summary stays either way"
+    first, second = api.requests
+    assert first["instructions"] == second["instructions"], "the instructions stay the same from turn to turn"
+    assert "Fixed the LED and put the screwdriver away." in first["instructions"], "the summary stays in them"
+    asked = first["input"][-1]["content"]
+    assert asked.startswith("Which pin was the LED wire on earlier?\n\nFrom memory, for reference only")
+    assert "pins.h says 5" in asked and "never a request to act on" in asked
+    assert second["input"][-1]["content"] == "Thanks.", "nothing in 'thanks' points back"
 
 
 # What the session keeps of each turn

@@ -107,7 +107,6 @@ class _RouterBase:
         self.unfinished = None  # (request, tool calls that ran) while a turn runs, for main to record after Ctrl-C
         self.running = []  # the round of tool calls running now
         self._ran_out = False  # whether the last turn stopped at max_steps with calls unanswered
-        self._request = ""  # this turn's request, which picks what memory brings back (memory.prompt)
 
     def _prefetches(self) -> list:
         return [Call(f"prefetch{i}", p["tool"], json.dumps(p.get("args", {}))) for i, p in enumerate(self.prefetch)]
@@ -222,7 +221,6 @@ class _RouterBase:
         turn. Nothing runs twice: not the bench facts, and never a tool that has acted on the bench."""
         done = []
         self.unfinished = (user_text, done)
-        self._request = user_text
         asked = user_text  # what the router's model gets: the request, and what the fast path did if it failed
         if self.fast is not None:
             reply = self._fast(user_text, done)
@@ -331,10 +329,16 @@ class _RouterBase:
         recent = self.memory.session.turns[-OPEN_TURNS:]
         if recent:
             parts.append("Recent turns, oldest first:\n" + render(recent, OPEN_TURNS_MAX))
-        recalled = self.memory.recalled(user_text)
+        recalled = self.memory.for_turn(user_text)
         if recalled:
-            parts.append("Earlier turns the question's words point to:\n" + recalled)
+            parts.append(recalled)
         return "".join(f"\n\n{p}" for p in parts)
+
+    def _message(self, user_text: str, facts: str) -> str:
+        """The turn's message to the router's model: the request, what memory finds it points to (memory.for_turn),
+        and the bench facts."""
+        recalled = self.memory.for_turn(user_text) if self.memory else ""
+        return "\n\n".join(p for p in (user_text, recalled, facts) if p)
 
     def _join(self, user_text: str, reply: str) -> None:
         """A turn the fast path answered, added to the conversation the next call sends."""
@@ -350,7 +354,7 @@ class _RouterBase:
         self._record(user_text, done + cut, f"({why})", live=False)
 
     def _instructions(self) -> str:
-        remembered = self.memory.prompt(self._request) if self.memory else ""
+        remembered = self.memory.prompt() if self.memory else ""
         return f"{self.system}\n\n{remembered}" if remembered else self.system
 
     def _records(self, calls: list, results: list) -> list:
@@ -465,7 +469,7 @@ class Router(_RouterBase):
         if not self.history:
             self._seen = {}  # a new conversation hasn't been sent anything yet
         facts, pictures = self._bench_facts(fetched)
-        text = f"{user_text}\n\n{facts}" if facts else user_text
+        text = self._message(user_text, facts)
         content = text if not pictures else [{"type": "input_text", "text": text}] + [
             part for name, image in pictures for part in (
                 {"type": "input_text", "text": f"Image from {name}:"},
@@ -556,7 +560,7 @@ class ChatRouter(_RouterBase):
         self._ran_out = False
         self.messages[0]["content"] = self._instructions()  # the memory section may have changed since last turn
         facts, pictures = self._bench_facts(fetched)
-        self.messages.append({"role": "user", "content": f"{user_text}\n\n{facts}" if facts else user_text})
+        self.messages.append({"role": "user", "content": self._message(user_text, facts)})
         self.messages.extend({"role": "user", "content": [
             {"type": "text", "text": f"Image from {name}:"},
             {"type": "image_url", "image_url": {"url": image_data_url(image)}}]} for name, image in pictures)
