@@ -17,7 +17,7 @@ from wbc.agent import __main__ as agent
 from wbc.agent.budget import Budget
 from wbc.agent.loop import Router
 from wbc.agent.tools import Toolbox
-from wbc.agent.web_hud import Watched, WebHud, page_models, reply_html
+from wbc.agent.web_hud import SUMMARY, Watched, WebHud, page_models, reply_html, summary
 from wbc.config import ROOT, load_yaml
 
 MODELS = load_yaml("models.yaml")
@@ -113,7 +113,7 @@ def test_a_typed_turn_reaches_the_page_call_by_call(hud):
         ["begin", "spark"], ["call", "spark", 1],
         ["begin", "wonder"], ["setModel", "wonder"], ["call", "wonder", 1],
         ["begin", "spark"], ["setModel", "spark"], ["call", "spark", 1],
-        ["say", "It's on GPIO 4, so I staged the fix. <b>Your turn:</b> flash it."],
+        ["say", "It's on GPIO 4, so I staged the fix. Your turn: flash it."],
         ["total", "Turn 1 · 7 s · $0.009"], ["setState", "idle"]]  # two Spark calls and one Wonder, 1,000 tokens in
     assert {event[0] for event in events} <= LIVE
 
@@ -129,10 +129,22 @@ def test_a_spoken_request_opens_its_turn_with_its_transcription(hud):
     hud.turn("check my wiring")
     hud.turn_over()
     assert drain(page) == [
-        ["setModel", "transcribe"], ["setState", "listening"], ["begin", "transcribe"], ["call", "transcribe", 1],
-        ["setModel", "spark"], ["setState", "idle"],
+        ["setModel", "transcribe"], ["setState", "listening"], ["setModel", "spark"], ["setState", "idle"],
         ["clear"], ["you", "check my wiring"], ["say", "", False], ["call", "transcribe", 1], ["setState", "thinking"],
         ["total", "Turn 1 · 2 s · $0.18"], ["setState", "idle"]]  # from the start of its transcription
+
+
+def test_what_the_mic_hears_that_isnt_a_request_stays_off_the_call_bar(hud):
+    """Nov 2: with the motors and the room heard as empty utterances, the call bar filled with Transcribe entries."""
+    page = hud._join()
+    drain(page)
+    for _ in range(3):
+        with hud.calling(EARS):
+            pass
+    hud.turn("check my wiring")
+    events = drain(page)
+    assert not [e for e in events if e[0] in ("begin", "call")]  # nothing heard was a request, so no transcription
+    assert ["setState", "listening"] in events  # the orb still listens while each is transcribed
 
 
 def test_overlapping_calls_to_a_model_are_one_entry_and_the_orb_shows_the_newest_still_working(hud):
@@ -222,3 +234,16 @@ def test_each_turn_and_how_it_ended_go_to_the_hud(monkeypatch, flags, port):
     assert agent.main(flags) == 0 and built[0][7] == port
     assert hud.shown == [("turn", "check my wiring"), ("turn_over", ""), ("turn", "flash it"),
                          ("turn_over", agent.FAILED)]
+
+
+def test_the_page_shows_a_replys_first_sentences_up_to_144_characters():
+    """Nov 2: the reply box shows a short summary, 144 characters at most."""
+    long = ("I couldn't move your screwdriver because I can't find a sticky note on the desk. Let me know if you want "
+            "me to put it somewhere else or try again once it's out. The rest of this reply runs on.")
+    assert summary(long) == "I couldn't move your screwdriver because I can't find a sticky note on the desk."
+    assert summary("It's on GPIO 4, so I staged the fix.\n**Your turn:** flash it.\n```cpp\n#define X 4\n```") == \
+        "It's on GPIO 4, so I staged the fix. Your turn: flash it."
+    run_on = "The wire from row 26 " + "goes on and on " * 20 + "to GPIO 4."
+    cut = summary(run_on)
+    assert len(cut) <= SUMMARY and cut.endswith("…") and run_on.startswith(cut[:-1])
+    assert summary("") == "" and summary("Done.") == "Done."

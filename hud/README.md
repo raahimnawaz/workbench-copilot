@@ -10,10 +10,10 @@
 
 Then open <http://127.0.0.1:8766/> in a current Chrome. `--hud 8800` picks another port, if 8766 is taken. The agent serves the page and its live feed itself, with only the standard library (`wbc/agent/web_hud.py`), and the page shows each turn as it happens:
 
-- **Someone talking at the mic** (with `--voice`): listening, under Voice Transcribe, then the transcription's time in the call bar.
+- **Someone talking at the mic** (with `--voice`): listening, under Voice Transcribe. A request's transcription opens its turn's call bar; other things heard stay off it.
 - **The request**, in quotes. The call bar starts again for each turn.
-- **Every model call**, under its model's name and in its colors from the moment it starts, then its time in the call bar: Spark routing, Wonder writing code, SAM reading the board or finding things on the desk, Transcribe hearing. Calls to one model that overlap, like SAM's phrases, make one entry. They're timed where each call goes out, so only real calls show: with `--sim` the board read is the recording, so no SAM appears.
-- **The reply**, a sentence at a time, and speaking while it's said out loud (`--voice` or `--speak`). A turn that fails shows that instead.
+- **Every model call**, under its model's name and in its colors from the moment it starts, then its time in the call bar: Spark routing, Wonder writing code, SAM reading the board or finding things on the desk, Llama taking an arm command. Calls to one model that overlap, like SAM's phrases, make one entry. They're timed where each call goes out, so only real calls show: with `--sim` the board read is the recording, so no SAM appears.
+- **The reply**, its first sentences, whole, up to 144 characters (or the first cut at a word, with an ellipsis), a sentence at a time, and speaking while it's said out loud (`--voice` or `--speak`). The whole reply is in the console. A turn that fails shows that instead.
 - **The turn's time and spend**, closing the call bar: `Turn 1 · 25 s · $0.02`. A spoken turn counts from the end of the request, its transcription included.
 
 A page opened mid-run catches up with the turn so far, and it reconnects by itself after the agent restarts. Its own text box doesn't reach the agent yet, so live it does nothing: type in the terminal, or speak. With `--backup`, the router shows as Spark Open, the page's open-weights model.

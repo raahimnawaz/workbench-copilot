@@ -2,8 +2,9 @@
 
 `python -m wbc.agent --hud` serves the page at http://127.0.0.1:8766/ from the agent's own process, with nothing but
 the standard library, and sends it each thing as it happens: the mic hearing someone, every model call from its start
-to its time (Spark, Wonder, SAM and Voice Transcribe, timed where the call goes out), the request, the reply, the
-co-pilot speaking, and each turn's total time and spend. Every event is one of the page's own functions with its
+to its time (Spark, Wonder, SAM and Llama, timed where the call goes out, and Voice Transcribe for the request's own
+words), the request, the reply's first sentences (SUMMARY characters at most), the co-pilot speaking, and each turn's
+total time and spend. Every event is one of the page's own functions with its
 arguments (hud/README.md lists them), so all the page does is call it. The console prints its timeline as before.
 """
 from __future__ import annotations
@@ -23,11 +24,13 @@ from types import SimpleNamespace
 from wbc import config
 
 from .hud import ConsoleHud
+from .mouth import plain, sentences_of
 
 PAGE = "orb-light.html"
 PING_S = 15.0  # an SSE comment this often keeps a quiet feed open, and finds pages that have gone
 BAR = 200  # the most call-bar events kept for a page that connects mid-turn
 HEARD = 8  # the most requests heard and waiting for their turns
+SUMMARY = 144  # the most characters of a reply the page shows
 
 
 def page_models(models: dict) -> dict:
@@ -42,6 +45,20 @@ def reply_html(text: str) -> str:
     within a line)."""
     words = html.escape(" ".join(text.replace("`", "").split()), quote=False)
     return re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", words)
+
+
+def summary(text: str, limit: int = SUMMARY) -> str:
+    """What the page shows of a reply: its first sentences as plain words, whole, as many as fit in `limit`
+    characters, or the first one cut at a word with an ellipsis. The rest is in the console."""
+    words = plain(text)
+    if not words:
+        return ""
+    shown = ""
+    for sentence in sentences_of(words):
+        if len(shown) + 1 + len(sentence) > limit:
+            break
+        shown = f"{shown} {sentence}".strip()
+    return shown or words[:limit - 1].rsplit(" ", 1)[0].rstrip(",;:—-") + "…"
 
 
 def dollars(usd: float) -> str:
@@ -98,7 +115,8 @@ class WebHud(ConsoleHud):
             flying = self._flying.setdefault(m, [0, 0.0])
             if not flying[0]:
                 flying[1] = self.clock()
-                self._call_bar("begin", m)
+                if m != "transcribe":  # every utterance is transcribed: only a request's opens its turn (turn())
+                    self._call_bar("begin", m)
             flying[0] += 1
             self._order.append(m)
             spent = self.budget.spent
@@ -110,7 +128,7 @@ class WebHud(ConsoleHud):
                 flying[0] -= 1
                 self._order.remove(m)
                 seconds = round(self.clock() - flying[1], 2)
-                if not flying[0]:
+                if not flying[0] and m != "transcribe":
                     self._call_bar("call", m, seconds)
                 if m == "transcribe":
                     self._transcribed = (flying[1], spent, seconds)
@@ -147,7 +165,7 @@ class WebHud(ConsoleHud):
     def reply(self, label: str, text: str) -> None:
         super().reply(label, text)
         with self._lock:
-            self._say = reply_html(text)
+            self._say = reply_html(summary(text))
             self._send("say", self._say)
 
     def turn_over(self, failure: str = "") -> None:
@@ -157,7 +175,7 @@ class WebHud(ConsoleHud):
             number, began, spent = self._turn
             self._turn = None
             if failure:
-                self._say = reply_html(failure)
+                self._say = reply_html(summary(failure))
                 self._send("say", self._say)
             self._call_bar("total", f"Turn {number} · {self.clock() - began:.0f} s · "
                                     f"{dollars(self.budget.spent - spent)}")

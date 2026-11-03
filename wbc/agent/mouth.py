@@ -28,20 +28,24 @@ def sentences_of(text: str) -> list:
     return parts
 
 
-def spoken(text: str, sentences: int = 2, limit: int = 240) -> str:
-    """The part of a reply worth saying: its first sentences as plain words, at most `limit` characters.
-
-    Code blocks are dropped, since `say` would read them symbol by symbol, and markdown marks go. Sentences are said
-    whole or not at all, since a cut one can lose its "unless". A first sentence over the limit is cut at a word and
-    says so.
-    """
+def plain(text: str) -> str:
+    """A reply as plain words on one line: code blocks dropped, since `say` would read them symbol by symbol, links as
+    their words, and markdown marks gone."""
     text = re.sub(r"```.*?(```|$)", " ", text, flags=re.DOTALL)
     text = re.sub(r"\[([^\]]*)\]\([^)]*\)", r"\1", text)  # a link says its words
     text = re.sub(r"^\s*(#+|[-*•]|\d+\.)\s+", "", text, flags=re.MULTILINE)  # headings, bullets, numbers
     text = re.sub(r"[`*]+|(?<!\w)_+|_+(?!\w)", "", text)  # code marks, bold and italics, not snake_case
-    text = " ".join(text.split())
+    return " ".join(text.split())
+
+
+def spoken(text: str, sentences: int = 2, limit: int = 240) -> str:
+    """The part of a reply worth saying: its first sentences as plain words, at most `limit` characters.
+
+    Sentences are said whole or not at all, since a cut one can lose its "unless". A first sentence over the limit is
+    cut at a word and says so.
+    """
     said = ""
-    for sentence in sentences_of(text)[:sentences]:
+    for sentence in sentences_of(plain(text))[:sentences]:
         if said and len(said) + 1 + len(sentence) > limit:
             break
         said = f"{said} {sentence}".strip()
