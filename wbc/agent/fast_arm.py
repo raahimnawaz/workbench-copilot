@@ -160,6 +160,15 @@ def parse(answer: str) -> dict:
     return {}
 
 
+def asked(text: str, holding: str | None, notes: list = ()) -> str:
+    """What the model is asked about `text`: the bench's state, then the words. scripts/toolformer_data.py asks its
+    labeler the same, so the model learns from what it will see."""
+    listed = " ".join(f"({i}) {n}" for i, n in enumerate(notes, 1)) or "(empty)"
+    return (f"Bench state:\n- Notebook: {listed}\n- Last landed on the desk: nothing new.\n"
+            f"- The arm is holding: {f'the {holding}, which it picked up' if holding else 'nothing'}.\n\n"
+            f'What the user said: "{text}"')
+
+
 def arguments(c: dict) -> dict:
     """The tool's arguments for a rules call: put_down's place is its `thing` argument."""
     if c["tool"] == "move_thing":
@@ -269,11 +278,7 @@ class FastArm:
         return [n["note"] for n in self.notebook.notes] if self.notebook is not None else []
 
     def _ask(self, text: str) -> str:
-        holding = self._holding()
-        notes = " ".join(f"({i}) {n}" for i, n in enumerate(self._notes(), 1)) or "(empty)"
-        state = (f"Bench state:\n- Notebook: {notes}\n- Last landed on the desk: nothing new.\n"
-                 f"- The arm is holding: {f'the {holding}, which it picked up' if holding else 'nothing'}.\n\n"
-                 f'What the user said: "{text}"')
+        state = asked(text, self._holding(), self._notes())
         r = self.client.chat.completions.create(model=self.model, temperature=0, max_tokens=MAX_TOKENS, messages=[
             {"role": "system", "content": SYSTEM}, {"role": "user", "content": state}])
         return r.choices[0].message.content or ""

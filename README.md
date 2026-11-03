@@ -44,6 +44,7 @@ Everything in this repository was written during the hackathon, starting Oct 26,
 | `wbc/agent/` | The router loop on Muse Spark, its tools, `ask_coder` on Muse Wonder, the demo board's serial link, the voice front end (wake phrase, spoken stop, short answers), spoken replies, the budget guard and the console HUD |
 | `wbc/agent/memory.py` | Sessions that survive a restart and a full context, and the `remember` / `recall` / `forget` notebook |
 | `wbc/agent/fast_arm.py` | The arm's fast path: plain rules and a local Llama 3.2 3B have to agree on an arm command, which then runs with no Spark call |
+| `scripts/toolformer_data.py`, `toolformer_train.py`, `toolformer_mlx.py` | Fine-tuning the fast path's Llama after Meta's Toolformer: Spark writes and labels spoken requests in the fast path's own format, a label is kept only when its call runs on the recorded bench, and a LoRA is trained on Modal and converted for `mlx_lm.server` |
 | `hud/`, `wbc/agent/web_hud.py` | The HUD's orb page (canvas and WebGL, no packages) and its live feed over Server-Sent Events: the mic listening, each request, every model call with its time, the reply and its speech, and each turn's time and spend. `hud/CREDITS.md` lists what the page borrows |
 | `wbc/motion/kinematics.py` | URDF chain loader, forward kinematics, damped least-squares IK, the (x, y, z, pitch, roll) grasp frame |
 | `wbc/motion/joints.py`, `wbc/motion/trajectory.py` | Raw servo ticks to the URDF's joint angles, with signs checked by hand on the arm, and quintic moves timed under joint and tip speed caps |
@@ -55,7 +56,7 @@ Everything in this repository was written during the hackathon, starting Oct 26,
 | `wbc/perception/schematic.py`, `scripts/make_schematic.py`, `hardware/*.kicad_sch` | The demo boards' KiCad schematics, drawn from KiCad's own symbols, and `read_schematic`: their nets and KiCad's electrical rules check, through `kicad-cli` |
 | `wbc/agent/parts.py` | `add_part`: Muse Spark Open teaches itself a part from `parts.yaml` (its wiring to the DevKit's free GPIOs, its library and setup code, saved as a skill in `.wbc/skills/`), and the part is drawn into a copy of the schematic in `.wbc/schematics/`, kept only if KiCad's electrical rules check passes, and shown in KiCad with `--show` |
 | `scripts/kokoro_server.py`, `scripts/kokoro-say` | The co-pilot's voice: Kokoro-82M kept loaded on this Mac, and a stand-in for `say` that plays its audio |
-| `config/`, `fixtures/`, `tests/` | Model, bench and arm config, the recorded bench for `--sim`, 882 offline tests |
+| `config/`, `fixtures/`, `tests/` | Model, bench and arm config, the recorded bench for `--sim`, 887 offline tests |
 | `firmware/dut_demo/` | Act 1's demo board: blinks an LED and logs each blink over serial |
 
 | Reused | License | Used for |
