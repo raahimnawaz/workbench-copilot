@@ -245,3 +245,18 @@ def test_the_backup_router_runs_it_first_too(tmp_path):
     assert router.messages[1:] == [{"role": "user", "content": "grab the screwdriver"},
                                    {"role": "assistant", "content": "I've got the screwdriver."}]
     assert client.chat.completions.requests == []
+
+
+@pytest.mark.parametrize("text", ["Copilot, put my screwdriver in my cup and add my screen.",
+                                  "Put my screwdriver in my cup, and while it does that, add my screen.",
+                                  "Add my screen, and put my screwdriver in my cup.",
+                                  "While you put my screwdriver in my cup, add my screen to the board."])
+def test_a_request_with_a_clause_for_something_else_goes_to_spark_whole(text):
+    """So Spark runs the arm's move and the other request side by side, instead of the fast path dropping half."""
+    assert fast_arm.rules(text, None, THINGS, PLACES)["tool"] == "not_mine"
+
+
+@pytest.mark.parametrize("text", ["Copilot, pick my screwdriver up and put it on the sticky note.",
+                                  "Put my screwdriver in my cup, please.", "Put my screwdriver in my cup, thanks."])
+def test_clauses_that_all_move_the_arm_or_are_courtesy_stay_on_the_fast_path(text):
+    assert fast_arm.rules(text, None, THINGS, PLACES)["tool"] == "move_thing"
