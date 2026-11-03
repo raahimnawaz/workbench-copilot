@@ -120,11 +120,11 @@ SEEN = {"shoulder_pan": turn_from_above, "shoulder_lift": tip_forward, "elbow_fl
         "wrist_flex": tool_drop, "wrist_roll": roll_clockwise_from_the_wrist}
 
 
-def test_robot_yaml_gives_ids_1_to_6_a_plus_sign_on_every_arm_joint_and_p_32_to_the_elbow_and_gripper(robot_cfg,
-                                                                                                      joint_map):
+def test_robot_yaml_gives_ids_1_to_6_a_plus_sign_on_every_arm_joint_and_p_32_to_all_but_the_wrist_roll(robot_cfg,
+                                                                                                       joint_map):
     assert [joint_map.servos[m].id for m in JOINTS] == [1, 2, 3, 4, 5, 6]
     assert [joint_map.servos[m].sign for m in ARM] == [1] * 5
-    assert robot_cfg["gains"] == {"elbow_flex": 32, "gripper": 32}
+    assert robot_cfg["gains"] == {m: 32 for m in JOINTS if m != "wrist_roll"}
 
 
 def test_raw_2047_is_the_urdfs_zero_on_every_joint(joint_map):
@@ -203,12 +203,14 @@ def test_the_rest_pose_reads_folded_with_the_gripper_pointing_up(joint_map, chai
     assert [round(axes[i][0][2] * 1000) for i in (2, 3, 4)] == [102, 151, 212]  # mm: elbow, wrist flex, wrist roll
 
 
-def test_limits_are_the_calibrated_ranges_in_urdf_degrees_and_the_wrist_roll_gets_the_urdfs(joint_map, chain):
+def test_limits_are_the_calibrated_ranges_in_urdf_degrees_and_the_wrist_roll_gets_the_urdfs(robot_cfg, joint_map,
+                                                                                               chain):
     expected = {"shoulder_pan": [-107.8, 131.7], "shoulder_lift": [-118.2, 115.0], "elbow_flex": [-101.8, 92.3],
-                "wrist_flex": [-105.1, 98.1], "wrist_roll": [-157.2, 162.8]}
+                "wrist_flex": [-105.1, 98.1], "wrist_roll": [-78.0, 162.8]}  # the roll's narrowed by limits_deg
     for m, ends in expected.items():
         assert [math.degrees(v) for v in joint_map.limits(m)] == pytest.approx(ends, abs=0.05)
-    assert joint_map.limits("wrist_roll") == (chain.lower[4], chain.upper[4])
+    unnarrowed = JointMap.from_config({**robot_cfg, "limits_deg": {}}, CALIBRATION, chain)
+    assert unnarrowed.limits("wrist_roll") == (chain.lower[4], chain.upper[4])
     assert JointMap(joint_map.servos).limits("wrist_roll") == (-math.pi, math.pi)  # without the URDF's, a full turn
 
 
@@ -297,3 +299,17 @@ def test_calibration_dir_follows_lerobots_environment_chain(monkeypatch, tmp_pat
     assert joints.calibration_dir() == tmp_path.joinpath("lerobot", "calibration", *follower)
     monkeypatch.setenv("HF_LEROBOT_CALIBRATION", str(tmp_path / "calibration"))
     assert joints.calibration_dir() == tmp_path.joinpath("calibration", *follower)
+
+
+def test_robot_yaml_keeps_the_wrist_roll_off_its_stop_at_about_minus_80(joint_map):
+    # Nov 2: a pick drove the roll into its stop, where it held at -80.0° until the stray cut tripped
+    low, high = (math.degrees(v) for v in joint_map.limits("wrist_roll"))
+    assert low == pytest.approx(-78) and high == pytest.approx(162.8, abs=0.1)  # the URDF's high end, unnarrowed
+
+
+@pytest.mark.parametrize("limits, match", [({"elbow_flex": [-10, 10]}, "narrows a joint with no calibrated stop"),
+                                           ({"wrist_roll": [10, -10]}, r"is \[low, high\] in degrees"),
+                                           ({"wrist_roll": -78}, r"is \[low, high\] in degrees")])
+def test_limits_deg_narrows_only_a_joint_with_no_stop_with_a_low_and_a_high(robot_cfg, chain, limits, match):
+    with pytest.raises(ValueError, match=match):
+        JointMap.from_config({**robot_cfg, "limits_deg": limits}, CALIBRATION, chain)

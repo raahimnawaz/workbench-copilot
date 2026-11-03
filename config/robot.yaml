@@ -15,19 +15,20 @@ tool:
 
 # The table under the arm (wbc/motion/table.py): the driver's floors are measured from it. The desk sits about 15 mm
 # under the URDF's z 0 near the base, which stands about 0.6 in tall, and reads lower the further out the arm reaches,
-# most likely its joints' zeros. Touched with the arm (desk tags 21-25, 95-399 mm from the base's pan
-# axis, at bearings -92° to +27°) it's -8.7 mm at the pan axis falling 88.9 mm per m of reach, every tag within 1.3 mm.
+# most likely its joints' zeros. Touched with the arm (desk tags 20-22, 24 and 25 and the carrier's 10 and 13, 101-377
+# mm from the base's pan axis, at bearings -89° to +36°) it's -7.4 mm at the pan axis falling 92.0 mm per m of reach,
+# every tag within 1.7 mm.
 # The floors add a 2 mm margin. Nearer or further out than the touches, the table is the higher of the line and its
 # nearest touched end, and past their bearings it rises over 10° to the highest the line reached, never lower; a pick
 # is refused where it's held more than 2 mm high. scripts/desk_camera.py table prints these lines again after a
 # re-touch.
 table:
-  at_base_mm: -8.7
-  slope_mm_per_m: -88.9
-  reach_mm: [94, 399]
+  at_base_mm: -7.4
+  slope_mm_per_m: -92.0
+  reach_mm: [101, 377]
   margin_mm: 2.0
   axis_mm: [38.8353, 0.0]
-  bearing_deg: [-92, 27]
+  bearing_deg: [-89, 36]
 
 # How close the tool point, the jaw tips, may come to that table, mm. The driver's default is 10, and 5 the least it
 # takes: the arm sagging 5 mm under a floor cuts every motor. 5 lets a pick put the tips about halfway up a 16 mm handle
@@ -59,6 +60,10 @@ hand:
   # With go_ahead enter, ask again over the thing with the jaws open, before they go down, so a spot, a jaw line or a
   # fixed jaw over the thing instead of beside it stops there. Turn it off once picks land where they should.
   check_over: true
+  # Places a put stands what's held in on end, by name, with how tall each stands (mm): a put turns the gripper up
+  # from straight down until it's on end over the opening and lets go once its lower end is inside the rim. The
+  # height here wins over any given in the request, since it's measured: the mug, just under 4 in.
+  containers: {cup: 98, mug: 98}
 
 # Servo ids, and the signs wbc/motion/joints.py maps raw ticks with: q = sign * (raw - 2047) * 2 pi / 4096 radians.
 # The URDF's zero is lerobot-calibrate's Part 1 L pose (base facing forward, upper arm straight up, forearm and
@@ -76,9 +81,21 @@ servos:
   wrist_roll: {id: 5, sign: 1}
   gripper: {id: 6}
 
+# The wrist roll turns all the way round, so its calibration has no stop and moves keep it inside the URDF's limits,
+# clear of where its reading wraps. It does stop at about -80°, where a move driving it further holds until its load
+# trips the 5° stray cut. So it's narrowed here (degrees, inside the URDF's), and a move keeps RANGE_MARGIN inside
+# that; a pick takes the other way round instead.
+limits_deg:
+  wrist_roll: [-78, 180]
+
 # P gains written over the 16 that LeRobot's configure() gives every joint, each time after it runs. At 32 the elbow
 # lifts the forearm from flat to straight up at the speed caps, lagging 3.5° at most. At 16 the gripper stops where its
 # push near closed meets the friction, short of gripping the multimeter probe at the jaw tips; at 32 it holds it there.
+# At 16 the base, shoulder lift and wrist flex lag 3-5° behind their goals under a load, in jerks, up to the driver's
+# 5° stray cut while carrying a screwdriver; at 32 they lag 2.1-2.8° at most.
 gains:
+  shoulder_pan: 32
+  shoulder_lift: 32
   elbow_flex: 32
+  wrist_flex: 32
   gripper: 32

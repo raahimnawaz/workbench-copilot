@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import itertools
 import json
+import math
 import threading
 import time
 from dataclasses import dataclass, field
@@ -23,8 +24,10 @@ from . import coder, dut
 
 MAX_READ = 64_000
 SEEN_S = 60.0  # seconds a thing stays where locate found it: after that, or once the arm has moved it, locate again
+MISSED_MM = 25.0  # mm from where a pick took a thing that a look finding it there after the put counts as a miss
 SAID_STOP = {"ok": False, "halted": True, "error": "the user said stop, so the arm didn't move"}
 LOCATES = itertools.count(1)  # each locate's files get the next number, so two at once never share one
+MOVES = itertools.count(1)    # and each arm request's move log
 
 
 @dataclass
@@ -100,6 +103,9 @@ class Bench:
     robot_cfg: dict = field(default_factory=dict)  # robot.yaml
     desk_cfg: dict = field(default_factory=dict)  # desk.yaml: the desk camera and its tags
     arm_port: str | None = None  # the arm's servo adapter; None keeps the arm's tools off (python -m wbc.agent --arm)
+    move_logs: Path | None = None  # where each arm request's moves are saved (_save_moves); None saves none
+    powering: threading.Thread | None = None  # the arm powering on while a locate runs (warm_up); move() waits for it
+    desk_stream: object = None  # wbc.perception.camera.Stream: the desk camera kept open, so a locate needn't open it
     calibration_dir: str | None = None  # lerobot-calibrate's folder when it's another account's
     confirm: Callable | None = None  # asks the user and waits: True only for Enter at the keyboard
     go_ahead: str = "enter"  # robot.yaml's hand.go_ahead: "request" moves the arm at once, "enter" asks confirm first
@@ -189,7 +195,7 @@ def _locate_all(bench: Bench, wants: list) -> dict:
     cfg = bench.desk_cfg
     touched = desk.load_touched(bench.root / desk.TOUCHED)
     t0 = time.monotonic()
-    _, frame = desk.find_camera(cfg, touched, camera.capture)
+    _, frame = desk.find_camera(cfg, touched, bench.desk_stream.capture if bench.desk_stream else camera.capture)
     captured = time.monotonic() - t0
     size = (frame.shape[1], frame.shape[0])
     fit = desk.fit(tagmap.detect(frame, cfg["tags"]["family"]), touched, size, desk.focal_for(cfg, size[0]),
@@ -228,6 +234,16 @@ def _open_hand(bench: Bench):
                        say=bench.say)
         bench.hand = Hand(arm, bench.robot_cfg, say=bench.say)
     return bench.hand
+
+
+def _save_moves(bench: Bench, request: str, log: list) -> None:
+    """One arm request's moves and jaw actions, each with the driver's samples (every joint's goal, angle and load, tick
+    by tick), as arm-<time>-<n>.json in bench.move_logs: what a miss, a trip or a slow move went through."""
+    out = bench.move_logs
+    out.mkdir(parents=True, exist_ok=True)
+    path = out / f"arm-{datetime.now():%Y%m%d-%H%M%S}-{next(MOVES)}.json"
+    path.write_text(json.dumps({"request": request, "moves": log},
+                               default=lambda v: v.item() if hasattr(v, "item") else str(v)), encoding="utf-8")
 
 
 def _not_wired(tool: str, day: str) -> dict:
@@ -300,6 +316,17 @@ def build_toolbox(bench: Bench) -> Toolbox:
         if mismatches == found:
             return result
         return {**{k: v for k, v in result.items() if k != "_image"}, "mismatches": mismatches}
+
+    @tb.register("read_schematic", (
+        "Read the demo board's KiCad schematic, the design: each net and the pins it joins (which ESP32 pin drives "
+        "what), and KiCad's electrical rules check."), {"type": "object", "properties": {}}, label="KiCad")
+    def read_schematic() -> dict:
+        drawn = (bench.layout or {}).get("schematic")
+        if not drawn:
+            return {"ok": False, "error": "bench.yaml names no schematic"}
+        from wbc.perception import schematic
+
+        return {"ok": True, **schematic.read(bench.root / drawn)}
 
     @tb.register("read_breadboard", (
         "Photograph the breadboard with the overhead camera, segment its jumper wires with SAM 3.1, and return "
@@ -399,6 +426,19 @@ def build_toolbox(bench: Bench) -> Toolbox:
                 bench.seen.pop(key(thing), None)
         return results
 
+    def left_behind(t):
+        """(x, y) mm where a look finds `t` within MISSED_MM of where a pick took it from, so the jaws missed it; None
+        when it's gone from there, or the look failed (which it says)."""
+        try:
+            found = located([(t.name, t.height_mm)])[t.name]["found"]
+        except Exception as e:  # noqa: BLE001 - the camera or the tags: a look that fails tells nothing either way
+            bench.say(f"I couldn't look whether the {t.name} left its spot: {e}")
+            return None
+        for f in found:
+            if math.hypot(f["x_mm"] - t.x, f["y_mm"] - t.y) <= MISSED_MM:
+                return f["x_mm"], f["y_mm"]
+        return None
+
     def targets(wants: list):
         """([Thing, ...], None) for each (thing, height_mm) in `wants` from what locate found, locating the ones it
         hasn't in the last SEEN_S, or found at another height than one given now, again, together from one photo;
@@ -415,6 +455,14 @@ def build_toolbox(bench: Bench) -> Toolbox:
             return None, {"ok": False, "error": f"locate found no {missing[0]} on the desk"}
         return [bench.seen[key(thing)][0] for thing, _ in wants], None
 
+    def forget(result: dict, *things) -> None:
+        """Where locate saw these, forgotten after an arm move was refused (out of reach, past a joint's range): the
+        user may move them before asking again ("I moved the cup, try again"), and within SEEN_S the old place would
+        be planned for again."""
+        if bench.arm_port is not None and "refused" in str(result.get("error", "")):
+            for thing in things:
+                bench.seen.pop(key(thing), None)
+
     def target(thing: str, height_mm: float):
         """(Thing, None) as targets() finds one; (None, error) when it can't."""
         found, problem = targets([(thing, height_mm)])
@@ -428,6 +476,9 @@ def build_toolbox(bench: Bench) -> Toolbox:
         stop, come back as errors."""
         if not bench.arm_port:
             return {"ok": False, "error": "the arm's tools are off: start the agent with --arm"}
+        if bench.powering is not None:  # warm_up's, started before the locate
+            bench.powering.join()
+            bench.powering = None
         asking = bench.go_ahead == "enter"
         if asking and bench.confirm is None:
             return {"ok": False, "error": "there's no keyboard to press Enter on, so the arm stays still"}
@@ -436,12 +487,14 @@ def build_toolbox(bench: Bench) -> Toolbox:
         ending = {"ok": False, "error": "the session is ending, so the arm didn't move"}
         if not bench.arm_lock.acquire(blocking=False):  # two arm tools in one round would run in either order
             return {"ok": False, "error": "another arm move is running: call arm tools one at a time"}
+        hand = None
         try:
             if bench.stopped.is_set():
                 return ending
             if bench.halted.is_set():
                 return dict(SAID_STOP)
             hand = _open_hand(bench)
+            hand.log = [] if bench.move_logs is not None else None  # what this request moves, saved once it's done
             if bench.stopped.is_set():
                 return ending
             off = len(hand.arm.powered) < len(hand.arm.joints.servos)
@@ -469,7 +522,40 @@ def build_toolbox(bench: Bench) -> Toolbox:
             return {"ok": False, "halted": True, "error": f"the user said stop, so it {e}",
                     **({"holding": held} if held else {})}
         finally:
+            if hand is not None:
+                log, hand.log = hand.log, None
+                if log:
+                    try:
+                        _save_moves(bench, question, log)
+                    except OSError as e:  # a log it couldn't write mustn't hide how the move went
+                        bench.say(f"The arm's move log wasn't saved: {e}")
             bench.arm_lock.release()
+
+    def warm_up():
+        """With hand.go_ahead "request", the request being the go-ahead, power the arm on in the background while the
+        locate before its move runs, rather than after it: powering on holds the arm where it is. move() waits for
+        it, then checks the arm and powers it on itself if this didn't, saying why."""
+        if bench.go_ahead != "request" or bench.sim or not bench.arm_port or bench.powering is not None:
+            return
+        if bench.hand is not None and len(bench.hand.arm.powered) == len(bench.hand.arm.joints.servos):
+            return
+
+        def power():
+            with bench.arm_lock:
+                if bench.stopped.is_set() or bench.halted.is_set():
+                    return
+                try:
+                    hand = _open_hand(bench)
+                    if bench.stopped.is_set() or bench.halted.is_set():  # Ctrl-C or the stop while the port opened
+                        return
+                    if len(hand.arm.powered) < len(hand.arm.joints.servos):
+                        hand.arm.check()
+                        hand.power_on()
+                except Exception:  # noqa: BLE001 - a refusal or a trip comes back from move(), which tries again
+                    pass
+
+        bench.powering = threading.Thread(target=power, name="arm power-on", daemon=True)
+        bench.powering.start()
 
     def check_over():
         """What pick_up and put_down ask over the thing before going down (a pick with its jaws open), while each move
@@ -479,14 +565,18 @@ def build_toolbox(bench: Bench) -> Toolbox:
         return bench.confirm if (bench.robot_cfg.get("hand") or {}).get("check_over", True) else None
 
     go = " The user presses Enter before the arm moves." if bench.go_ahead == "enter" else " The arm moves at once."
+    listed = (bench.robot_cfg.get("hand") or {}).get("containers") or {}
+    containers = {key(name): float(h) for name, h in listed.items()}  # a put stands things in these on end
 
     @tb.register("pick_up", (
         f"Pick a thing up off the desk with the arm, where locate last found it (locating it first if it hasn't).{go} "
-        "Returns what the jaws hold, or an error if the user said no or stop, the arm can't reach it, or the jaws came "
-        "up empty. Call arm tools one at a time, never two in one round."), thing_params, label="arm")
+        "Returns what the jaws hold, with `unconfirmed` when they closed all the way, which they do on nothing and on "
+        "a thing held loosely alike: then say you can't be sure. An error if the user said no or stop, or the arm "
+        "can't reach it. Call arm tools one at a time, never two in one round."), thing_params, label="arm")
     def pick_up(thing: str, height_mm: float = 0) -> dict:
         if bench.halted.is_set():
             return dict(SAID_STOP)
+        warm_up()
         t, problem = target(thing, height_mm)
         if problem:
             return problem
@@ -497,10 +587,13 @@ def build_toolbox(bench: Bench) -> Toolbox:
             bench.sim_held = t.name
             bench.seen.pop(key(thing), None)
             return {"ok": True, "sim": True, "holding": t.name, "x_mm": t.x, "y_mm": t.y}
+        planned = []
         result = move(f"Pick up the {t.name} at x {t.x:.0f}, y {t.y:.0f} mm?",
-                      lambda hand: hand.pick_up(t, confirm=check_over()), plan=lambda hand: hand.plan_pick(t))
+                      lambda hand: hand.pick_up(t, confirm=check_over(), steps=planned[-1]),
+                      plan=lambda hand: planned.append(hand.plan_pick(t)))
         if result.get("ok") or "steps" in result or result.get("motors_cut") or result.get("halted"):  # it went to it
             bench.seen.pop(key(thing), None)  # in the jaws now, or nudged trying: locate it again before the next move
+        forget(result, thing)
         return result
 
     @tb.register("put_down", (
@@ -510,6 +603,8 @@ def build_toolbox(bench: Bench) -> Toolbox:
     def put_down(thing: str, height_mm: float = 0) -> dict:
         if bench.halted.is_set():
             return dict(SAID_STOP)
+        inside = key(thing) in containers  # stood in on end, its height as measured
+        height_mm = containers.get(key(thing), height_mm)
         t, problem = target(thing, height_mm)
         if problem:
             return problem
@@ -518,8 +613,18 @@ def build_toolbox(bench: Bench) -> Toolbox:
                 return {"ok": False, "error": "refused, nothing moved for it: the jaws hold nothing to put down"}
             held, bench.sim_held = bench.sim_held, None
             return {"ok": True, "sim": True, "put": held, "on": t.name}
-        return move(f"Put it down on the {t.name} at x {t.x:.0f}, y {t.y:.0f} mm?",
-                    lambda hand: hand.put_down(t, confirm=check_over()), plan=lambda hand: hand.plan_put(t))
+        planned = []
+        if inside:
+            result = move(f"Put it in the {t.name} at x {t.x:.0f}, y {t.y:.0f} mm?",
+                          lambda hand: hand.put_in(t, confirm=check_over(), steps=planned[-1]),
+                          plan=lambda hand: planned.append(hand.plan_insert(t, hand.held_thing, tip=hand.held_tip)
+                                                          if hand.held_thing else None))
+        else:
+            result = move(f"Put it down on the {t.name} at x {t.x:.0f}, y {t.y:.0f} mm?",
+                          lambda hand: hand.put_down(t, confirm=check_over(), steps=planned[-1]),
+                          plan=lambda hand: planned.append(hand.plan_put(t)))
+        forget(result, thing)
+        return result
 
     @tb.register("move_thing", (
         "Move a thing on the desk onto or into a place, such as a screwdriver onto a tray, in one call: one desk photo "
@@ -541,6 +646,9 @@ def build_toolbox(bench: Bench) -> Toolbox:
     def move_thing(thing: str, place: str, thing_height_mm: float = 0, place_height_mm: float = 0) -> dict:
         if bench.halted.is_set():
             return dict(SAID_STOP)
+        inside = key(place) in containers  # stood in on end, its height as measured
+        place_height_mm = containers.get(key(place), place_height_mm)
+        warm_up()
         found, problem = targets([(thing, thing_height_mm), (place, place_height_mm)])
         if problem:
             return problem
@@ -552,26 +660,42 @@ def build_toolbox(bench: Bench) -> Toolbox:
             bench.seen.pop(key(thing), None)
             return {"ok": True, "sim": True, "moved": t.name, "onto": p.name, "x_mm": p.x, "y_mm": p.y}
 
+        planned = {}
+
+        def plan(hand):  # both, before anything moves: the put from where the pick leaves the arm
+            planned["pick"] = hand.plan_pick(t)
+            planned["put"] = (hand.plan_insert(p, t, start=planned["pick"][-1].q,
+                                               tip=hand.tip_from_jaws(t, planned["pick"][2].q))
+                              if inside else hand.plan_put(p, start=planned["pick"][-1].q))
+
         def run(hand):
             from wbc.motion.arm import Refused
 
-            picked = hand.pick_up(t, confirm=check_over())
+            picked = hand.pick_up(t, confirm=check_over(), steps=planned.get("pick"))
             if not picked.get("ok"):
                 return {**picked, "put": "not tried"}
             try:
-                put = hand.put_down(p, confirm=check_over())
+                put = (hand.put_in if inside else hand.put_down)(p, confirm=check_over(), steps=planned.get("put"))
             except Refused as e:  # refused before that move started, so it's still in the jaws
                 return {"ok": False, "holding": t.name, "error": f"picked up the {t.name}, but putting it on the "
                         f"{p.name} was refused, so the jaws still hold it: {e}", "steps": picked["steps"]}
+            steps = picked["steps"] + put["steps"]
             if not put["ok"]:  # stopped over the place
-                return {**put, "holding": t.name, "steps": picked["steps"] + put["steps"]}
-            return {"ok": True, "moved": t.name, "onto": p.name, "holding": None,
-                    "steps": picked["steps"] + put["steps"]}
+                return {**put, "holding": t.name, "steps": steps}
+            if picked.get("unconfirmed"):  # the jaws closed all the way: a look at where it was tells
+                there = left_behind(t)
+                if there is not None:
+                    return {"ok": False, "missed": True, "holding": None, "error": f"the jaws closed on nothing at "
+                            f"the {t.name}: it's still where it was, at x {there[0]:.0f}, y {there[1]:.0f} mm",
+                            "steps": steps}
+            return {"ok": True, "moved": t.name, "onto": p.name, "holding": None, "steps": steps,
+                    **({"on_end": True} if inside else {})}
 
-        result = move(f"Pick up the {t.name} at x {t.x:.0f}, y {t.y:.0f} mm and put it on the {p.name} at x {p.x:.0f}, "
-                      f"y {p.y:.0f} mm?", run, plan=lambda hand: (hand.plan_pick(t), hand.plan_put(p)))
+        result = move(f"Pick up the {t.name} at x {t.x:.0f}, y {t.y:.0f} mm and put it {'in' if inside else 'on'} the "
+                      f"{p.name} at x {p.x:.0f}, y {p.y:.0f} mm?", run, plan=plan)
         if result.get("ok") or "steps" in result or result.get("motors_cut") or result.get("halted"):  # it went to it
             bench.seen.pop(key(thing), None)
+        forget(result, thing, place)
         return result
 
     @tb.register("arm_home", f"Move the arm back to where it rested when its motors came on.{go}",

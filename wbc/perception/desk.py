@@ -31,6 +31,16 @@ from . import tags as tagmap
 TOUCHED = Path(".wbc") / "desk_tags.json"  # where touch saves the tags' centers, under the repo root
 NOMINAL_WIDTH = 1920  # config/desk.yaml's focal_px is for frames this wide
 STRAIGHT_DOWN = 20.0  # degrees of tilt under which one view can't tell the focal length from the camera's height
+OWN_TAGS = 2  # of the desk's own tags a camera has to show for the carrier's to count: the board camera sees those
+GRIP_STEP_MM = 2.0   # the slices along a flat thing's long axis its width is measured in
+GRIP_OFF_MM = 10.0   # how far from its middle toward its narrow end a pick grips something lying flat: on a
+                     # screwdriver, its handle 1 cm from the middle toward the tip, near where it balances, so it
+                     # doesn't tip in the jaws
+GRIP_SPAN_MM = 10.0  # how much of it around there its width is measured over, about as wide as the jaw tips
+END_SHARE = 0.25     # of its length at each end that's compared to tell its narrow end (a screwdriver's shaft,
+                     # 4-8 mm) from its wide one (the handle's cap end, 12-13)
+NARROWER_MM = 2.0    # how much narrower one end has to be to count as the narrow end: a mask's edges come in
+                     # 0.7 mm steps at 1 px/mm on a slant
 
 
 @dataclass
@@ -86,6 +96,8 @@ class Found:
     heading_deg: float  # its long axis, from the arm's straight ahead (+x) toward its left (+y), -90 to 90
     reach_mm: float     # its center's distance from the arm's base, on the table
     pixels: int         # its mask's size in the top-down view
+    grip: np.ndarray | None = None      # (x, y) where a pick grips something lying flat (_grip), if not its middle
+    grip_width_mm: float | None = None  # how wide it is there
 
     def summary(self) -> dict:
         """What the router sees."""
@@ -93,7 +105,10 @@ class Found:
                 "x_mm": round(float(self.center[0]), 1), "y_mm": round(float(self.center[1]), 1),
                 "top_z_mm": round(self.top_z, 1), "height_mm": self.height_mm,
                 "length_mm": round(self.length_mm, 1), "width_mm": round(self.width_mm, 1),
-                "heading_deg": round(self.heading_deg, 1), "reach_mm": round(self.reach_mm, 1)}
+                "heading_deg": round(self.heading_deg, 1), "reach_mm": round(self.reach_mm, 1),
+                **({} if self.grip is None else {"grip_x_mm": round(float(self.grip[0]), 1),
+                                                 "grip_y_mm": round(float(self.grip[1]), 1),
+                                                 "grip_width_mm": round(self.grip_width_mm, 1)})}
 
 
 def center(corners) -> np.ndarray:
@@ -244,13 +259,40 @@ def _heading(axis) -> float:
 
 
 def _lying(shadow: np.ndarray) -> tuple:
-    """(middle, length, width, heading) of something flat: its mask is its footprint."""
+    """(middle, length, width, heading, grip) of something flat: its mask is its footprint. grip is _grip's."""
     middle = shadow.mean(axis=0)
     d = shadow - middle
     values, vectors = np.linalg.eigh(np.cov(d.T))
     major = vectors[:, np.argmax(values)]
-    (a0, a1), (b0, b1) = _span(_along(d, major)), _span(_along(d, np.array([-major[1], major[0]])))
-    return middle, a1 - a0, b1 - b0, _heading(major)
+    minor = np.array([-major[1], major[0]])
+    (a0, a1), (b0, b1) = _span(_along(d, major)), _span(_along(d, minor))
+    return middle, a1 - a0, b1 - b0, _heading(major), _grip(d, middle, major, minor)
+
+
+def _grip(d: np.ndarray, middle: np.ndarray, major: np.ndarray, minor: np.ndarray) -> tuple | None:
+    """((x, y), width) where a pick grips something flat whose mask's points are `d` from its `middle`: GRIP_OFF_MM
+    from the middle along its long axis toward its narrow end, on its centre line there, with its width over
+    GRIP_SPAN_MM around that, measured in GRIP_STEP_MM slices. The narrow end is the one whose END_SHARE of its length
+    is NARROWER_MM narrower or more. None when it's too short to grip that far off its middle, or about as wide at both
+    ends: then a pick grips its middle."""
+    s, t = _along(d, major), _along(d, minor)
+    lo, hi = _span(s)
+    starts = np.arange(lo, hi, GRIP_STEP_MM)
+    widths, centres = np.full(len(starts), np.nan), np.full(len(starts), np.nan)
+    for k, a in enumerate(starts):
+        across = t[(s >= a) & (s < a + GRIP_STEP_MM)]
+        if len(across):
+            widths[k], centres[k] = across.max() - across.min(), (across.max() + across.min()) / 2
+    end = max(1, round(END_SHARE * len(starts)))
+    low_end, high_end = np.nanmedian(widths[:end]), np.nanmedian(widths[-end:])
+    if not (abs(low_end - high_end) >= NARROWER_MM and lo + GRIP_SPAN_MM / 2 <= -GRIP_OFF_MM
+            and GRIP_OFF_MM <= hi - GRIP_SPAN_MM / 2):
+        return None
+    at = GRIP_OFF_MM if high_end < low_end else -GRIP_OFF_MM
+    near = np.abs(starts + GRIP_STEP_MM / 2 - at) <= GRIP_SPAN_MM / 2
+    if not np.any(near & ~np.isnan(widths)):
+        return None
+    return middle + at * major + float(np.nanmean(centres[near])) * minor, float(np.nanmedian(widths[near]))
 
 
 def _standing(shadow: np.ndarray, desk: DeskFit, height_mm: float) -> tuple:
@@ -284,9 +326,12 @@ def found(mask: np.ndarray, to_arm: np.ndarray, desk: DeskFit, height_mm: float 
     if len(u) < 3:
         raise ValueError(f"the mask for {phrase or 'it'} is empty")
     shadow = tagmap.to_mm(to_arm, np.column_stack([u, v]).astype(float))
-    middle, length, width, heading = (_standing(shadow, desk, height_mm) if height_mm > 0 else _lying(shadow))
+    if height_mm > 0:
+        (middle, length, width, heading), grip = _standing(shadow, desk, height_mm), None
+    else:
+        middle, length, width, heading, grip = _lying(shadow)
     return Found(phrase, score, middle, float(height_mm), desk.table_z + height_mm, float(length), float(width),
-                 heading, float(np.hypot(*middle)), int(len(u)))
+                 heading, float(np.hypot(*middle)), int(len(u)), *(grip or (None, None)))
 
 
 def locate(frame: np.ndarray, desk: DeskFit, cfg: dict, segment, phrase: str, height_mm: float = 0.0) -> tuple:
@@ -302,9 +347,12 @@ def locate(frame: np.ndarray, desk: DeskFit, cfg: dict, segment, phrase: str, he
 
 def find_camera(cfg: dict, touched: dict, capture, indices=range(4)) -> tuple:
     """The desk camera's index and a frame from it: the configured camera if it shows enough touched tags, otherwise
-    the first that does. macOS can renumber cameras when one is plugged in, so the desk camera's number can change."""
+    the first that does. macOS can renumber cameras when one is plugged in, so the desk camera's number can change.
+    The carrier's tags (desk.yaml's carrier_ids) count only beside OWN_TAGS of the desk's own: the board camera sees
+    all of them, and none of the desk's."""
     cam = cfg["camera"]
     need = max(4, cfg.get("min_tags", 4))
+    carrier = set(cfg["tags"].get("carrier_ids") or ())
     tried = []
     for index in [cam["index"]] + [i for i in indices if i != cam["index"]]:
         try:
@@ -313,10 +361,14 @@ def find_camera(cfg: dict, touched: dict, capture, indices=range(4)) -> tuple:
             tried.append(f"camera {index}: {e}")
             continue
         seen = sorted(set(tagmap.detect(frame, cfg["tags"]["family"])) & set(touched))
-        if len(seen) >= need:
+        own = [t for t in seen if t not in carrier]
+        if len(seen) >= need and len(own) >= OWN_TAGS:
             return index, frame
-        tried.append(f"camera {index} shows {len(seen)} of them")
-    raise RuntimeError(f"no camera shows {need} of the touched desk tags {sorted(touched)}. " + "; ".join(tried))
+        tried.append(f"camera {index} shows {len(seen)} of them"
+                     + (f", {len(own)} the desk's own" if own != seen else ""))
+    raise RuntimeError(f"no camera shows {need} of the touched desk tags {sorted(touched)}"
+                       + (f", {OWN_TAGS} of them the desk's own" if carrier & set(touched) else "") + ". "
+                       + "; ".join(tried))
 
 
 def draw(view: np.ndarray, to_arm: np.ndarray, touched: dict, hits=()) -> np.ndarray:
@@ -338,5 +390,7 @@ def draw(view: np.ndarray, to_arm: np.ndarray, touched: dict, hits=()) -> np.nda
         half = np.array([math.cos(a), math.sin(a)]) * f.length_mm / 2
         cv2.line(out, px(f.center - half), px(f.center + half), (0, 200, 0), 2, cv2.LINE_AA)
         cv2.circle(out, px(f.center), 5, (0, 200, 0), -1, cv2.LINE_AA)
+        if f.grip is not None:  # where a pick grips it
+            cv2.circle(out, px(f.grip), 8, (0, 220, 255), 2, cv2.LINE_AA)
         cv2.putText(out, f"{n}", px(f.center + (12, 12)), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 200, 0), 2, cv2.LINE_AA)
     return out

@@ -154,11 +154,44 @@ def test_start_turns_it_on_only_once_the_server_answers(tmp_path):
     b, tb, notebook = bench(tmp_path)
     hud = SilentHud()
     on = FastArm({**CFG, "keep_warm_s": 0}, tb, b, notebook, hud, client=Llama(answer("not_mine")))
-    off = FastArm({**CFG, "keep_warm_s": 0}, tb, b, notebook, hud, client=Llama(ConnectionError("refused")))
+    slept = []
+    off = FastArm({**CFG, "keep_warm_s": 0}, tb, b, notebook, hud, client=Llama(*[ConnectionError("refused")] * 3),
+                  sleep=slept.append)
     assert on.start() and on.ready and not off.start() and not off.ready
+    assert slept == [fast_arm.START_GAP_S] * (fast_arm.START_TRIES - 1)
     notes = [e[1] for e in hud.events if e[0] == "note"]
     assert notes[0].startswith("fast path on: Llama 3.2 3B answered in")
-    assert notes[1] == "fast path off: Llama 3.2 3B at http://127.0.0.1:8090/v1 didn't answer (ConnectionError)"
+    assert notes[1] == ("fast path off: Llama 3.2 3B at http://127.0.0.1:8090/v1 didn't answer "
+                        "(ConnectionError: refused)")
+
+
+def test_a_start_that_fails_once_tries_again_and_keeping_it_warm_turns_it_on_later(tmp_path):
+    b, tb, notebook = bench(tmp_path)
+    hud = SilentHud()
+    retried = FastArm({**CFG, "keep_warm_s": 0}, tb, b, notebook, hud,
+                      client=Llama(AttributeError("a module half loaded"), answer("not_mine")), sleep=lambda s: None)
+    assert retried.start() and retried.ready
+    class Enough(Exception):
+        pass
+    waits = []
+
+    def sleep(seconds):  # start()'s gaps between tries, one keep-warm wait, and then the test has seen enough
+        waits.append(seconds)
+        if len(waits) > fast_arm.START_TRIES:
+            raise Enough
+    later = FastArm(CFG, tb, b, notebook, hud, client=Llama(*[ConnectionError("refused")] * 3, answer("not_mine")),
+                    sleep=sleep)
+    started = []
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(fast_arm.threading, "Thread", lambda target, daemon: NS(start=lambda: started.append(target)))
+        assert not later.start() and not later.ready
+    (keep_warm,) = started
+    with pytest.raises(Enough):
+        keep_warm()
+    assert later.ready and waits == [fast_arm.START_GAP_S] * (fast_arm.START_TRIES - 1) + [CFG["keep_warm_s"]] * 2
+    notes = [e[1] for e in hud.events if e[0] == "note"]
+    assert notes[-2].endswith("didn't answer (ConnectionError: refused); it asks again every 20 s")
+    assert notes[-1] == "fast path on: Llama 3.2 3B answered"
 
 
 # The router runs it first

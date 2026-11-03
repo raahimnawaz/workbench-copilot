@@ -7,7 +7,8 @@ import pytest
 from fakes import SilentHud
 
 from wbc.agent import __main__ as agent
-from wbc.agent.mouth import Mouth, spoken
+from wbc.agent.mouth import Mouth, say_command, spoken
+from wbc.config import ROOT
 
 
 @pytest.mark.parametrize("reply, said", [
@@ -177,3 +178,9 @@ def test_flags_choose_when_it_speaks_and_the_mic_waits_for_it(monkeypatch, flags
     assert started.wait(2 if ears else 0.1) == ears  # the ears start before the first turn, or never
     if said and ears:
         assert heard["muted"]()  # the reply is still being said, so the mic drops what it hears
+
+
+def test_a_configured_stand_in_speaks_and_a_missing_one_never_falls_back_to_say(tmp_path):
+    assert say_command("scripts/kokoro-say") == str(ROOT / "scripts" / "kokoro-say")
+    assert say_command(str(tmp_path / "no-such-voice")) is None  # silent, never macOS `say`
+    assert Mouth({"command": str(tmp_path / "no-such-voice")}).command is None

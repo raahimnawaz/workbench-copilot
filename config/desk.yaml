@@ -6,7 +6,11 @@ focal_px: 1400       # the C920's focal length at 1920 px wide (published calibr
 tags:
   family: tag36h11
   size_mm: 50        # the black square's side, as printed
-  ids: [20, 21, 22, 23, 24, 25]  # not the carrier's 10-13
+  ids: [20, 21, 22, 23, 24, 25]  # the desk's own: scripts/desk_camera.py tags prints them
+  # The carrier's tags (20 mm, on its own sheet), which the desk camera sees too. Touched as well, they let the desk be
+  # mapped with the arm over a few of its own; a camera counts them only beside 2 of the desk's own, since the board
+  # camera always sees all four.
+  carrier_ids: [10, 11, 12, 13]
 min_tags: 4          # touched tags a frame has to show to be mapped; with 5 or more each one is checked against the rest
 region_mm: [-100, -450, 480, 450]  # x0, y0, x1, y1 in the arm's frame: the part of the table locate shows SAM
 px_per_mm: 1.0       # that top-down view's scale: 900 x 580 px, under SAM's 1008

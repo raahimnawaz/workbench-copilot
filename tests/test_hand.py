@@ -2,6 +2,7 @@
 arm tests' fake follower."""
 import dataclasses
 import io
+import json
 import math
 import queue
 import threading
@@ -21,7 +22,9 @@ from wbc.agent.budget import BudgetExceeded
 from wbc.config import ROOT
 from wbc.motion import arm as driver
 from wbc.motion.arm import Arm, Refused
-from wbc.motion.hand import (CLOSED_GAP_MM, FLOOR_MARGIN_MM, HOVER_MM, JAW_CLEAR_MM, JUST_OVER_MM, THIN, Hand, Thing,
+from wbc.motion import hand as hand_mod
+from wbc.motion.hand import (CLOSED_GAP_MM, CLOSED_OPENING, FLOOR_MARGIN_MM, GRIP_SHARE, HOVER_MM, JAW_CLEAR_MM,
+                             JAW_LEVER_MM, JUST_OVER_MM, MIN_OPEN, MOVING_CLEAR_MM, OPEN_SPARE, THIN, Hand, Thing,
                              line)
 from wbc.motion.joints import ARM, JointMap
 from wbc.motion.kinematics import load_chain, pose_to_task
@@ -64,22 +67,29 @@ def tool_at(q) -> tuple:
     return 1000 * np.array([x, y, z]), math.degrees(pitch)
 
 
-# The bench as config/robot.yaml has it: the tool point at the jaw tips, the desk's table, the 5 mm tool floor, and the
-# shared calibration (the wrist flex's range_min 820), with the arm folded where it rests (Oct 29)
+# The bench as config/robot.yaml has it: the tool point at the jaw tips, the 5 mm tool floor, and the shared
+# calibration (the wrist flex's range_min 820), with the arm folded where it rests (Oct 29). The desk's table is the
+# one the Oct 29 touches measured, whatever robot.yaml has since: the tests below place things against its touched
+# reach and bearings
 BENCH_CFG = yaml.safe_load((ROOT / "config" / "robot.yaml").read_text())
+BENCH_CFG["table"] = {**BENCH_CFG["table"], "at_base_mm": -8.7, "slope_mm_per_m": -88.9, "reach_mm": [94, 399],
+                      "bearing_deg": [-92, 27]}
 BENCH_CHAIN = load_chain(BENCH_CFG, ROOT)
-BENCH_MAP = JointMap.from_config(BENCH_CFG, {**CALIBRATION, "wrist_flex": {**CALIBRATION["wrist_flex"],
-                                                                           "range_min": 820}}, BENCH_CHAIN)
+BENCH_CALIBRATION = {**CALIBRATION, "wrist_flex": {**CALIBRATION["wrist_flex"], "range_min": 820}}
+BENCH_MAP = JointMap.from_config(BENCH_CFG, BENCH_CALIBRATION, BENCH_CHAIN)
+NO_STOP_MAP = JointMap.from_config({**BENCH_CFG, "limits_deg": {}}, BENCH_CALIBRATION, BENCH_CHAIN)  # the URDF's roll
 FOLDED = [4.66, -111.09, 92.3, -105.7, -0.4]
 HANDLE = dict(length_mm=133, width_mm=16)  # the bench's screwdriver
 
 
-def on_the_bench(side="left", start=FOLDED, sag=None):
-    """A Hand on the fake arm as the bench has it, powered on at `start` (URDF degrees)."""
-    robot = FakeFollower(start={**BENCH_MAP.raw(np.radians(start)), "gripper": 1500}, sag=sag)
+def on_the_bench(side="left", start=FOLDED, sag=None, roll_stop=True):
+    """A Hand on the fake arm as the bench has it, powered on at `start` (URDF degrees). roll_stop=False takes the
+    URDF's limits for the wrist roll, as the IK and the way round were tested with before its stop was in robot.yaml."""
+    joint_map = BENCH_MAP if roll_stop else NO_STOP_MAP
+    robot = FakeFollower(start={**joint_map.raw(np.radians(start)), "gripper": 1500}, sag=sag)
     clock = Clock()
     robot.clock = clock
-    arm = Arm(robot, BENCH_MAP, BENCH_CHAIN, gains={"elbow_flex": 32}, say=lambda s: None, clock=clock,
+    arm = Arm(robot, joint_map, BENCH_CHAIN, gains={"elbow_flex": 32}, say=lambda s: None, clock=clock,
               sleep=clock.sleep, table=Surface.from_config(BENCH_CFG), tool_floor=BENCH_CFG["tool_floor_mm"] / 1000)
     hand = Hand(arm, {"hand": {"across_roll_deg": 0, "moving_jaw": side}})
     hand.power_on()
@@ -138,10 +148,10 @@ def test_a_thing_is_gripped_across_its_long_axis_and_a_round_one_any_way():
     assert Thing("cup", 240, 60, 65, length_mm=82, width_mm=80, height_mm=95).jaws_deg is None
 
 
-def test_a_pick_grips_something_lying_flat_halfway_up_taking_it_as_thick_as_it_is_wide():
+def test_a_pick_grips_something_lying_flat_low_on_it_taking_it_as_thick_as_it_is_wide():
     hand, _ = hand_on()
     over, just, down, up = hand.plan_pick(SCREWDRIVER)  # 27 mm wide, on a level table at -17 mm
-    assert down.xyz[2] == pytest.approx(-17 + 27 / 2)
+    assert down.xyz[2] == pytest.approx(-17 + 27 * GRIP_SHARE)
     assert just.xyz == (down.xyz[0], down.xyz[1], pytest.approx(-17 + 27 + JUST_OVER_MM))
     assert over.xyz == up.xyz == (down.xyz[0], down.xyz[1], pytest.approx(-17 + 27 + HOVER_MM[0]))
     assert [line(s.jaws_deg - SCREWDRIVER.jaws_deg) for s in (over, just, down, up)] == pytest.approx([0] * 4, abs=1)
@@ -187,11 +197,21 @@ def test_jaws_that_cant_open_fully_stop_the_pick_over_the_thing():
     assert tool_at(hand.arm.read().q)[0][2] == pytest.approx(result["steps"][0]["z_mm"], abs=2)  # still over it
 
 
-def test_a_pick_never_aims_under_the_drivers_floor():
+def test_a_pick_never_aims_under_the_drivers_grip_floor():
     hand, _ = hand_on()
-    stick = Thing("stick", 205, -60, -30, heading_deg=15, length_mm=140, width_mm=20)  # its middle 10 mm up
-    floor = 1000 * (TABLE + driver.TOOL_FLOOR) + FLOOR_MARGIN_MM  # 11 mm up
+    stick = Thing("stick", 205, -60, -30, heading_deg=15, length_mm=140, width_mm=6)  # a quarter up is 1.5 mm
+    floor = 1000 * (TABLE + driver.GRIP_FLOOR) + FLOOR_MARGIN_MM  # 2 mm up
     assert hand.plan_pick(stick)[2].xyz[2] == pytest.approx(floor)
+
+
+def test_the_way_down_to_a_grip_goes_under_the_tool_floor_and_no_other_move_does():
+    hand, robot = hand_on()
+    down = hand.plan_pick(Thing("handle", 205, -60, -30, heading_deg=15, length_mm=140, width_mm=12))[2]
+    assert down.xyz[2] == pytest.approx(-17 + 12 * GRIP_SHARE)  # low on its 12 mm, under its middle
+    with pytest.raises(Refused, match="under its 10 mm floor"):
+        hand.arm.move_to(down.q)
+    hand.arm.move_to(down.q, grip=True)
+    assert tool_at(hand.arm.read().q)[0][2] == pytest.approx(down.xyz[2], abs=0.5)
 
 
 def test_something_standing_up_is_gripped_under_its_top_however_tall():
@@ -202,22 +222,22 @@ def test_something_standing_up_is_gripped_under_its_top_however_tall():
 
 def test_something_too_thin_for_the_floor_to_let_the_tips_near_its_middle_is_refused_before_anything_moves():
     hand, robot = hand_on()
-    pen = Thing("pen", 205, -60, -30, heading_deg=15, length_mm=140, width_mm=8)  # halfway up is 4 mm over the table
-    with pytest.raises(Refused, match="the pen is about 8 mm thick, and the jaw tips go no lower than 11 mm over the "
+    wire = Thing("wire", 205, -60, -30, heading_deg=15, length_mm=140, width_mm=2.8)  # the tips stop 2 mm up, 71% up it
+    with pytest.raises(Refused, match="the wire is about 3 mm thick, and the jaw tips go no lower than 2 mm over the "
                                       "desk there .* so they'd close near its top and slip off"):
-        hand.pick_up(pen)
+        hand.pick_up(wire)
     assert robot.sent == []
 
 
-def test_on_the_desk_robot_yaml_measured_the_jaws_reach_halfway_up_a_16_mm_handle_16_cm_out():
+def test_on_the_desk_robot_yaml_measured_the_tips_go_under_a_handles_middle_16_cm_out():
     surface = Surface.from_config(ROBOT_CFG)
     hand, _ = hand_on(table=surface, tool_floor=ROBOT_CFG["tool_floor_mm"] / 1000)
-    handle = Thing("screwdriver", 130, -100, -30, heading_deg=-90, length_mm=133, width_mm=16)
-    down = hand.plan_pick(handle)[2]
     desk = 1000 * surface.desk(0.130, -0.100)
-    assert desk + 6 < down.xyz[2] < desk + 10  # about its middle, 8 mm up
-    floor = 1000 * (surface.z(down.xyz[0] / 1000, down.xyz[1] / 1000) + 0.005) + FLOOR_MARGIN_MM
-    assert down.xyz[2] == pytest.approx(floor)
+    for width in (16, 12):  # GRIP_SHARE of the way up, or as low as the grip floor where the tips come down lets them
+        handle = Thing("screwdriver", 130, -100, -30, heading_deg=-90, length_mm=133, width_mm=width)
+        down = hand.plan_pick(handle)[2]
+        floor = 1000 * (surface.z(down.xyz[0] / 1000, down.xyz[1] / 1000) + driver.GRIP_FLOOR) + FLOOR_MARGIN_MM
+        assert down.xyz[2] == pytest.approx(max(floor, desk + width * GRIP_SHARE)) and down.xyz[2] < desk + width / 2
 
 
 def test_pick_up_goes_over_the_thing_opens_goes_down_grips_and_lifts_it():
@@ -232,11 +252,14 @@ def test_pick_up_goes_over_the_thing_opens_goes_down_grips_and_lifts_it():
     assert hand.arm.jaw().holding
 
 
-def test_pick_up_on_nothing_is_a_miss_and_opens_the_jaws_again():
+def test_jaws_that_close_all_the_way_go_back_up_shut_holding_it_as_far_as_the_pick_can_tell_and_say_so():
     hand, robot = hand_on()
-    result = hand.pick_up(SCREWDRIVER)
-    assert not result["ok"] and result["missed"] and hand.held is None
-    assert hand.arm.jaw().opening > 90
+    hand.log = []
+    result = hand.pick_up(SCREWDRIVER)  # nothing between the jaws, which reads as a handle held loosely does
+    assert result["ok"] and result["holding"] == hand.held == "screwdriver"
+    assert result["unconfirmed"].endswith("only a look at where it was can tell")
+    assert [e["what"] for e in hand.log] == ["over it", "open", "just over it", "down to it", "grip", "back up"]
+    assert hand.arm.jaw().opening < CLOSED_OPENING  # still shut
     assert tool_at(hand.arm.read().q)[0][2] == pytest.approx(result["steps"][3]["z_mm"], abs=2)  # back up
 
 
@@ -251,8 +274,9 @@ def test_saying_no_over_the_thing_with_the_jaws_open_stops_there(answer, why):
     result = hand.pick_up(SCREWDRIVER, confirm=confirm)
     assert not result["ok"] and result["stopped"] == f"over the screwdriver with the jaws open, {why}"
     (question, opening), = asked
-    assert opening > 90 and question.startswith("Over the screwdriver with the jaws open: the one that didn't move "
-                                                 "should be beside it, not over it. Go down and grip it?")
+    assert opening == pytest.approx(hand.opening_for(SCREWDRIVER), abs=1)
+    assert question.startswith("Over the screwdriver with the jaws open: the one that didn't move should be beside it, "
+                               "not over it. Go down and grip it?")
     assert tool_at(hand.arm.read().q)[0] == pytest.approx(np.array([result["steps"][0][k] for k in ("x_mm", "y_mm",
                                                                                                     "z_mm")]), abs=2)
 
@@ -270,15 +294,46 @@ def test_a_hover_out_of_reach_straight_down_drops_to_the_next_height(monkeypatch
     assert over.xyz[2] == up.xyz[2] == pytest.approx(-17 + 20 + HOVER_MM[1]) and down.xyz[2] == pytest.approx(33)
 
 
-def test_put_down_lowers_it_over_the_place_lets_go_and_goes_back_up():
+def test_put_down_lowers_it_over_the_place_lets_go_as_far_as_the_pick_opened_goes_back_up_and_closes_the_jaws():
     hand, robot = hand_on()
     robot.between["gripper"] = (1400, math.inf)
     hand.pick_up(SCREWDRIVER)
     robot.between.pop("gripper")
+    hand.log = []
     result = hand.put_down(TRAY)
     assert result["ok"] and result["put"] == "screwdriver" and result["on"] == "tray" and hand.held is None
     assert result["steps"][1]["z_mm"] == pytest.approx(-17 + TRAY.height_mm + 30)  # its rim, plus 30
-    assert hand.arm.jaw().opening > 90
+    assert [e["what"] for e in hand.log] == ["over it", "down to it", "let go", "back up", "close"]
+    let_go = hand.log[2]["samples"][-1]["goal"]
+    assert hand.arm.joints.gripper_percent(let_go) == pytest.approx(hand.opening_for(SCREWDRIVER), abs=0.1)
+    assert hand.arm.jaw().opening == pytest.approx(CLOSED_OPENING, abs=0.5) and hand.opened is None
+
+
+def test_a_pick_opens_the_jaws_as_far_as_the_things_width_needs_a_quarter_at_least():
+    hand, _ = hand_on()
+    at = {w: hand.opening_for(Thing("thing", 200, 0, -30, length_mm=150, width_mm=w)) for w in (5, 16, 27, 40, 50, 60)}
+    assert at[5] == at[16] == MIN_OPEN < at[27] < at[40] < at[50] < at[60] == 100
+    s = hand.arm.joints.servos["gripper"]
+    span = (s.range_max - s.range_min) / driver.TICKS_PER_DEGREE
+    for w in (27, 40, 50):  # the moving tip goes far enough across, by the lever, with OPEN_SPARE to spare
+        across = w + JAW_CLEAR_MM + MOVING_CLEAR_MM - CLOSED_GAP_MM
+        assert JAW_LEVER_MM * math.sin(math.radians(at[w] / 100 * span / OPEN_SPARE)) == pytest.approx(across, abs=0.01)
+
+
+def test_only_the_moves_down_to_the_thing_and_to_the_place_re_aim(monkeypatch):
+    hand, robot = hand_on()
+    aims = []
+    move_to = hand.arm.move_to
+
+    def recorded(q, *args, aim=True, **kwargs):
+        aims.append(aim)
+        return move_to(q, *args, aim=aim, **kwargs)
+    monkeypatch.setattr(hand.arm, "move_to", recorded)
+    robot.between["gripper"] = (1400, math.inf)
+    hand.pick_up(SCREWDRIVER)  # over it, just over it, down to it, back up
+    robot.between.pop("gripper")
+    hand.put_down(TRAY)        # over it, down to it, back up
+    assert aims == [False, True, True, False, False, True, False]
 
 
 def test_put_down_with_nothing_held_is_refused_before_anything_moves():
@@ -375,10 +430,11 @@ def test_the_sag_check_counts_only_the_joints_whose_shortfall_lowers_the_tips():
         q[i] += 1e-4
         return (tips(q) - tips(down.q)) / 1e-4
     lift, elbow = ARM.index("shoulder_lift"), ARM.index("elbow_flex")
+    cut = 1000 * (driver.GRIP_FLOOR - driver.SAG)  # on the way down to a grip
     short = np.zeros(len(ARM))
-    short[lift] = 5.5 / per_radian(lift)     # sagged: the tips 5.5 mm lower, 0.5 mm over the cut
+    short[lift] = (tips(down.q) - cut - 0.5) / per_radian(lift)  # sagged: the tips 0.5 mm over the cut
     short[elbow] = -2.0 / per_radian(elbow)  # and held them 2 mm up
-    assert tips(down.q - short) > 2  # netted, they'd say go down
+    assert tips(down.q - short) > cut + 2  # netted, they'd say go down
     hand.arm.stopped_short = short
     assert "the arm sagged enough that down at it, it would stop about" in hand._sagging(down, thing)
 
@@ -400,26 +456,16 @@ def test_a_grip_that_cant_go_back_up_says_the_jaws_hold_the_thing_so_the_next_pi
     robot.between["gripper"] = (1400, math.inf)
     result = hand.pick_up(Thing("screwdriver", *out(220, 10), -30, heading_deg=0, **HANDLE))
     assert not result["ok"] and result["holding"] == hand.held == "screwdriver" and len(result["steps"]) == 3
-    assert result["error"].startswith("the jaws hold the screwdriver down at the desk: the arm couldn't go back up")
+    assert result["error"].startswith("the jaws closed at the screwdriver down at the desk, and the arm couldn't go "
+                                      "back up")
     with pytest.raises(Refused, match="already hold the screwdriver"):
         hand.pick_up(Thing("screwdriver", *out(200), -30, heading_deg=0, **HANDLE))
+    assert hand.arm.jaw().holding  # still on it down there
 
 
-def test_a_miss_that_cant_go_back_up_says_so_not_that_nothing_moved(monkeypatch):
-    monkeypatch.setattr(driver, "ROUNDING", 1e-6)  # so the climb from the grip is refused, as above
-    monkeypatch.setattr(driver, "MAX_JOINT_SPEED", 30.0)  # and at the first caps, as above
-    monkeypatch.setattr(driver, "MAX_TIP_SPEED", 0.08)
-    hand, robot = on_the_bench(sag={"shoulder_lift": 2, "elbow_flex": 2})  # nothing between the jaws
-    result = hand.pick_up(Thing("screwdriver", *out(220, 10), -30, heading_deg=0, **HANDLE))
-    assert not result["ok"] and result["missed"] and hand.held is None and len(result["steps"]) == 3
-    assert result["error"].startswith("the jaws closed on nothing where the screwdriver was, and the arm couldn't go "
-                                      "back up")
-    assert hand.arm.jaw().opening > 90
-
-
-@pytest.mark.parametrize("side, r, bearing, width", [("right", 250, 28.4, 16), ("right", 200, 28.8, 16),
-                                                     ("right", 250, 26.9, 12.5), ("left", 260, -93, 16),
-                                                     ("left", 260, -92, 12.5)])
+@pytest.mark.parametrize("side, r, bearing, width", [("right", 250, 28.4, 9), ("right", 200, 28.8, 9),
+                                                     ("right", 250, 26.9, 8), ("left", 260, -93, 9),
+                                                     ("left", 260, -92, 8)])
 def test_a_pick_whose_tips_would_come_down_where_the_table_is_held_higher_beside_it_is_refused(side, r, bearing, width):
     # lying out from the base at a touched bearing's edge: the fixed jaw's side is past it, where the floors hold the
     # table higher, and the other way round is out of reach (review, Oct 30)
@@ -432,12 +478,12 @@ def test_a_pick_whose_tips_would_come_down_where_the_table_is_held_higher_beside
 
 
 def test_near_a_touched_bearings_edge_a_pick_takes_the_way_round_that_grips_low_enough():
-    hand, _ = on_the_bench("right")
-    thing = Thing("screwdriver", *out(250, 28.4), -30, heading_deg=58.4, **HANDLE)
-    down = hand.plan_pick(thing)[2]  # the nearer roll would grip it 82% up
+    hand, _ = on_the_bench("right", roll_stop=False)  # the way round it takes turns the roll past its stop
+    thing = Thing("screwdriver", *out(250, 28.4), -30, heading_deg=58.4, length_mm=133, width_mm=9)
+    down = hand.plan_pick(thing)[2]  # the nearer roll would grip it over THIN of the way up
     table = hand.arm.table
     under = 1000 * table.line(math.hypot(thing.x / 1000 - table.axis[0], thing.y / 1000 - table.axis[1]))
-    assert down.xyz[2] - under < THIN * 16 and math.degrees(down.q[4]) == pytest.approx(-149, abs=2)
+    assert down.xyz[2] - under < THIN * 9 and math.degrees(down.q[4]) == pytest.approx(-149, abs=2)
 
 
 @pytest.mark.parametrize("side, r, bearing, heading", [("left", 270, -90, -60), ("left", 280, 0, 30),
@@ -446,7 +492,7 @@ def test_near_a_touched_bearings_edge_a_pick_takes_the_way_round_that_grips_low_
 def test_a_pick_far_out_is_solved_where_ik_from_where_the_arm_is_stalls(side, r, bearing, heading):
     # From the folded rest, IK stalls here with the wrist flex on its URDF limit, so each plans only with the retry.
     # The last three also need a try that never quite converged but passes the checks every answer has to
-    hand, _ = on_the_bench(side)
+    hand, _ = on_the_bench(side, roll_stop=False)  # two of them turn the roll past its stop
     steps = hand.plan_pick(Thing("screwdriver", *out(r, bearing), -30, heading_deg=heading, **HANDLE))
     rolls = [math.degrees(s.q[4]) for s in steps]
     assert max(rolls) - min(rolls) < 2
@@ -508,9 +554,9 @@ def test_a_tool_floor_outside_5_to_30_mm_is_refused():
 
 
 def test_robot_yaml_sets_the_table_the_tool_floor_and_the_jaws_line():
-    assert Surface.from_config(ROBOT_CFG).config() == {"at_base_mm": -8.7, "slope_mm_per_m": -88.9,
-                                                       "reach_mm": [94, 399], "margin_mm": 2.0,
-                                                       "axis_mm": [38.8353, 0.0], "bearing_deg": [-92, 27]}
+    assert Surface.from_config(ROBOT_CFG).config() == {"at_base_mm": -7.4, "slope_mm_per_m": -92.0,
+                                                       "reach_mm": [101, 377], "margin_mm": 2.0,
+                                                       "axis_mm": [38.8353, 0.0], "bearing_deg": [-89, 36]}
     assert ROBOT_CFG["tool_floor_mm"] == 5 and ROBOT_CFG["hand"]["across_roll_deg"] == 0
     assert ROBOT_CFG["hand"]["moving_jaw"] == "left"  # looked at on the arm, Oct 30
     hand = Hand(make(FakeFollower(start=pose(REST)))[0], ROBOT_CFG)
@@ -633,6 +679,19 @@ def test_a_second_arm_tool_while_one_runs_is_refused_not_queued():
     assert not result["ok"] and "call arm tools one at a time" in result["error"] and asked == []
 
 
+def test_a_move_that_didnt_go_forgets_where_it_saw_things_so_asking_again_looks_again():
+    """Nov 2, 14:00: "I moved the cup, can you try again?" was refused at the cup's old place, seen 58 s before."""
+    arm, robot, _ = make(FakeFollower(start=pose(REST)), table=TABLE)
+    b, tb, _ = bench(arm_port="fake")
+    b.hand = Hand(arm, HAND)
+    b.seen["screwdriver"] = (SCREWDRIVER, time.monotonic())
+    b.seen["cup"] = (Thing("cup", 600, 0, -30, length_mm=80, width_mm=80, height_mm=95), time.monotonic())  # too far
+    result = tb.dispatch("move_thing", {"thing": "screwdriver", "place": "cup", "place_height_mm": 95})
+    assert not result["ok"] and result["error"].startswith("refused, nothing moved for it")
+    assert "cup" not in b.seen and "screwdriver" not in b.seen and not arm.powered
+    b.seen["box"] = (Thing("box", 600, 0, -30, length_mm=100, width_mm=40), time.monotonic())
+    assert not tb.dispatch("pick_up", {"thing": "box"})["ok"] and "box" not in b.seen
+
 def test_a_thing_is_located_again_once_stale_moved_or_wanted_at_another_height():
     b, tb, _ = bench(sim=True)
     elsewhere = Thing("screwdriver", 1, 2, -30, length_mm=176, width_mm=27)  # where it used to be
@@ -701,6 +760,86 @@ def test_move_thing_picks_the_thing_up_and_puts_it_on_the_place_after_one_enter(
                                                      "down to it", "back up"]
     assert b.hand.held is None and asked == ["Pick up the screwdriver at x 205, y -60 mm and put it on the tray at "
                                              "x 175, y 125 mm? The motors come on first."]
+    assert b.hand.log is None  # no move_logs, nothing kept
+
+
+def test_with_move_logs_each_arm_request_s_moves_are_saved_there_with_the_drivers_samples(tmp_path):
+    arm, robot, _ = make(FakeFollower(start=pose(REST)), table=TABLE)
+    b, tb, asked = bench(arm_port="fake", move_logs=tmp_path / "logs")
+    b.hand = Hand(arm, HAND)
+    b.seen.update(screwdriver=(SCREWDRIVER, time.monotonic()), tray=(TRAY, time.monotonic()))
+    robot.between["gripper"] = (1400, math.inf)
+    assert tb.dispatch("move_thing", {"thing": "screwdriver", "place": "tray"})["ok"]
+    (path,) = (tmp_path / "logs").glob("arm-*.json")
+    saved = json.loads(path.read_text(encoding="utf-8"))
+    assert saved["request"].startswith("Pick up the screwdriver at x 205, y -60 mm and put it on the tray")
+    assert [m["what"] for m in saved["moves"]] == ["power on", "over it", "open", "just over it", "down to it", "grip",
+                                                   "back up", "over it", "down to it", "let go", "back up", "close"]
+    assert all(m["samples"] for m in saved["moves"]) and b.hand.log is None
+    assert set(saved["moves"][1]["samples"][0]) == {"t", "goal", "q", "load"}
+
+
+def test_with_the_request_as_the_go_ahead_the_arm_powers_on_while_the_locate_runs(monkeypatch):
+    arm, robot, _ = make(FakeFollower(start=pose(REST)), table=TABLE)
+    b, tb, asked = bench(arm_port="fake", go_ahead="request")
+    b.hand = Hand(arm, HAND)
+    powered = []
+
+    def one_photo(bench_, wants):  # the power-on started before the photo, and runs while it's taken
+        b.powering.join()
+        powered.append(len(arm.powered))
+        scene = {"screwdriver": summary(SCREWDRIVER), "tray": summary(TRAY)}
+        return {t: {"found": [scene[tools.key(t)]]} for t, _ in wants}
+    monkeypatch.setattr(tools, "_locate_all", one_photo)
+    power_on = arm.power_on
+    calls = []
+    monkeypatch.setattr(arm, "power_on", lambda *args, **kwargs: calls.append(1) or power_on(*args, **kwargs))
+    robot.between["gripper"] = (1400, math.inf)
+    assert tb.dispatch("move_thing", {"thing": "screwdriver", "place": "tray"})["ok"]
+    assert powered == [6] and calls == [1] and b.powering is None
+
+
+def test_after_a_stop_said_while_the_port_opened_the_early_power_on_leaves_the_motors_off(monkeypatch):
+    arm, robot, _ = make(FakeFollower(start=pose(REST)), table=TABLE)
+    b, tb, asked = bench(arm_port="fake", go_ahead="request")
+
+    def opening(bench_):  # "Copilot, stop" heard while the arm's port opens
+        b.halted.set()
+        bench_.hand = Hand(arm, HAND)
+        return bench_.hand
+    monkeypatch.setattr(tools, "_open_hand", opening)
+    monkeypatch.setattr(tools, "_locate_all", lambda bench_, wants: {t: {"found": []} for t, _ in wants})
+    result = tb.dispatch("move_thing", {"thing": "screwdriver", "place": "tray"})
+    b.powering.join()
+    assert result == {"ok": False, "error": "locate found no screwdriver on the desk"} and not arm.powered
+
+
+def test_a_move_plans_its_pick_and_its_put_once_before_anything_moves(monkeypatch):
+    arm, robot, _ = make(FakeFollower(start=pose(REST)), table=TABLE)
+    b, tb, asked = bench(arm_port="fake")
+    b.hand = Hand(arm, HAND)
+    b.seen.update(screwdriver=(SCREWDRIVER, time.monotonic()), tray=(TRAY, time.monotonic()))
+    robot.between["gripper"] = (1400, math.inf)
+    calls = []
+    for name in ("plan_pick", "plan_put"):
+        def counted(self, *args, _real=getattr(Hand, name), _name=name, **kwargs):
+            calls.append((_name, len(robot.sent)))
+            return _real(self, *args, **kwargs)
+        monkeypatch.setattr(Hand, name, counted)
+    assert tb.dispatch("move_thing", {"thing": "screwdriver", "place": "tray"})["ok"]
+    assert calls == [("plan_pick", 0), ("plan_put", 0)]  # once each, before the first goal went out
+
+
+def test_a_put_planned_from_where_the_pick_leaves_the_arm_is_the_put_planned_there_after_it():
+    hand, robot = hand_on()
+    robot.between["gripper"] = (1400, math.inf)
+    pick = hand.plan_pick(SCREWDRIVER)
+    ahead = hand.plan_put(TRAY, start=pick[-1].q)
+    hand.pick_up(SCREWDRIVER, steps=pick)
+    after = hand.plan_put(TRAY)
+    assert [s.what for s in ahead] == [s.what for s in after]
+    for a, b in zip(ahead, after):
+        assert np.degrees(a.q) == pytest.approx(np.degrees(b.q), abs=0.5)
 
 
 def test_a_move_whose_place_is_out_of_reach_is_refused_before_anything_is_asked():
@@ -720,27 +859,65 @@ def test_a_put_refused_after_the_pick_says_the_jaws_still_hold_the_thing(monkeyp
     b.hand = Hand(arm, HAND)
     b.seen.update(screwdriver=(SCREWDRIVER, time.monotonic()), tray=(TRAY, time.monotonic()))
     robot.between["gripper"] = (1400, math.inf)
-    plan_put = Hand.plan_put
 
-    def after_the_pick(self, place):  # it plans before anything moves, and is refused once the jaws hold it
-        if self.held:
-            raise Refused("the arm can't put the tool point there")
-        return plan_put(self, place)
-    monkeypatch.setattr(Hand, "plan_put", after_the_pick)
+    def refused(self, place, *steps):  # the driver refusing the put's first move, with the jaws holding the thing
+        raise Refused("the arm can't put the tool point there")
+    monkeypatch.setattr(Hand, "_put", refused)
     result = tb.dispatch("move_thing", {"thing": "screwdriver", "place": "tray"})
     assert not result["ok"] and result["holding"] == b.hand.held == "screwdriver" and len(result["steps"]) == 4
     assert result["error"].startswith("picked up the screwdriver, but putting it on the tray was refused, so the jaws "
                                       "still hold it")
 
 
-def test_a_move_whose_pick_misses_doesnt_try_the_put():
+@pytest.mark.parametrize("seen_after, missed", [([SCREWDRIVER], True), ([], False),
+                                               ([dataclasses.replace(SCREWDRIVER, x=175, y=125)], False)])
+def test_a_move_whose_jaws_closed_all_the_way_looks_where_the_thing_was_once_its_put_down(monkeypatch, seen_after,
+                                                                                           missed):
     arm, robot, _ = make(FakeFollower(start=pose(REST)), table=TABLE)
     b, tb, asked = bench(arm_port="fake")
     b.hand = Hand(arm, HAND)
     b.seen.update(screwdriver=(SCREWDRIVER, time.monotonic()), tray=(TRAY, time.monotonic()))
-    result = tb.dispatch("move_thing", {"thing": "screwdriver", "place": "tray"})  # nothing between the jaws
-    assert result["missed"] and result["put"] == "not tried" and b.hand.held is None
-    assert [s["step"] for s in result["steps"]] == ["over it", "just over it", "down to it", "back up"]
+    looks = []
+
+    def look(bench, thing, height_mm):
+        looks.append((thing, b.hand.held, b.hand.arm.jaw().opening))
+        return {"found": [summary(t) for t in seen_after]}
+    monkeypatch.setattr(tools, "_locate_live", look)
+    result = tb.dispatch("move_thing", {"thing": "screwdriver", "place": "tray"})  # the jaws close all the way
+    assert looks == [("screwdriver", None, pytest.approx(CLOSED_OPENING, abs=0.5))]  # put down, jaws shut again
+    assert [s["step"] for s in result["steps"]] == ["over it", "just over it", "down to it", "back up", "over it",
+                                                     "down to it", "back up"]
+    if missed:
+        assert not result["ok"] and result["missed"] and result["error"] == (
+            "the jaws closed on nothing at the screwdriver: it's still where it was, at x 205, y -60 mm")
+    else:
+        assert result["ok"] and result["moved"] == "screwdriver" and result["onto"] == "tray"
+    assert b.hand.held is None
+
+
+def test_a_move_whose_pick_the_jaws_felt_doesnt_look_again(monkeypatch):
+    arm, robot, _ = make(FakeFollower(start=pose(REST)), table=TABLE)
+    b, tb, asked = bench(arm_port="fake")
+    b.hand = Hand(arm, HAND)
+    b.seen.update(screwdriver=(SCREWDRIVER, time.monotonic()), tray=(TRAY, time.monotonic()))
+    robot.between["gripper"] = (1400, math.inf)  # the handle between the jaws, which stop on it
+    looks = []
+    monkeypatch.setattr(tools, "_locate_live", lambda *args: looks.append(args) or {"found": []})
+    assert tb.dispatch("move_thing", {"thing": "screwdriver", "place": "tray"})["ok"] and looks == []
+
+
+def test_a_look_that_fails_after_the_put_says_so_and_takes_the_move_as_done(monkeypatch):
+    arm, robot, _ = make(FakeFollower(start=pose(REST)), table=TABLE)
+    said = []
+    b, tb, asked = bench(arm_port="fake", say=said.append)
+    b.hand = Hand(arm, HAND)
+    b.seen.update(screwdriver=(SCREWDRIVER, time.monotonic()), tray=(TRAY, time.monotonic()))
+
+    def look(*args):
+        raise RuntimeError("no camera shows 4 of the touched desk tags")
+    monkeypatch.setattr(tools, "_locate_live", look)
+    assert tb.dispatch("move_thing", {"thing": "screwdriver", "place": "tray"})["ok"]
+    assert said == ["I couldn't look whether the screwdriver left its spot: no camera shows 4 of the touched desk tags"]
 
 
 def test_saying_no_over_the_place_says_the_jaws_still_hold_the_thing_not_that_it_moved():
@@ -846,8 +1023,9 @@ def test_park_after_a_stop_leaves_the_arm_where_it_stopped():
 
 
 def test_an_arm_resting_past_the_end_of_a_range_is_refused_before_the_question():
-    # Oct 30: the gripper had been turned past the wrist roll's limit, and only Enter and the power-on found it
-    arm, robot, _ = make(FakeFollower(start=pose([0, -20, 40, 30, -160])), table=TABLE)
+    # Oct 30: the gripper had been turned past the wrist roll's limit, and only Enter and the power-on found it. The
+    # roll's low limit is -78° since Nov 2, short of its stop
+    arm, robot, _ = make(FakeFollower(start=pose([0, -20, 40, 30, -80.7])), table=TABLE)
     b, tb, asked = bench(arm_port="fake")
     b.hand = Hand(arm, HAND)
     b.seen["screwdriver"] = (SCREWDRIVER, time.monotonic())
@@ -1099,3 +1277,103 @@ def test_a_spoken_stop_holds_the_arm_drops_what_waits_and_the_next_request_moves
 def test_the_wbc_script_ends_the_way_python_m_does():
     assert 'wbc = "wbc.agent.__main__:cli"' in (ROOT / "pyproject.toml").read_text(encoding="utf-8")
     assert callable(agent.cli)
+
+
+def test_a_pick_whose_nearer_roll_would_pass_the_rolls_stop_turns_the_other_way_round():
+    # Nov 2: from a rest with the roll at -16°, the jaws' line for the screwdriver at +49° was nearer at about -95° on
+    # the roll, past its stop at about -80°, so the pick drove into the stop and tripped; +82° is the other way round
+    thing = Thing("screwdriver", 151, -75, -31, heading_deg=49, length_mm=112, width_mm=14)
+    hand, _ = on_the_bench(start=FOLDED[:4] + [-16.3])
+    rolls = [math.degrees(s.q[4]) for s in hand.plan_pick(thing)]
+    assert all(r == pytest.approx(82, abs=3) for r in rolls)
+    before, _ = on_the_bench(start=FOLDED[:4] + [-16.3], roll_stop=False)
+    assert math.degrees(before.plan_pick(thing)[0].q[4]) < -80  # where it went before the stop was in robot.yaml
+
+
+def test_a_pick_grips_a_thing_where_locate_said_to_as_wide_as_it_is_there():
+    hand, _ = hand_on()
+    thing = dataclasses.replace(SCREWDRIVER, grip_x=SCREWDRIVER.x + 20, grip_y=SCREWDRIVER.y + 5, grip_width_mm=15)
+    down = hand.plan_pick(thing)[2]
+    far, toward, along = beside(hand, down, thing.gripped())
+    assert far == pytest.approx(aside(thing.gripped()), abs=0.5) and toward == pytest.approx(1, abs=0.02)
+    assert down.xyz[2] == pytest.approx(-17 + 15 * GRIP_SHARE)  # low on the 15 mm there, not the 27 mm overall
+    assert Thing.from_summary({**summary(SCREWDRIVER), "grip_x_mm": 1.0, "grip_y_mm": 2.0, "grip_width_mm": 3.0}
+                              ).gripped() == dataclasses.replace(SCREWDRIVER, x=1.0, y=2.0, width_mm=3.0, grip_x=1.0,
+                                                                 grip_y=2.0, grip_width_mm=3.0)
+
+
+# ------------------------------------------------------------------ into a container, on end
+
+def handle_with_a_tip(x=150.0, y=-60.0, heading=35.0, tip_toward=215.0):
+    """The bench's screwdriver as locate gives it: gripped 1 cm off its middle toward its tip, which points tip_toward."""
+    t = math.radians(tip_toward)
+    return Thing("screwdriver", x, y, -30, heading_deg=heading, length_mm=112, width_mm=14,
+                 grip_x=x + 10 * math.cos(t), grip_y=y + 10 * math.sin(t), grip_width_mm=11.6)
+
+
+def cup_at(hand, x, y, height_mm=98.0):
+    desk = 1000 * hand.arm.table.desk(x / 1000, y / 1000)
+    return Thing("cup", x, y, desk + height_mm, length_mm=80, width_mm=80, height_mm=height_mm)
+
+
+@pytest.mark.parametrize("tip_toward, first", [(215.0, "narrow"), (35.0, "wide")])  # wide: the roll's stop is in the way
+def test_a_put_into_a_container_stands_what_it_holds_on_end_narrow_end_down_into_the_opening(tip_toward, first):
+    hand, _ = on_the_bench()
+    held, cup = handle_with_a_tip(tip_toward=tip_toward), cup_at(hand, 300.0, 0.0)
+    pick = hand.plan_pick(held)
+    steps = hand.plan_insert(cup, held, start=pick[-1].q, tip=hand.tip_from_jaws(held, pick[2].q))
+    narrow_first = steps[0].what.endswith("its narrow end to go in first")
+    assert narrow_first == (first == "narrow")
+    assert [s.what for s in steps] == ["lift, the jaws across the arm, its "
+                                       f"{'narrow' if narrow_first else 'wide'} end to go in first", "on end, over it",
+                                       "down over it", "into it", "back up"]
+    # held rigidly from the pick on, the end it chose ends up pointing down, from the opening's middle, under the rim
+    chain = hand.chain
+    R_pick, T = chain.fk(pick[2].q)[:3, :3], chain.fk(steps[3].q)
+    t = math.radians(tip_toward if narrow_first else tip_toward + 180.0)
+    first = T[:3, :3] @ (R_pick.T @ np.array([math.cos(t), math.sin(t), 0.0]))
+    assert first[2] < -math.cos(math.radians(hand_mod.ON_END_TILTS[-1] + 5))  # down, within the tilts allowed
+    low = held.length_mm / 2 + (-10.0 if narrow_first else 10.0)
+    end = 1000 * T[:3, 3] - hand_mod.CAGE_MM * T[:3, 0] + low * first
+    rim = 1000 * hand.arm.table.desk(0.3, 0.0) + 98.0
+    assert np.linalg.norm(end[:2] - (300.0, 0.0)) < 4 and end[2] == pytest.approx(rim - hand_mod.INSERT_MM, abs=4)
+    assert steps[-1].q is steps[1].q  # back up the way it came in
+
+
+def test_a_container_too_near_the_base_to_stand_it_on_end_over_is_refused_before_anything_moves():
+    hand, robot = on_the_bench()
+    held = handle_with_a_tip()
+    pick = hand.plan_pick(held)
+    with pytest.raises(Refused, match="can't stand the screwdriver on end over the cup.*28 cm out"):
+        hand.plan_insert(cup_at(hand, 160.0, 0.0), held, start=pick[-1].q, tip=hand.tip_from_jaws(held, pick[2].q))
+    assert robot.sent == []
+
+
+def test_move_thing_into_a_container_picks_it_up_and_stands_it_in_on_end():
+    hand, robot = on_the_bench()
+    b = tools.Bench(ROOT, {}, None, None, robot_cfg={"hand": {"check_over": False, "containers": {"cup": 98}}},
+                    arm_port="fake", confirm=lambda question: True)
+    tb = tools.build_toolbox(b)
+    b.hand = hand
+    held = handle_with_a_tip()
+    b.seen["screwdriver"] = (held, time.monotonic())
+    b.seen["cup"] = (cup_at(hand, 300.0, 0.0), time.monotonic())
+    robot.between["gripper"] = (1400, math.inf)  # something between the jaws: no look after
+    result = tb.dispatch("move_thing", {"thing": "screwdriver", "place": "cup", "place_height_mm": 60})
+    assert result["ok"] and result["onto"] == "cup" and result["on_end"]
+    assert [s["step"] for s in result["steps"]][-4:] == ["on end, over it", "down over it", "into it", "back up"]
+    assert result["steps"][-5]["step"].startswith("lift, the jaws across the arm")
+    assert hand.held is None and hand.held_thing is None
+
+
+def test_without_a_container_listed_a_put_on_a_cup_is_the_flat_put_it_was():
+    hand, robot = on_the_bench()
+    b = tools.Bench(ROOT, {}, None, None, robot_cfg={"hand": {"check_over": False}}, arm_port="fake",
+                    confirm=lambda question: True)
+    tb = tools.build_toolbox(b)
+    b.hand = hand
+    b.seen["screwdriver"] = (handle_with_a_tip(), time.monotonic())
+    b.seen["cup"] = (cup_at(hand, 200.0, -150.0, 0.0), time.monotonic())
+    robot.between["gripper"] = (1400, math.inf)
+    result = tb.dispatch("move_thing", {"thing": "screwdriver", "place": "cup"})
+    assert result["ok"] and "on_end" not in result and result["steps"][-1]["step"] == "back up"

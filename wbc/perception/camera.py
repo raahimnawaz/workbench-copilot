@@ -5,8 +5,10 @@ it. This app's terminal has neither camera nor mic permission, so capture from T
 """
 from __future__ import annotations
 
+import collections
 import json
 import subprocess
+import threading
 import time
 
 import cv2
@@ -14,6 +16,8 @@ import numpy as np
 
 NOT_ALLOWED = ("If macOS hasn't let this terminal use the camera, allow it under System Settings → "
                "Privacy & Security → Camera, or run from Terminal.app.")
+FRESH_S = 0.4  # seconds of a kept-open camera's newest frames that its still is the sharpest of
+STALLED_S = 2.0  # seconds a kept-open camera may go without a frame before a still from it fails
 
 
 def camera_names() -> list:
@@ -73,6 +77,63 @@ def capture(index: int = 0, width: int = 1920, height: int = 1080, settle_s: flo
     if not frame.any():
         raise RuntimeError(f"camera {index} sent an all-black frame. {NOT_ALLOWED}")
     return frame
+
+
+class Stream:
+    """A camera kept open, a thread reading every frame it sends, so a still from it needn't wait the 3 s that
+    capture() gives exposure and focus to settle each time it opens a camera: it's the sharpest of the frames from the
+    last FRESH_S, once one has come since it was asked for. The first waits settle_s + pick_s from opening, as capture()
+    does. close() lets the camera go."""
+
+    def __init__(self, index: int, width: int = 1920, height: int = 1080, settle_s: float = 1.5,
+                 pick_s: float = 1.5):
+        self.index = index
+        self._cap = open_camera(index, width, height)
+        self._ready = time.monotonic() + settle_s + pick_s
+        self._frames = collections.deque()  # (when, frame) for the last FRESH_S
+        self._lock = threading.Lock()
+        self._done = threading.Event()
+        self._thread = threading.Thread(target=self._read, name=f"camera {index}", daemon=True)
+        self._thread.start()
+
+    def _read(self) -> None:
+        try:
+            while not self._done.is_set():
+                ok, f = self._cap.read()
+                if not ok or f is None:
+                    time.sleep(0.01)
+                    continue
+                now = time.monotonic()
+                with self._lock:
+                    self._frames.append((now, f))
+                    while now - self._frames[0][0] > FRESH_S:
+                        self._frames.popleft()
+        finally:
+            self._cap.release()
+
+    def capture(self, index: int, width: int = 1920, height: int = 1080) -> np.ndarray:
+        """A still from camera `index`, as capture() gives one: this camera's from its stream, another's from
+        capture()."""
+        if index != self.index:
+            return capture(index, width, height)
+        asked = time.monotonic()
+        while True:
+            now = time.monotonic()
+            with self._lock:
+                recent = [(t, f) for t, f in self._frames if t >= now - FRESH_S]
+            if now >= self._ready and recent and recent[-1][0] > asked:
+                break
+            if now > max(asked, self._ready) + STALLED_S:
+                raise RuntimeError(f"camera {index} stopped sending frames. {NOT_ALLOWED}")
+            time.sleep(0.01)
+        frame = max((f for _, f in recent), key=sharpness)
+        if not frame.any():
+            raise RuntimeError(f"camera {index} sent an all-black frame. {NOT_ALLOWED}")
+        return frame.copy()
+
+    def close(self) -> None:
+        self._done.set()
+        self._thread.join(timeout=2.0)
 
 
 def list_cameras(max_index: int = 4) -> list:

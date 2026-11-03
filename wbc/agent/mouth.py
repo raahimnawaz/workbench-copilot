@@ -13,6 +13,9 @@ import shutil
 import subprocess
 import threading
 import time
+from pathlib import Path
+
+from wbc import config
 
 SENTENCE_END = re.compile(r"(?<=[.!?])\s+|(?<=[.!?][\"')\]])\s+")  # also before "pins.h ...", and after a quote
 ABBREVIATIONS = {"e.g.", "i.e.", "vs.", "approx.", "ca.", "no.", "min.", "max.", "fig."}  # these don't end one
@@ -28,20 +31,34 @@ def sentences_of(text: str) -> list:
     return parts
 
 
-def spoken(text: str, sentences: int = 2, limit: int = 240) -> str:
-    """The part of a reply worth saying: its first sentences as plain words, at most `limit` characters.
-
-    Code blocks are dropped, since `say` would read them symbol by symbol, and markdown marks go. Sentences are said
-    whole or not at all, since a cut one can lose its "unless". A first sentence over the limit is cut at a word and
-    says so.
-    """
+def plain(text: str) -> str:
+    """A reply as plain words on one line: code blocks dropped, since `say` would read them symbol by symbol, links as
+    their words, and markdown marks gone."""
     text = re.sub(r"```.*?(```|$)", " ", text, flags=re.DOTALL)
     text = re.sub(r"\[([^\]]*)\]\([^)]*\)", r"\1", text)  # a link says its words
     text = re.sub(r"^\s*(#+|[-*•]|\d+\.)\s+", "", text, flags=re.MULTILINE)  # headings, bullets, numbers
     text = re.sub(r"[`*]+|(?<!\w)_+|_+(?!\w)", "", text)  # code marks, bold and italics, not snake_case
-    text = " ".join(text.split())
+    return " ".join(text.split())
+
+
+def say_command(wanted: str | None = None) -> str | None:
+    """The program that speaks: macOS `say`, or models.yaml's mouth.command standing in for it (taking `say`'s
+    arguments), such as scripts/kokoro-say, relative to the repo. A stand-in that's missing leaves the voice off rather
+    than falling back to `say`, whose voices can't be in a published video."""
+    if not wanted:
+        return shutil.which("say")
+    path = Path(wanted) if Path(wanted).is_absolute() else config.ROOT / wanted
+    return str(path) if path.is_file() else None
+
+
+def spoken(text: str, sentences: int = 2, limit: int = 240) -> str:
+    """The part of a reply worth saying: its first sentences as plain words, at most `limit` characters.
+
+    Sentences are said whole or not at all, since a cut one can lose its "unless". A first sentence over the limit is
+    cut at a word and says so.
+    """
     said = ""
-    for sentence in sentences_of(text)[:sentences]:
+    for sentence in sentences_of(plain(text))[:sentences]:
         if said and len(said) + 1 + len(sentence) > limit:
             break
         said = f"{said} {sentence}".strip()
@@ -53,7 +70,7 @@ def spoken(text: str, sentences: int = 2, limit: int = 240) -> str:
 class Mouth:
     def __init__(self, cfg: dict, command: str | None = None, popen=subprocess.Popen, clock=time.monotonic,
                  hud=None):
-        self.command = command or shutil.which("say")  # None off macOS: replies stay on the HUD
+        self.command = command or say_command(cfg.get("command"))  # None: replies stay on the HUD
         self.voice = cfg.get("voice")
         self.rate = cfg.get("rate")
         self.sentences = cfg.get("sentences", 2)

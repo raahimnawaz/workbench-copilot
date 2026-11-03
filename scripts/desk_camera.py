@@ -8,8 +8,9 @@ A second webcam looking down at the desk lets locate say where something is in t
    desk, spread around the arm's reach where the desk camera sees them all and nothing will push them around.
        python scripts/desk_camera.py tags
 2. touch (motors off, reads only): put the tool point, the middle of the closed jaws' tips, on each tag's center in
-   turn with the gripper about straight down, and press Enter at each. Forward kinematics puts each center in the
-   arm's frame, saved to .wbc/desk_tags.json. Touch them again whenever a tag moves.
+   turn with the gripper about straight down, and press Enter at each (s skips one). That's every tag config/desk.yaml
+   lists, the carrier's that the desk camera sees too, or the ones named. Forward kinematics puts each center in the
+   arm's frame, saved to .wbc/desk_tags.json. Touch them all again whenever a tag or the arm's base moves.
        python scripts/desk_camera.py --port /dev/cu.usbmodem5B910297421 touch
 3. check (free, from Terminal.app): finds the desk camera, maps a frame through the tags it shows, and says how far
    the other tags place each one from where it was touched, and where the camera is. The drawing in
@@ -171,14 +172,15 @@ def cmd_touch(args, cfg: dict) -> int:
     if not args.port:
         print("touch needs --port, the arm's servo adapter, e.g. /dev/cu.usbmodem5B910297421")
         return 1
+    known = list(cfg["tags"]["ids"]) + list(cfg["tags"].get("carrier_ids") or [])  # the sheet's, then the carrier's
     try:
-        wanted = [int(t) for t in args.what] or list(cfg["tags"]["ids"])
+        wanted = [int(t) for t in args.what] or known
     except ValueError:
-        print(f"touch takes tag ids, such as {' '.join(map(str, cfg['tags']['ids']))}")
+        print(f"touch takes tag ids, such as {' '.join(map(str, known))}")
         return 1
-    unknown = sorted(set(wanted) - set(cfg["tags"]["ids"]))
+    unknown = sorted(set(wanted) - set(known))
     if unknown:
-        print(f"config/desk.yaml has no tag {', '.join(map(str, unknown))}: its tags are {cfg['tags']['ids']}")
+        print(f"config/desk.yaml has no tag {', '.join(map(str, unknown))}: its tags are {known}")
         return 1
     try:
         robot_cfg = config.load_yaml("robot.yaml")

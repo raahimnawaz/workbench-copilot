@@ -13,7 +13,7 @@ from wbc.agent.tools import Bench, Toolbox, build_toolbox
 from wbc.config import ROOT, load_yaml
 
 PRICES = {"spark": {"in": 1.25, "out": 4.25}, "spark-old": {"in": 1.25, "out": 4.25},
-          "glimmer": {"in": 0, "out": 0}}
+          "glimmer": {"in": 0, "out": 0}, "open": {"in": 1.0, "out": 4.0}}
 PNG = b"\x89PNG\r\n\x1a\n" + b"\x00" * 16
 
 
@@ -468,3 +468,37 @@ def test_schemas_in_both_formats():
 def test_models_yaml_prices_every_hosted_model(name):
     models = load_yaml("models.yaml")
     assert models[name]["model"] in models["budget"]["prices"]
+
+
+def open_router(scripted_open, scripted_spark=()):
+    """A router with Spark Open beside it, its bench facts the read and pins.h."""
+    log = []
+    opened = FakeChatClient(scripted_open)
+    router, spark, hud = make_router(list(scripted_spark), facts_toolbox(log), prefetch=PREFETCH,
+                                     open=(opened, "open", "Spark Open"))
+    return router, opened.chat.completions, spark, hud
+
+
+def test_a_question_no_tool_is_needed_for_goes_to_spark_open_with_the_bench_facts():
+    router, opened, spark, hud = open_router([chat_response(content="<think>3.3 V over 330</think>About 10 mA.")])
+    assert router.run_turn("What current should the LED draw?") == "About 10 mA."
+    system = opened.requests[0]["messages"][0]["content"]
+    assert "#define SENSOR_PIN 15" in system and "SENSOR_PIN" in system  # pins.h and the board read
+    assert "tools" not in opened.requests[0] and spark.requests == []
+    assert ("reply", "Spark Open", "About 10 mA.") in hud.events
+    assert router.budget.spent > 0
+
+
+@pytest.mark.parametrize("request_", ["Can you flash it?", "Why isn't it blinking?", "My LED isn't blinking.",
+                                      "What's wrong with my wiring?", "Should I flash it?"])
+def test_requests_and_diagnoses_stay_with_the_router(request_):
+    router, opened, spark, _ = open_router([], [response("r1", text="On it.")])
+    assert router.run_turn(request_) == "On it."
+    assert opened.requests == [] and len(spark.requests) == 1
+
+
+def test_when_spark_open_fails_the_router_answers():
+    router, opened, spark, hud = open_router([RuntimeError("401")], [response("r1", text="About 10 mA.")])
+    assert router.run_turn("What current should the LED draw?") == "About 10 mA."
+    assert len(opened.requests) == 1 and len(spark.requests) == 1
+    assert any(e[0] == "note" and "Spark Open didn't answer" in e[1] for e in hud.events)

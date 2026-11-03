@@ -16,6 +16,7 @@ from wbc.motion.trajectory import lowest
 
 ROBOT_CFG = yaml.safe_load((ROOT / "config" / "robot.yaml").read_text())
 ROBOT_CFG["tool"]["xyz"] = [0, 0, 0]  # these tests' poses and heights are the URDF's point between the jaws
+ROBOT_CFG["limits_deg"] = {}  # the URDF's limits for the wrist roll, whose aims these tests were set up with
 BENCH = yaml.safe_load((ROOT / "config" / "bench.yaml").read_text())
 PARTS = yaml.safe_load((ROOT / "config" / "parts.yaml").read_text())
 CHAIN = load_chain(ROBOT_CFG, ROOT)

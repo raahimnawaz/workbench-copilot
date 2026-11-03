@@ -1,5 +1,7 @@
 import io
 import json
+import subprocess
+import sys
 import wave
 from types import SimpleNamespace as NS
 
@@ -8,6 +10,7 @@ import pytest
 from fakes import SilentHud
 
 from wbc.agent.budget import Budget
+from wbc.config import ROOT
 from wbc.agent.ears import (Question, Segmenter, Transcriber, asks, bare_stop, is_stop, listen_forever,
                             parse_transcript, pcm_to_wav, said_stop, wake_request)
 
@@ -78,6 +81,7 @@ def test_transcriber_posts_wav_and_bills_audio():
 @pytest.mark.parametrize("text, request_", [
     ("Copilot, check my wiring.", "check my wiring."),
     ("Hey co-pilot, flash it", "flash it"),
+    ("Yeah Copilot can you flash it", "can you flash it"),
     ("Okay, Co pilot. What's the grip force?", "What's the grip force?"),
     ("Copilot.", ""),
     ("pass me the solder", None),
@@ -316,3 +320,12 @@ def test_the_answer_may_come_until_some_seconds_after_the_question_was_said():
     speaking = lambda t: 2.5 <= t < 3.5  # the question, said over the first voice
     t = FakeTranscriber("Want me to flash it?", "Yes.")  # its own voice, heard only for the stop; then you
     assert hear(mic, t, muted=speaking, clock=lambda: 10.0, question=question) == (["Yes."], [])  # 8 s after 3.5 s
+
+
+def test_httpx_comes_in_with_the_ears_not_later_on_their_thread():
+    """Nov 2: openai reads sys.modules["httpx"] without importing it, so the ears' thread importing it at start-up made
+    the fast path's first request fail ("partially initialized module 'httpx'"), in 2 of 4 start-ups with the desk
+    camera kept open."""
+    code = "import sys, wbc.agent.ears; print('httpx' in sys.modules)"
+    out = subprocess.run([sys.executable, "-c", code], cwd=ROOT, capture_output=True, text=True, check=True)
+    assert out.stdout.strip() == "True"

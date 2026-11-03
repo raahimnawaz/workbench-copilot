@@ -136,16 +136,16 @@ class FakeBus:
         arm.events.append(f"{name} {motor} {value}")
         if (name, motor) not in arm.deaf:
             registers = {"Goal_Position": arm.goal, "P_Coefficient": arm.gain, "Torque_Limit": arm.limit,
-                         "Lock": arm.lock}
+                         "Lock": arm.lock, "Overload_Torque": arm.overload}
             registers[name][motor] = value
             if name == "Goal_Position":  # the servo turns its torque on for it (Oct 29)
                 arm.come_on(motor)
         arm.reply(name, motor, value)
 
     def read(self, name, motor, *, normalize=True, num_retry=0):
-        assert name == "P_Coefficient" and not normalize
+        assert name in ("P_Coefficient", "Overload_Torque") and not normalize
         self.request()
-        return self.arm.gain[motor]
+        return (self.arm.gain if name == "P_Coefficient" else self.arm.overload)[motor]
 
     def enable_torque(self, motors=None, num_retry=0):  # LeRobot's writes Torque_Enable 1, then Lock 1
         self.request()
@@ -178,6 +178,7 @@ class FakeFollower:
         self.limit = {m: 500 if m == "gripper" else 1000 for m in JOINTS}
         self.gain = {m: 32 if m == "elbow_flex" else 16 for m in JOINTS}  # in EEPROM: the elbow kept its 32
         self.lock = {m: 1 for m in JOINTS}
+        self.overload = {m: 25 if m == "gripper" else 80 for m in JOINTS}  # Overload_Torque, in EEPROM
         self.load = {m: 0 for m in JOINTS}
         self.temperature, self.temps = {m: 27 for m in JOINTS}, []
         self.calibration = {m: SimpleNamespace(**c) for m, c in CALIBRATION.items()} if calibration else {}
@@ -194,13 +195,15 @@ class FakeFollower:
                                                                     # the driver's clock to tell
         self.bus = FakeBus(self)
 
-    def configure(self):  # like LeRobot's: every motor off and unlocked, P 16 on all six, then torque on
+    def configure(self):  # like LeRobot's: every motor off and unlocked, P 16 on all six, the gripper's overload
+                          # threshold 25%, then torque on
         self.bus.disable_torque()
         if self.flagged.get("configure"):  # as at 15:32 on Oct 29, before anything else was set
             self.flagged["configure"] -= 1
             raise RuntimeError("Failed to write 'Torque_Enable' on id_=6 with '0' after 1 tries. [RxPacketError] Input "
                                "voltage error!")
         self.gain = {m: 16 for m in JOINTS}
+        self.overload["gripper"] = 25
         self.events.append("configured")
         self.bus.enable_torque()
 
@@ -326,9 +329,27 @@ def test_power_on_sets_gains_and_caps_before_any_torque_then_brings_the_joints_o
     for m in JOINTS:
         assert events[events.index(f"torque on {m}") - 1] == f"Goal_Position {m} {pose(START)[m]}"
     assert robot.gain == {**{m: 16 for m in JOINTS}, "elbow_flex": 32}  # configure() set 16, then the elbow's 32
-    assert robot.limit == {**{m: 500 for m in ARM}, "gripper": 240}
+    assert robot.limit == {**{m: 500 for m in ARM}, "gripper": 500}  # the gripper at LeRobot's own 50% ceiling
     assert arm.powered == set(JOINTS) and max(shift.values()) < 0.1
     assert robot.pos == pytest.approx(pose(START))
+
+
+def test_power_on_raises_the_grippers_overload_threshold_over_its_cap_before_any_torque():
+    """configure() sets 25%, and the servo cuts an output over it for 2 s to 20%: a 50% squeeze would weaken 2 s in."""
+    arm, robot, said = make()
+    arm.power_on()
+    events = robot.events
+    assert events.index("configured") < events.index("Overload_Torque gripper 60") < events.index("torque on shoulder_pan")
+    assert robot.overload == {**{m: 80 for m in ARM}, "gripper": 60} and robot.limit["gripper"] == 500
+    assert robot.overload["gripper"] > robot.limit["gripper"] / 10
+
+
+def test_close_puts_the_grippers_overload_threshold_back_unlocked_and_then_locks_it():
+    arm, robot, said = powered()
+    arm.close()
+    events = robot.events
+    assert robot.overload["gripper"] == 25 and robot.lock == {m: 1 for m in JOINTS}
+    assert events.index("Lock gripper 0") < events.index("Overload_Torque gripper 25") < events.index("Lock gripper 1")
 
 
 def test_without_the_hold_here_goals_lerobots_setup_would_drive_every_joint_to_0():
@@ -353,6 +374,7 @@ def test_powering_the_base_alone_leaves_the_other_five_off():
 @pytest.mark.parametrize("register, joint, match", [
     ("P_Coefficient", "elbow_flex", "the elbow's gain didn't take"),
     ("Torque_Limit", "shoulder_lift", "the torque cap didn't take on the shoulder lift"),
+    ("Overload_Torque", "gripper", "the gripper's overload threshold didn't take"),
 ])
 def test_a_setting_that_doesnt_take_keeps_torque_off(register, joint, match):
     arm, robot, said = make(FakeFollower(deaf={(register, joint)}))
@@ -500,7 +522,8 @@ def test_a_cut_from_another_thread_stops_a_power_on_before_the_next_joint():
     (lambda robot: robot.pos.update(wrist_roll=4071),  # where the roll read in the L pose on Oct 28
      r"the wrist roll by 15\.1°.*Turn the gripper clockwise, looking from the wrist toward the jaw tips\. Its reading "
      "wraps at ±180°, and a move across the wrap would turn the servo the long way round"),
-    (lambda robot: robot.pos.update(wrist_roll=150), r"the wrist roll by 9\.5°.*Turn the gripper counterclockwise"),
+    (lambda robot: robot.pos.update(wrist_roll=1051),  # -87.5°: past robot.yaml's -78° for the roll's stop
+     r"the wrist roll by 9\.5°.*Turn the gripper counterclockwise"),
     (lambda robot: robot.temperature.update(shoulder_lift=66), "too hot to power on: the shoulder lift at 66 °C"),
     (lambda robot: robot.temperature.update(wrist_roll=65), "too hot to power on: the wrist roll at 65 °C"),
     (lambda robot: setattr(robot, "power", False), r"the servos didn't answer \(.*\)\. Is their power on\?"),
@@ -821,10 +844,11 @@ def test_a_re_aim_never_sets_a_goal_past_its_joints_range():
     assert math.degrees(reading.q[4]) == pytest.approx(top - 35 / TPD, abs=0.1)
 
 
-def test_the_speed_caps_are_the_ones_the_1_345_elbow_was_measured_at():
-    # 1.5x the first 30°/s and 80 mm/s: the elbow at P 32 lifted the forearm to straight up lagging 3.5° at most, and
-    # tripped the 5° cut at 2x (arm-bench run 30). Raising them needs that test again
-    assert (driver.MAX_JOINT_SPEED, driver.MAX_TIP_SPEED) == (45.0, 0.12)
+def test_the_speed_caps_are_the_ones_the_arm_was_measured_at():
+    # 45°/s: the elbow at P 32 lifted the forearm to straight up lagging 3.5° at most, and tripped the 5° cut at 60°/s.
+    # 180 mm/s: the first move from rest and back, every joint 3.2° at most (Nov 2). Raising either needs those tests
+    # again
+    assert (driver.MAX_JOINT_SPEED, driver.MAX_TIP_SPEED) == (45.0, 0.18)
 
 
 def test_a_re_aim_keeps_to_the_speed_caps():
@@ -841,9 +865,19 @@ def test_a_re_aim_keeps_to_the_speed_caps():
     assert joint_speed <= driver.MAX_JOINT_SPEED and tip_speed <= 1.01 * driver.MAX_TIP_SPEED
 
 
-def test_a_re_aim_that_would_take_the_arm_under_a_floor_isnt_run():
+def test_a_re_aim_toward_a_floor_goes_only_as_far_as_keeps_its_goals_within_reaim_under_of_it():
     arm, robot, said = powered(sag={"elbow_flex": -23})  # held 2° open, so the tool point is higher than planned
-    reading = arm.move_to(np.radians(NEAR))  # 11 mm up: folding the elbow 2° more aims the tool point under 10 mm
+    arm.move_to(np.radians(NEAR))  # 11 mm up: folding the elbow 2° more aims the tool point under 10 mm
+    goals = [MAP.q({**pose(NEAR), **goal}) for _, goal in robot.sent]
+    assert pose(NEAR)["elbow_flex"] < max(goal["elbow_flex"] for _, goal in robot.sent) < pose(NEAR)["elbow_flex"] + 23
+    lowest_tips = min(lowest(CHAIN, q, driver.FLOOR_JOINTS, arm.table)[0] for q in goals)
+    assert driver.TOOL_FLOOR - driver.REAIM_UNDER - 1e-4 <= lowest_tips < driver.TOOL_FLOOR
+
+
+def test_a_re_aim_that_not_even_a_quarter_of_would_keep_within_reaim_under_of_a_floor_isnt_run(monkeypatch):
+    monkeypatch.setattr(driver, "REAIM_UNDER", 0.0)
+    arm, robot, said = powered(sag={"elbow_flex": -23})
+    reading = arm.move_to(np.radians(NEAR))
     assert max(goal["elbow_flex"] for _, goal in robot.sent) == pose(NEAR)["elbow_flex"]
     assert math.degrees(reading.q[2]) == pytest.approx(NEAR[2] - 23 / TPD, abs=0.1)
 
@@ -1261,16 +1295,17 @@ def test_close_locks_every_servo_after_a_power_on_that_tripped():
 
 def test_close_sends_a_lock_again_when_its_reply_flags_the_input_voltage():
     arm, robot, said = powered()
-    robot.flagged = {("Lock", "gripper"): 1}
+    robot.flagged = {("Lock", "wrist_roll"): 1}  # the gripper's first Lock write is now its unlock, for its threshold
     arm.close()
-    assert robot.events.count("Lock gripper 1") == 2 and robot.lock == {m: 1 for m in JOINTS}
+    assert robot.events.count("Lock wrist_roll 1") == 2 and robot.lock == {m: 1 for m in JOINTS}
 
 
 def test_close_leaves_the_caps_when_the_cut_isnt_confirmed():
     arm, robot, said = powered()
     robot.lost_cuts = 99
     arm.close()
-    assert robot.limit == {**{m: 500 for m in ARM}, "gripper": 240} and robot.events[-1].startswith("disconnect")
+    assert robot.limit == {**{m: 500 for m in ARM}, "gripper": 500} and robot.events[-1].startswith("disconnect")
+    assert robot.overload["gripper"] == 60  # left raised too, with the motors maybe still on
     assert len(said) == 1 and "so the torque caps stay as they are" in said[0]
 
 
@@ -1305,7 +1340,7 @@ def test_open_connects_only_the_bus_and_takes_the_map_and_gains_from_the_config(
     arm = Arm.open("/dev/cu.fake", ROBOT_CFG, ROOT, calibration_dir="/elsewhere", make_robot=make_robot)
     assert made == [("/dev/cu.fake", "wbc_follower", "/elsewhere")]
     assert arm.robot.events == ["bus connect"]  # nothing written, and robot.connect() never ran: the fake raises
-    assert arm.joints.servos == MAP.servos and arm.gains == {"elbow_flex": 32, "gripper": 32}
+    assert arm.joints.servos == MAP.servos and arm.gains == {m: 32 for m in JOINTS if m != "wrist_roll"}
 
 
 @pytest.mark.parametrize("setup, match", [

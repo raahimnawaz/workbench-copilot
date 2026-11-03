@@ -1,5 +1,5 @@
 """Run the bench agent: python -m wbc.agent [--sim] [--voice] [--hear] [--speak] [--backup] [--arm] [--enter]
-[--no-prefetch]
+[--no-prefetch] [--hud] [--show]
 
 Typed lines and spoken requests go on one queue, and the router handles them one turn at a time. Before each turn,
 code fetches the bench facts in models.yaml's router.prefetch: pins.h and the sensor, and Act 1's board read, which is
@@ -21,6 +21,7 @@ Every turn is recorded in .wbc/session.json (wbc/agent/memory.py), however it en
 
 With --hud, the HUD's orb page shows each turn live at http://127.0.0.1:8766/ (wbc/agent/web_hud.py): the mic
 listening, the request, every model call with its time, the reply and its speech, and the turn's time and spend.
+With --show, for a take, it opens in a window of its own, and the board's schematic opens in KiCad (wbc/agent/show.py).
 """
 from __future__ import annotations
 
@@ -64,11 +65,21 @@ def build(sim: bool, backup: bool, router_model: str | None = None, arm: bool = 
     bench = Bench(config.ROOT, models, meta, budget, sim=sim, say=hud.note, layout=config.load_yaml("bench.yaml"),
                   parts=config.load_yaml("parts.yaml"), robot_cfg=robot_cfg, desk_cfg=config.load_yaml("desk.yaml"),
                   arm_port=robot_cfg.get("port") if arm else None,
+                  move_logs=config.ROOT / ".wbc" / "logs" if arm and not sim else None,
                   calibration_dir=calibration_dir or robot_cfg.get("calibration_dir"), confirm=keyboard.ask,
                   go_ahead=go_ahead)
     if arm:
         hud.note("the arm moves when you ask; \"Copilot, stop\" holds it, Ctrl-C cuts it" if go_ahead == "request" else
                  "each arm move waits for Enter at the keyboard; Ctrl-C cuts it")
+    if arm and not sim:  # the desk camera kept open, so a locate before a move needn't open it and wait 3 s
+        from wbc.perception import camera  # the eyes extra
+
+        cam = bench.desk_cfg["camera"]
+        try:
+            bench.desk_stream = camera.Stream(cam["index"], cam["width"], cam["height"])
+            hud.note(f"desk camera {cam['index']} kept open for locate")
+        except RuntimeError as e:
+            hud.note(f"desk camera: {e} Each locate opens it instead.")
     toolbox = build_toolbox(bench)
     max_steps = models["router"].get("max_steps", 12)
     prefetch = models["router"].get("prefetch") if prefetch else None
@@ -78,16 +89,22 @@ def build(sim: bool, backup: bool, router_model: str | None = None, arm: bool = 
         fast = FastArm(models["fast_arm"], toolbox, bench, memory.notebook, hud)
     else:
         fast = None
+    o = models.get("open")
+    reaches = config.open_client(models) if o and not sim else None
+    open_route = (hud.watch(reaches), o["model"], o.get("label", "Spark Open")) if reaches else None
+    if o and not sim:
+        hud.note(f"{o.get('label', 'Spark Open')}: " + ("questions no tool is needed for" if reaches else
+                                                      f"off, no {o.get('key_env', 'BASETEN_API_KEY')}"))
     if backup:
         b = models["backup"]
         router = ChatRouter(hud.watch(config.backup_client(models)), b["model"], toolbox, budget, hud, SYSTEM,
                             max_steps=max_steps, prefetch=prefetch, memory=memory, fast=fast,
-                            reasoning=b.get("reasoning"))
+                            reasoning=b.get("reasoning"), open=open_route)
     else:
         r = models["router"]
         router = Router(meta, router_model or r["model"], toolbox, budget, hud, SYSTEM, max_steps=max_steps,
                         prefetch=prefetch, memory=memory, fast=fast, fallback=r.get("fallback"),
-                        effort=r.get("effort"))
+                        effort=r.get("effort"), open=open_route)
     return models, budget, hud, router, bench, keyboard
 
 
@@ -116,6 +133,8 @@ def main(argv=None) -> int:
                     help="pick up the last session (.wbc/session.json) instead of starting a new one")
     ap.add_argument("--hud", nargs="?", const=8766, type=int, metavar="PORT",
                     help="show each turn live on the HUD's orb page, at http://127.0.0.1:8766/ (or PORT)")
+    ap.add_argument("--show", action="store_true",
+                    help="for a take: the HUD (with --hud) in a window of its own, and the schematic in KiCad")
     args = ap.parse_args(argv)
 
     try:
@@ -193,6 +212,15 @@ def main(argv=None) -> int:
                                  "question": None if args.hear else question}).start()
     if args.hear:
         hud.note("mic check: nothing goes to the router. Ctrl-D quits.")
+    window = None
+    if args.show:
+        from wbc.agent import show
+        if args.hud:
+            window = show.hud_window(f"http://127.0.0.1:{args.hud}/", config.ROOT / ".wbc" / "hud-window")
+            hud.note("HUD: in a window of its own" if window else "HUD: no Chrome for its window, so open the page")
+        drawn = (bench.layout or {}).get("schematic")
+        if drawn and not args.sim:
+            hud.note(show.schematic(config.ROOT / drawn))
 
     home = True  # at the end of the input (Ctrl-D) the arm goes back to rest before its motors go off, as --help says
     try:
@@ -246,6 +274,11 @@ def main(argv=None) -> int:
         if pool is not None:  # tool calls not started yet don't start
             pool.shutdown(wait=False, cancel_futures=True)
         bench.park(home=home)
+        stream = getattr(bench, "desk_stream", None)
+        if stream is not None:
+            stream.close()
+        if window is not None:
+            window.terminate()
 
 
 def cli() -> None:

@@ -117,7 +117,17 @@ class JointMap:
             return cls(servos)
         if list(chain.names) != ARM:
             raise ValueError(f"the chain's joints are {', '.join(chain.names)}, not the arm's {', '.join(ARM)}")
-        return cls(servos, chain.lower, chain.upper)
+        lower, upper = np.array(chain.lower, float), np.array(chain.upper, float)
+        for m, ends in (robot_cfg.get("limits_deg") or {}).items():  # a joint with no stop, narrowed
+            if m not in ARM or not servos[m].full_turn:
+                raise ValueError(f"config/robot.yaml's limits_deg narrows a joint with no calibrated stop, the wrist "
+                                 f"roll, not {m!r}")
+            if not (isinstance(ends, list) and len(ends) == 2 and ends[0] < ends[1]):
+                raise ValueError(f"config/robot.yaml's limits_deg for the {NAMES[m]} is [low, high] in degrees, not "
+                                 f"{ends!r}")
+            i = ARM.index(m)
+            lower[i], upper[i] = max(lower[i], math.radians(ends[0])), min(upper[i], math.radians(ends[1]))
+        return cls(servos, lower, upper)
 
     def angle(self, joint: str, raw: float) -> float:
         """The joint's URDF angle in radians at a raw position in ticks."""
@@ -154,8 +164,8 @@ class JointMap:
 
     def limits(self, joint: str) -> tuple[float, float]:
         """The joint's calibrated range as URDF angles (low, high) in radians, low first whatever its sign. A joint
-        with no stop gets the URDF's limits instead, which keep it clear of where its reading wraps, or ±pi without
-        them."""
+        with no calibrated stop gets the URDF's limits instead, which keep it clear of where its reading wraps,
+        narrowed by config/robot.yaml's limits_deg (the wrist roll's mechanical stop), or ±pi without them."""
         s = self.servos[joint]
         if s.full_turn:
             if joint in ARM and self.urdf_lower is not None and self.urdf_upper is not None:
