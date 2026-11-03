@@ -339,3 +339,27 @@ def test_read_board_script_lists_the_cameras(monkeypatch, capsys):
     out = capsys.readouterr().out
     assert "macOS sees: C920 HD Pro Webcam, C920 HD Pro Webcam" in out
     assert "index 0: 1920x1080" in out and "index 1: no frame" in out and "from index 1" in out
+
+
+def test_a_blurred_or_glaring_photo_is_said_with_what_to_change_and_the_read_goes_ahead():
+    rng = np.random.default_rng(0)
+    view = rng.integers(60, 200, (360, 970, 3), dtype=np.uint8)  # sharp texture, nothing blown out
+    good = reader.photo_quality(view, {})
+    assert good["advice"] == [] and good["sharpness"] > reader.MIN_SHARPNESS and good["blown_pct"] == 0
+    blurred = reader.photo_quality(cv2.GaussianBlur(view, (0, 0), 6), {})
+    assert len(blurred["advice"]) == 1 and "blurred" in blurred["advice"][0]
+    glare = view.copy()
+    cv2.circle(glare, (485, 180), 90, (255, 255, 255), -1)
+    glared = reader.photo_quality(glare, {})
+    assert len(glared["advice"]) == 1 and "move the lamp" in glared["advice"][0] and glared["blown_pct"] > 5
+    assert reader.photo_quality(glare, {"max_blown_pct": 100})["advice"] == []
+
+
+def test_a_read_says_its_photo_quality():
+    frame, actual, bench = photo()
+    result = reader.read_board(frame, bench, PARTS, sam_for(bench, actual), EYES, budget(), ROOT)
+    assert set(result["photo"]) == {"sharpness", "blown_pct"}
+    bench["reader"]["min_sharpness"] = 1e9  # as if blurred
+    blurred = reader.read_board(frame, bench, PARTS, sam_for(bench, actual), EYES, budget(), ROOT)
+    assert any(p.startswith("photo: the photo is blurred") for p in blurred["problems"])
+    assert blurred["wires"] == result["wires"], "the read goes ahead"
