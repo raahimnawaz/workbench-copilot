@@ -59,11 +59,12 @@ from dataclasses import dataclass, replace
 
 import numpy as np
 
-from .arm import FLOOR_JOINTS, GRIP_FLOOR, RANGE_MARGIN, SAG, TICKS_PER_DEGREE, Halted, Refused
+from .arm import (FLOOR_JOINTS, GRIP_FLOOR, MAX_JOINT_SPEED, MAX_TIP_SPEED, RANGE_MARGIN, SAG, TICKS_PER_DEGREE, Halted,
+                  Refused)
 from .joints import ARM, NAMES
 from .kinematics import pose_to_task, solve_ik, solve_task
 from .table import PAN_AXIS
-from .trajectory import lowest
+from .trajectory import lowest, min_seconds
 
 HOVER_MM = (60.0, 45.0, 30.0)  # over a thing's top, where a pick or a put starts and ends: the first the arm can
                                # reach straight down, since nearer the base or further out it can't point down as high
@@ -95,6 +96,18 @@ MIN_OPEN = 25.0         # percent: the least a pick opens the jaws, a quarter of
 CLOSED_OPENING = 2.0    # percent: where a put or a miss leaves the jaws once it's done, closed but 31 ticks from their
                         # closed end, short of the 19-24 where empty ones stop at P 32, so they don't keep pushing
 PUT_ABOVE_MM = 30.0     # over the place's top that a put opens the jaws
+LIFT_MM = 95.0          # over the desk that a put into a container lifts what's held to first, the jaws turned across
+                        # the arm so it lies along it: turning the gripper up from straight down then stands it on end
+ON_END_TILTS = (0.0, 15.0, 30.0)  # degrees down from level the gripper may point to hold it on end over a container:
+                        # level stands it straight, which the arm's model reaches only from about 28 cm out
+ON_END_ABOVE_MM = 60.0  # over a container's rim that what's held, on end, swings in at, its lower end clear of the rim
+ON_END_CLEAR_MM = 15.0  # over the rim its lower end comes down to before it goes in
+INSERT_MM = 15.0        # under the rim its lower end goes before the jaws let go of it: the gripper's own body, just
+                        # over the rim beside it then, has to stay clear of it
+CAGE_MM = 8.0           # back from the tips, toward the palm, that a loosely held handle rides, in the gap above them:
+                        # an estimate, not measured
+ON_END_SLOW = 2.0       # times as long as the speed caps allow that the turns on end take, so a loose hold keeps it:
+                        # a wrist-turn test on the arm ran at this, and the screwdriver stayed in the jaws, level
 ROUND = 1.3             # a thing whose length is under this many times its width has no long axis to grip across
 IK_MISS_MM = 2.0        # an IK answer further than this from its target is refused
 TILT_MISS_DEG = 3.0     # and one whose gripper points further than this from the pitch asked for
@@ -175,6 +188,8 @@ class Hand:
         self.across_roll = float(hand.get("across_roll_deg", 0.0))
         self.rest = None   # where power_on found the arm, just inside its ranges: home() goes back there
         self.held = None   # the name of what the jaws hold, from pick_up until put_down
+        self.held_thing = None  # it, as locate found it, for a put into a container: its length and narrow end
+        self.held_tip = None    # where its narrow end points, degrees from the jaw axis; None when it has none
         self.opened = None  # percent the pick that's holding it opened the jaws to: put_down opens them that far
         self.log = None    # a list while the agent records moves: each move and jaw action, with its samples
         q = np.zeros(self.chain.n)
@@ -238,9 +253,14 @@ class Hand:
         self.log.append({"what": what, "started": round(time.time(), 3), "samples": []})
         return self.log[-1]["samples"]
 
-    def _move(self, step: Step, aim: bool = True, grip: bool = False):
-        """The driver's move_to to a step's pose, recorded as the step."""
-        return self.arm.move_to(step.q, samples=self._samples(step.what), aim=aim, grip=grip)
+    def _move(self, step: Step, aim: bool = True, grip: bool = False, slow: float | None = None):
+        """The driver's move_to to a step's pose, recorded as the step; with `slow`, taking that many times as long as
+        the speed caps allow."""
+        seconds = None
+        if slow is not None:
+            seconds = slow * min_seconds(self.arm.read().q, step.q, math.radians(MAX_JOINT_SPEED), self.chain,
+                                         MAX_TIP_SPEED)
+        return self.arm.move_to(step.q, seconds=seconds, samples=self._samples(step.what), aim=aim, grip=grip)
 
     def opening_for(self, thing: Thing) -> float:
         """How far a pick opens the jaws for `thing`, in percent: far enough for the moving jaw to come down
@@ -491,6 +511,96 @@ class Hand:
         over, down = min(plans, key=lambda steps: abs(steps[0].q[ROLL] - now[ROLL]))
         return [over, down, Step("back up", over.xyz, over.jaws_deg, over.q)]
 
+
+    def tip_from_jaws(self, thing: Thing, q) -> float | None:
+        """Where `thing`'s narrow end points (locate grips it off its middle toward that end), as degrees from the jaw
+        axis at joint angles q; None when locate gripped it at its middle."""
+        if thing.grip_x is None:
+            return None
+        end = math.degrees(math.atan2(thing.grip_y - thing.y, thing.grip_x - thing.x))
+        return turn(end - self.jaws_toward(q))
+
+    def plan_insert(self, place: Thing, held: Thing, start=None, tip: float | None = None) -> list:
+        """The poses a put into a container goes through, solved: lift what's held LIFT_MM over the desk where it is,
+        the jaws turned across the arm toward the container so it lies along the arm with its narrow end (`tip`,
+        degrees from the jaw axis, as tip_from_jaws gave it at the pick) toward the base, or its wide end where the
+        wrist roll's stop rules that out; turn the gripper up until it stands on end, that end down, over the
+        container's opening, ON_END_ABOVE_MM over the rim; down until its lower
+        end is ON_END_CLEAR_MM over the rim, then INSERT_MM under it; and back up. Level where the arm reaches that
+        low, else up to the last of ON_END_TILTS down. `held` is the thing as locate found it, for its length and its
+        grip; `start`, joint angles, plans from there instead of where the arm is. Refused, with nothing moved, when
+        the arm can't stand it on end over the opening."""
+        now = np.array(self.arm.read().q if start is None else start, float)
+        b = math.atan2(place.y, place.x)
+        out = np.array([math.cos(b), math.sin(b)])  # from the base through the container
+        across = line(math.degrees(b) + 90.0)
+        x, y, _, _, _ = pose_to_task(self.chain.fk(now))
+        at = (1000 * x, 1000 * y, self._desk_z(1000 * x, 1000 * y) + LIFT_MM)
+        off = 0.0 if held.grip_x is None else math.hypot(held.grip_x - held.x, held.grip_y - held.y)
+        rim = self._desk_z(place.x, place.y) + place.height_mm
+        # Which end goes in first: its narrow end, turned toward the base before the gripper turns up, unless the
+        # wrist roll can't turn the jaws that way round (its stop); then its wide end. With no narrow end, either.
+        ends = [("", None, held.length_mm / 2)] if tip is None else [
+            (", its narrow end to go in first", math.degrees(b) + 180.0 - tip, held.length_mm / 2 - off),
+            (", its wide end to go in first", math.degrees(b) - tip, held.length_mm / 2 + off)]
+        why = None
+        for end, toward, low in ends:  # low: from where the jaws hold it to the end that goes in
+            try:
+                lift = Step("lift, the jaws across the arm" + end, at, across,
+                            self.solve(at, jaws_deg=across, q0=now, toward=toward))
+            except Refused as e:
+                why = why or e
+                continue
+            for tilt in ON_END_TILTS:
+                p = math.radians(tilt)
+                approach = np.array([math.cos(p) * out[0], math.cos(p) * out[1], -math.sin(p)])
+                lower = np.array([-math.sin(p) * out[0], -math.sin(p) * out[1], -math.cos(p)])  # along it, to that end
+                q, steps = lift.q, []
+                try:
+                    for what, end_z in (("on end, over it", rim + ON_END_ABOVE_MM),
+                                        ("down over it", rim + ON_END_CLEAR_MM), ("into it", rim - INSERT_MM)):
+                        # the tool point that puts that end over the opening's middle at end_z
+                        xyz = tuple(np.array([place.x, place.y, end_z]) - low * lower + CAGE_MM * approach)
+                        q = self.solve(xyz, pitch_deg=tilt, q0=q)
+                        steps.append(Step(what, xyz, across, q))
+                except Refused as e:
+                    why = why or e
+                    continue
+                return [lift] + steps + [Step("back up", steps[0].xyz, across, steps[0].q)]
+        raise Refused(f"the arm can't stand the {held.name} on end over the {place.name} at x {place.x:.0f}, "
+                      f"y {place.y:.0f} mm ({why}): it can from about 28 cm out from its base, more nearly straight out")
+
+    def put_in(self, place: Thing, confirm=None, steps: list | None = None) -> dict:
+        """Put what the jaws hold into a container, on end: through plan_insert's steps (planned now unless given),
+        letting go once its lower end is under the rim, then back up and the jaws closed. The turns on end take
+        ON_END_SLOW times as long as the caps allow. confirm as for pick_up, asked on end over the container."""
+        if not self.held and not self.arm.jaw().holding:
+            raise Refused("the jaws hold nothing to put in")
+        if steps is None:
+            if self.held_thing is None:
+                raise Refused("what the jaws hold isn't known well enough to stand it on end: pick it up again first")
+            steps = self.plan_insert(place, self.held_thing, tip=self.held_tip)
+        lift, high, over, into, up = steps
+        try:
+            self._move(lift, aim=False, slow=ON_END_SLOW)
+            self._move(high, aim=False, slow=ON_END_SLOW)
+            if confirm is not None:
+                answer = confirm(f"On end over the {place.name}. Put it in?")
+                if not answer:
+                    return {"ok": False, "stopped": f"over the {place.name}, "
+                            + ("as you asked" if answer is False else "since the session is ending"),
+                            "steps": [s.summary() for s in (lift, high)]}
+            self._move(over)
+            self._move(into)
+            self.arm.release(self.opened or 100.0, samples=self._samples("let go"))
+        except Halted:
+            if not self.arm.jaw().holding:
+                self.held = None
+            raise
+        held, self.held, self.opened, self.held_thing, self.held_tip = self.held, None, None, None, None
+        self._move(up, aim=False)
+        self._close()
+        return {"ok": True, "put": held, "on": place.name, "on_end": True, "steps": [s.summary() for s in steps]}
     def _hovering(self, x: float, y: float, top: float, plan, toward: float | None = None, start=None) -> list:
         """plan(over) solved, the jaws one way round as _solved has them (from `start`, as it takes it), for the highest
         of HOVER_MM over `top` at (x, y) mm that the arm can reach straight down. A put opens PUT_ABOVE_MM over the
@@ -545,6 +655,7 @@ class Hand:
         if self.held:
             raise Refused(f"the jaws already hold the {self.held}: put it down first")
         steps = steps or self.plan_pick(thing)
+        self.held_thing, self.held_tip = thing, self.tip_from_jaws(thing, steps[2].q)
         try:
             return self._pick(thing.gripped(), steps, confirm)
         except Halted:
@@ -611,7 +722,7 @@ class Hand:
                         "steps": [over.summary()]}
         self._move(down)
         self.arm.release(self.opened or 100.0, samples=self._samples("let go"))  # as far as the pick opened them
-        held, self.held, self.opened = self.held, None, None
+        held, self.held, self.opened, self.held_thing, self.held_tip = self.held, None, None, None, None
         self._move(up, aim=False)
         self._close()
         return {"ok": True, "put": held, "on": place.name, "steps": [s.summary() for s in (over, down, up)]}

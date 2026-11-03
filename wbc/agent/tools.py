@@ -455,6 +455,14 @@ def build_toolbox(bench: Bench) -> Toolbox:
             return None, {"ok": False, "error": f"locate found no {missing[0]} on the desk"}
         return [bench.seen[key(thing)][0] for thing, _ in wants], None
 
+    def forget(result: dict, *things) -> None:
+        """Where locate saw these, forgotten after an arm move was refused (out of reach, past a joint's range): the
+        user may move them before asking again ("I moved the cup, try again"), and within SEEN_S the old place would
+        be planned for again."""
+        if bench.arm_port is not None and "refused" in str(result.get("error", "")):
+            for thing in things:
+                bench.seen.pop(key(thing), None)
+
     def target(thing: str, height_mm: float):
         """(Thing, None) as targets() finds one; (None, error) when it can't."""
         found, problem = targets([(thing, height_mm)])
@@ -557,6 +565,7 @@ def build_toolbox(bench: Bench) -> Toolbox:
         return bench.confirm if (bench.robot_cfg.get("hand") or {}).get("check_over", True) else None
 
     go = " The user presses Enter before the arm moves." if bench.go_ahead == "enter" else " The arm moves at once."
+    containers = {key(name): float(h) for name, h in ((bench.robot_cfg.get("hand") or {}).get("containers") or {}).items()}
 
     @tb.register("pick_up", (
         f"Pick a thing up off the desk with the arm, where locate last found it (locating it first if it hasn't).{go} "
@@ -583,6 +592,7 @@ def build_toolbox(bench: Bench) -> Toolbox:
                       plan=lambda hand: planned.append(hand.plan_pick(t)))
         if result.get("ok") or "steps" in result or result.get("motors_cut") or result.get("halted"):  # it went to it
             bench.seen.pop(key(thing), None)  # in the jaws now, or nudged trying: locate it again before the next move
+        forget(result, thing)
         return result
 
     @tb.register("put_down", (
@@ -592,6 +602,8 @@ def build_toolbox(bench: Bench) -> Toolbox:
     def put_down(thing: str, height_mm: float = 0) -> dict:
         if bench.halted.is_set():
             return dict(SAID_STOP)
+        inside = key(thing) in containers  # stood in on end, its height as measured
+        height_mm = containers.get(key(thing), height_mm)
         t, problem = target(thing, height_mm)
         if problem:
             return problem
@@ -601,9 +613,17 @@ def build_toolbox(bench: Bench) -> Toolbox:
             held, bench.sim_held = bench.sim_held, None
             return {"ok": True, "sim": True, "put": held, "on": t.name}
         planned = []
-        return move(f"Put it down on the {t.name} at x {t.x:.0f}, y {t.y:.0f} mm?",
-                    lambda hand: hand.put_down(t, confirm=check_over(), steps=planned[-1]),
-                    plan=lambda hand: planned.append(hand.plan_put(t)))
+        if inside:
+            result = move(f"Put it in the {t.name} at x {t.x:.0f}, y {t.y:.0f} mm?",
+                          lambda hand: hand.put_in(t, confirm=check_over(), steps=planned[-1]),
+                          plan=lambda hand: planned.append(hand.plan_insert(t, hand.held_thing, tip=hand.held_tip)
+                                                          if hand.held_thing else None))
+        else:
+            result = move(f"Put it down on the {t.name} at x {t.x:.0f}, y {t.y:.0f} mm?",
+                          lambda hand: hand.put_down(t, confirm=check_over(), steps=planned[-1]),
+                          plan=lambda hand: planned.append(hand.plan_put(t)))
+        forget(result, thing)
+        return result
 
     @tb.register("move_thing", (
         "Move a thing on the desk onto or into a place, such as a screwdriver onto a tray, in one call: one desk photo "
@@ -625,6 +645,8 @@ def build_toolbox(bench: Bench) -> Toolbox:
     def move_thing(thing: str, place: str, thing_height_mm: float = 0, place_height_mm: float = 0) -> dict:
         if bench.halted.is_set():
             return dict(SAID_STOP)
+        inside = key(place) in containers  # stood in on end, its height as measured
+        place_height_mm = containers.get(key(place), place_height_mm)
         warm_up()
         found, problem = targets([(thing, thing_height_mm), (place, place_height_mm)])
         if problem:
@@ -641,7 +663,9 @@ def build_toolbox(bench: Bench) -> Toolbox:
 
         def plan(hand):  # both, before anything moves: the put from where the pick leaves the arm
             planned["pick"] = hand.plan_pick(t)
-            planned["put"] = hand.plan_put(p, start=planned["pick"][-1].q)
+            planned["put"] = (hand.plan_insert(p, t, start=planned["pick"][-1].q,
+                                               tip=hand.tip_from_jaws(t, planned["pick"][2].q))
+                              if inside else hand.plan_put(p, start=planned["pick"][-1].q))
 
         def run(hand):
             from wbc.motion.arm import Refused
@@ -650,7 +674,7 @@ def build_toolbox(bench: Bench) -> Toolbox:
             if not picked.get("ok"):
                 return {**picked, "put": "not tried"}
             try:
-                put = hand.put_down(p, confirm=check_over(), steps=planned.get("put"))
+                put = (hand.put_in if inside else hand.put_down)(p, confirm=check_over(), steps=planned.get("put"))
             except Refused as e:  # refused before that move started, so it's still in the jaws
                 return {"ok": False, "holding": t.name, "error": f"picked up the {t.name}, but putting it on the "
                         f"{p.name} was refused, so the jaws still hold it: {e}", "steps": picked["steps"]}
@@ -663,12 +687,14 @@ def build_toolbox(bench: Bench) -> Toolbox:
                     return {"ok": False, "missed": True, "holding": None, "error": f"the jaws closed on nothing at "
                             f"the {t.name}: it's still where it was, at x {there[0]:.0f}, y {there[1]:.0f} mm",
                             "steps": steps}
-            return {"ok": True, "moved": t.name, "onto": p.name, "holding": None, "steps": steps}
+            return {"ok": True, "moved": t.name, "onto": p.name, "holding": None, "steps": steps,
+                    **({"on_end": True} if inside else {})}
 
-        result = move(f"Pick up the {t.name} at x {t.x:.0f}, y {t.y:.0f} mm and put it on the {p.name} at x {p.x:.0f}, "
-                      f"y {p.y:.0f} mm?", run, plan=plan)
+        result = move(f"Pick up the {t.name} at x {t.x:.0f}, y {t.y:.0f} mm and put it {'in' if inside else 'on'} the "
+                      f"{p.name} at x {p.x:.0f}, y {p.y:.0f} mm?", run, plan=plan)
         if result.get("ok") or "steps" in result or result.get("motors_cut") or result.get("halted"):  # it went to it
             bench.seen.pop(key(thing), None)
+        forget(result, thing, place)
         return result
 
     @tb.register("arm_home", f"Move the arm back to where it rested when its motors came on.{go}",

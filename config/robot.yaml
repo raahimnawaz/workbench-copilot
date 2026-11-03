@@ -60,6 +60,10 @@ hand:
   # With go_ahead enter, ask again over the thing with the jaws open, before they go down, so a spot, a jaw line or a
   # fixed jaw over the thing instead of beside it stops there. Turn it off once picks land where they should.
   check_over: true
+  # Places a put stands what's held in on end, by name, with how tall each stands (mm): a put turns the gripper up
+  # from straight down until it's on end over the opening and lets go once its lower end is inside the rim. The
+  # height here wins over any given in the request, since it's measured: the mug, just under 4 in.
+  containers: {cup: 98, mug: 98}
 
 # Servo ids, and the signs wbc/motion/joints.py maps raw ticks with: q = sign * (raw - 2047) * 2 pi / 4096 radians.
 # The URDF's zero is lerobot-calibrate's Part 1 L pose (base facing forward, upper arm straight up, forearm and
