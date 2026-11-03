@@ -50,6 +50,12 @@ def image_data_url(image) -> str:
 # nothing to be done. "why" stays with the router, which diagnoses with its tools, and so does "can you ...".
 OPEN_FIRST = re.compile(r"^(what|whats|what's|how|which|when|where|is|are|does|do|should|would)\b")
 OPEN_NOT = re.compile(r"\b(why|fix|flash|move|put|pick|grab|hold|stage|build|compile|remember|forget|again|wrong)\b")
+# Questions Spark Open can't answer from the design and the firmware: what the cameras or the arm would have to look
+# at now, what the notebook, the spend or the conversation holds. They go to the router, which has the tools and
+# the whole conversation.
+OPEN_ELSEWHERE = re.compile(r"\b(where|see|look|find|holding|arm|desk|cup|camera|notebook|note|notes|told|tell|said|"
+                            r"say|earlier|before|last|spent|spend|cost|budget|blinking|working|works)\b")
+OPEN_PASS = "PASS"  # Spark Open's whole reply when the bench facts don't answer the question
 OPEN_TURNS = 6  # recent turns Spark Open sees, so a question can refer back to them
 OPEN_TURNS_MAX = 2500  # characters of them
 OPEN_TOKENS = 2048  # its reply is two sentences; the rest is room for its reasoning (518 tokens on a one-line question)
@@ -57,7 +63,7 @@ OPEN_SYSTEM = ("You are the voice co-pilot of an electronics bench, answering a 
                "the board read from the camera, the schematic (the design) and the firmware's pins, then the "
                "conversation's recent turns, for what the question refers to. Answer in at most "
                "two short sentences of plain speech, no markdown, with numbers where they help. If the facts don't "
-               "answer it, say what you'd need to check.")
+               f"answer it, reply with the one word {OPEN_PASS}, and the assistant with the bench's tools will.")
 
 
 def _private(result: dict) -> dict:
@@ -294,7 +300,7 @@ class _RouterBase:
         said, and the turn joins the conversation as the fast path's do. None for anything else, or when it fails,
         and the router's model takes the request."""
         words = " ".join(re.sub(r"[^\w' ]+", " ", user_text.lower()).split())
-        if not OPEN_FIRST.match(words) or OPEN_NOT.search(words):
+        if not OPEN_FIRST.match(words) or OPEN_NOT.search(words) or OPEN_ELSEWHERE.search(words):
             return None
         client, model, label = self.open
         try:
@@ -312,6 +318,9 @@ class _RouterBase:
             self.hud.note(f"{label} didn't answer ({type(e).__name__}: {e}); the router takes it")
             return None
         if not text:
+            return None
+        if text.strip(" .").upper() == OPEN_PASS:
+            self.hud.note(f"{label} passed: the bench facts don't answer it, so the router takes it")
             return None
         self.hud.reply(label, text)
         self._join(user_text, text)

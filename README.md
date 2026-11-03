@@ -55,7 +55,7 @@ Everything in this repository was written during the hackathon, starting Oct 26,
 | `wbc/perception/schematic.py`, `scripts/make_schematic.py`, `hardware/*.kicad_sch` | The demo boards' KiCad schematics, drawn from KiCad's own symbols, and `read_schematic`: their nets and KiCad's electrical rules check, through `kicad-cli` |
 | `wbc/agent/parts.py` | `add_part`: Muse Spark Open teaches itself a part from `parts.yaml` (its wiring to the DevKit's free GPIOs, its library and setup code, saved as a skill in `.wbc/skills/`), and the part is drawn into a copy of the schematic in `.wbc/schematics/`, kept only if KiCad's electrical rules check passes, and shown in KiCad with `--show` |
 | `scripts/kokoro_server.py`, `scripts/kokoro-say` | The co-pilot's voice: Kokoro-82M kept loaded on this Mac, and a stand-in for `say` that plays its audio |
-| `config/`, `fixtures/`, `tests/` | Model, bench and arm config, the recorded bench for `--sim`, 856 offline tests |
+| `config/`, `fixtures/`, `tests/` | Model, bench and arm config, the recorded bench for `--sim`, 865 offline tests |
 | `firmware/dut_demo/` | Act 1's demo board: blinks an LED and logs each blink over serial |
 
 | Reused | License | Used for |
@@ -154,7 +154,7 @@ flowchart TD
 - **A stop** is "Copilot, stop", or "Stop!" on its own. It's heard while a turn runs and while the co-pilot speaks, and goes straight to `Bench.halt()`.
 - **Addressed to it** means it starts with "Copilot", or answers the co-pilot's question in up to five words within 8 s.
 - **An arm command** is found by plain rules (`wbc/agent/fast_arm.py`): its kind from trigger words, its thing and place from `fast_arm` in `config/models.yaml` or a note's quoted place. Questions, a "not", "I" and "we" statements, a bare "that" and unknown things aren't. Llama 3.2 3B on `mlx_lm.server` then has to name the same kind of command.
-- **A question with no tool needed** starts with "what", "how", "is" and the like, and has none of "why", "fix", "flash", "move" and the rest.
+- **A question with no tool needed** starts with "what", "how", "is" and the like, and has none of "why", "fix", "flash", "move" and the rest, nor anything only the cameras, the arm, the notebook, the spend or the conversation can answer ("where", "holding", "cup", "earlier", "spent"…). When the bench facts don't answer it after all, Spark Open replies PASS and Spark takes it; a Baseten call that stalls gives up after 20 s, with no retry, and Spark takes it too.
 
 Once a request reaches Muse Spark, it decides what runs, and every other model sits behind a tool:
 
