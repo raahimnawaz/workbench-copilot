@@ -845,9 +845,9 @@ def test_a_re_aim_never_sets_a_goal_past_its_joints_range():
 
 
 def test_the_speed_caps_are_the_ones_the_arm_was_measured_at():
-    # 45°/s: the elbow at P 32 lifted the forearm to straight up lagging 3.5° at most, and tripped the 5° cut at 60°/s
-    # (arm-bench run 30). 180 mm/s: the first move from rest and back, every joint 3.2° at most (run 32, Nov 2). Raising
-    # either needs those tests again
+    # 45°/s: the elbow at P 32 lifted the forearm to straight up lagging 3.5° at most, and tripped the 5° cut at 60°/s.
+    # 180 mm/s: the first move from rest and back, every joint 3.2° at most (Nov 2). Raising either needs those tests
+    # again
     assert (driver.MAX_JOINT_SPEED, driver.MAX_TIP_SPEED) == (45.0, 0.18)
 
 

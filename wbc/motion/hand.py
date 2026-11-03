@@ -11,9 +11,10 @@ pick_up and put_down take a thing as wbc/perception/desk.py's locate found it: i
 its long axis and, for something standing up, its height. A pick goes straight down beside its middle with the jaws
 closing across that axis: over it, open as far as its width needs, just over its top, down, grip, and back up. A put
 goes over the place with what's held lined up with the place's long axis, down to just over its top, opens as far as
-the pick did, goes back up and closes the jaws. Only the moves down to the thing (just over it, then down) and down to the place re-aim; over it
-and back up, a few mm short is as good, and the re-aims' settling would only add stops. Every pose a pick or a put
-needs is solved before the first one moves, so one the arm can't reach is refused with the arm where it was.
+the pick did, goes back up and closes the jaws. Only the moves down to the thing (just over it, then down) and down
+to the place re-aim; over it and back up, a few mm short is as good, and the re-aims' settling would only add stops.
+Every pose a pick or a put needs is solved before the first one moves, so one the arm can't reach is refused with the
+arm where it was.
 
 Heights come from the table the driver's floors use (table.py), the desk as the arm's touches measured it, not from
 locate's camera, whose table is one height for the whole desk. Something lying flat is taken to be as thick as it is
@@ -72,7 +73,7 @@ FLOOR_MARGIN_MM = 1.0   # over the driver's tool floor that a pick goes down to,
 THICK_MM = 40.0         # the thickest something lying flat is taken to be, whatever its width
 GRIP_DEPTH_MM = 15.0    # under its top that the tips go to on something standing up
 GRIP_SHARE = 0.25       # of its thickness that the tips go up something lying flat: well under a handle's middle, and
-                        # for one under 16 mm, down to the grip floor (from 8 mm up they closed over a 12 mm handle)
+                        # for one under 16 mm, down to the grip floor, so they close under its widest point
 CLOSED_GAP_MM = 5.0     # the closed tips' gap: the tool point sits half of it from the fixed jaw's face
 JAW_CLEAR_MM = 5.0      # between the fixed jaw and the thing's side at the grip: the four-touch fit puts the closed
                         # tips' middle within about 2.4 mm (one sd) along the jaws' line
@@ -85,12 +86,12 @@ HELD_MM = 2.0           # a pick is refused where the table is held more than th
                         # height there isn't known well enough to grip near a thing's middle
 ROLL_STEP_DEG = 30.0    # the most the wrist roll may turn from one step of a plan to the next, the jaws one way round
 OPEN_ENOUGH = 90.0      # percent of the opening asked for that the jaws have to reach before a pick goes down
-JAW_LEVER_MM = 70.0     # how far the moving jaw's tip goes across per radian it opens: the URDF puts the gripper's pivot
-                        # 75 mm up the jaws and 28 mm across from the point between the tips, and a ~10 mm handle stopped
-                        # the closing jaws 43 ticks past where empty ones stop, 76 mm a radian. Unmeasured at the tips
-                        # themselves, so a little under both
-MOVING_CLEAR_MM = 15.0  # past the thing's far side that the open moving jaw comes down: the desk map places a touched tag
-                        # 1-9 mm from where the others put it
+JAW_LEVER_MM = 70.0     # how far the moving jaw's tip goes across per radian it opens: the URDF puts the gripper's
+                        # pivot 75 mm up the jaws and 28 mm across from the point between the tips, and a ~10 mm handle
+                        # stopped the closing jaws 43 ticks past where empty ones stop, 76 mm a radian. Unmeasured at
+                        # the tips themselves, so a little under both
+MOVING_CLEAR_MM = 15.0  # past the thing's far side that the open moving jaw comes down: the desk map places a touched
+                        # tag 1-9 mm from where the others put it
 OPEN_SPARE = 1.25       # times the angle that lever says a pick needs, that it opens the jaws
 MIN_OPEN = 25.0         # percent: the least a pick opens the jaws, a quarter of their range, about 34°
 CLOSED_OPENING = 2.0    # percent: where a put or a miss leaves the jaws once it's done, closed but 31 ticks from their
@@ -107,7 +108,7 @@ INSERT_MM = 15.0        # under the rim its lower end goes before the jaws let g
 CAGE_MM = 8.0           # back from the tips, toward the palm, that a loosely held handle rides, in the gap above them:
                         # an estimate, not measured
 ON_END_SLOW = 2.0       # times as long as the speed caps allow that the turns on end take, so a loose hold keeps it:
-                        # a wrist-turn test on the arm ran at this, and the screwdriver stayed in the jaws, level
+                        # at this, a screwdriver turned to level on end stayed in the jaws
 ROUND = 1.3             # a thing whose length is under this many times its width has no long axis to grip across
 IK_MISS_MM = 2.0        # an IK answer further than this from its target is refused
 TILT_MISS_DEG = 3.0     # and one whose gripper points further than this from the pitch asked for
@@ -511,7 +512,6 @@ class Hand:
         over, down = min(plans, key=lambda steps: abs(steps[0].q[ROLL] - now[ROLL]))
         return [over, down, Step("back up", over.xyz, over.jaws_deg, over.q)]
 
-
     def tip_from_jaws(self, thing: Thing, q) -> float | None:
         """Where `thing`'s narrow end points (locate grips it off its middle toward that end), as degrees from the jaw
         axis at joint angles q; None when locate gripped it at its middle."""
@@ -525,9 +525,9 @@ class Hand:
         the jaws turned across the arm toward the container so it lies along the arm with its narrow end (`tip`,
         degrees from the jaw axis, as tip_from_jaws gave it at the pick) toward the base, or its wide end where the
         wrist roll's stop rules that out; turn the gripper up until it stands on end, that end down, over the
-        container's opening, ON_END_ABOVE_MM over the rim; down until its lower
-        end is ON_END_CLEAR_MM over the rim, then INSERT_MM under it; and back up. Level where the arm reaches that
-        low, else up to the last of ON_END_TILTS down. `held` is the thing as locate found it, for its length and its
+        container's opening, ON_END_ABOVE_MM over the rim; down until its lower end is ON_END_CLEAR_MM over the rim,
+        then INSERT_MM under it; and back up. Level where the arm reaches that low, else up to the last of
+        ON_END_TILTS down. `held` is the thing as locate found it, for its length and its
         grip; `start`, joint angles, plans from there instead of where the arm is. Refused, with nothing moved, when
         the arm can't stand it on end over the opening."""
         now = np.array(self.arm.read().q if start is None else start, float)
@@ -568,7 +568,7 @@ class Hand:
                     continue
                 return [lift] + steps + [Step("back up", steps[0].xyz, across, steps[0].q)]
         raise Refused(f"the arm can't stand the {held.name} on end over the {place.name} at x {place.x:.0f}, "
-                      f"y {place.y:.0f} mm ({why}): it can from about 28 cm out from its base, more nearly straight out")
+                      f"y {place.y:.0f} mm ({why}): it can from about 28 cm out from its base, nearer straight out")
 
     def put_in(self, place: Thing, confirm=None, steps: list | None = None) -> dict:
         """Put what the jaws hold into a container, on end: through plan_insert's steps (planned now unless given),
@@ -601,6 +601,7 @@ class Hand:
         self._move(up, aim=False)
         self._close()
         return {"ok": True, "put": held, "on": place.name, "on_end": True, "steps": [s.summary() for s in steps]}
+
     def _hovering(self, x: float, y: float, top: float, plan, toward: float | None = None, start=None) -> list:
         """plan(over) solved, the jaws one way round as _solved has them (from `start`, as it takes it), for the highest
         of HOVER_MM over `top` at (x, y) mm that the arm can reach straight down. A put opens PUT_ABOVE_MM over the
@@ -620,8 +621,9 @@ class Hand:
     def _sagging(self, down: Step, thing: Thing) -> str:
         """'' when the arm, stopping as short of `down` as it stopped short of its last target (just over the thing,
         with about the same load), would still read SAG_SPARE_MM over the driver's cut for sagging under the floor of
-        the way down to a grip (GRIP_FLOOR); else why it shouldn't go down. Only the joints whose shortfall lowers the tips count: the re-aim
-        at the end of the way down takes up at once one that held them up, while one that sagged can stay put."""
+        the way down to a grip (GRIP_FLOOR); else why it shouldn't go down. Only the joints whose shortfall lowers the
+        tips count: the re-aim at the end of the way down takes up at once one that held them up, while one that sagged
+        can stay put."""
         short = self.arm.stopped_short
         if short is None:
             return ""
@@ -669,8 +671,8 @@ class Hand:
         self._move(over, aim=False)  # the way down to just over it re-aims instead
         opened = self.arm.release(want, samples=self._samples("open"))
         if opened.opening < OPEN_ENOUGH / 100 * want:
-            return {"ok": False, "error": f"the jaws stopped {opened.opening:.0f}% open over the {thing.name}, short of "
-                                          f"the {want:.0f}% it needs: something's in their way, so they didn't go "
+            return {"ok": False, "error": f"the jaws stopped {opened.opening:.0f}% open over the {thing.name}, short "
+                                          f"of the {want:.0f}% it needs: something's in their way, so they didn't go "
                                           "down", "steps": [over.summary()]}
         if confirm is not None:  # open, so whoever answers can see the fixed jaw is beside it, not over it
             answer = confirm(f"Over the {thing.name} with the jaws open: the one that didn't move should be beside it, "

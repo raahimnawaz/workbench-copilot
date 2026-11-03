@@ -1,10 +1,10 @@
 """The demo board's schematic as a KiCad 10 file, drawn from KiCad's own symbols: the LED board or the sensor board.
 
-    python make_schematic.py led|sensor OUT.kicad_sch
+    python scripts/make_schematic.py led|sensor OUT.kicad_sch
 
 ESP32-WROOM-32 (the DOIT DevKit's module) as U1, its 3V3 and GND, EN tied high, and every other pin marked unused.
-led: GPIO 4 -> 330 ohm -> LED anode, cathode to GND (the Oct 28 LED board: jumper a5-a26, resistor b26-b42, LED
-42-43). sensor: 3V3 -> TFS-100 -> row 26 (GPIO 4) -> 10 kohm -> GND. Nets are joined by labels at pin ends.
+led: GPIO 4 -> 330 ohm -> LED anode, cathode to GND (the LED board: jumper a5-a26, resistor b26-b42, LED 42-43).
+sensor: 3V3 -> TFS-100 -> row 26 (GPIO 4) -> 10 kohm -> GND. Nets are joined by labels at pin ends.
 """
 import re
 import sys
@@ -83,14 +83,15 @@ class Sheet:
             ends[number] = (round(x + sx, 2), round(y + sy, 2), pname)
         self.pins[ref] = ends
         hide = ref.startswith("#")
+        value_font = HIDDEN if hide and "FLAG" in name else FONT
         props = [f'(property "Reference" "{ref}" (at {x + 2.54} {y - 2.54} 0) {HIDDEN if hide else FONT})',
-                 f'(property "Value" "{value}" (at {x + 2.54} {y + 2.54} 0) {HIDDEN if hide and "FLAG" in name else FONT})',
+                 f'(property "Value" "{value}" (at {x + 2.54} {y + 2.54} 0) {value_font})',
                  f'(property "Footprint" "" (at {x} {y} 0) {HIDDEN})',
                  f'(property "Datasheet" "" (at {x} {y} 0) {HIDDEN})']
         pin_lines = " ".join(f'(pin "{n}" (uuid "{u()}"))' for n in p)
         self.items.append(
-            f'(symbol (lib_id "{key}") (at {x} {y} {angle}) (unit 1) (exclude_from_sim no) (in_bom {"no" if hide else "yes"}) '
-            f'(on_board yes) (dnp no) (uuid "{u()}") {" ".join(props)} {pin_lines} '
+            f'(symbol (lib_id "{key}") (at {x} {y} {angle}) (unit 1) (exclude_from_sim no) '
+            f'(in_bom {"no" if hide else "yes"}) (on_board yes) (dnp no) (uuid "{u()}") {" ".join(props)} {pin_lines} '
             f'(instances (project "demo" (path "/{ROOT_UUID}" (reference "{ref}") (unit 1)))))')
         return ends
 

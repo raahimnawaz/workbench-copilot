@@ -61,8 +61,8 @@ Examples:
 "yeah do it" -> {"tool": "not_mine", "thing": null, "place": null}"""
 
 MAX_TOKENS = 64  # an answer is about 19 tokens
-START_TRIES = 3  # requests start() makes, START_GAP_S apart, before leaving the fast path off: the server may still
-START_GAP_S = 1.0  # be starting up
+START_TRIES = 3  # requests start() makes before leaving the fast path off, since the server may still be loading
+START_GAP_S = 1.0  # seconds between them
 # What the model and the rules have to agree on. The hand-over hold's hold and let_go aren't tools yet, so the rules
 # leave those requests to Spark; the benchmark took let_go only during the hold, and nothing else then.
 KINDS = {"pick_up": "carry", "put_down": "carry", "move_thing": "carry", "arm_home": "home", "hold": "hold",

@@ -83,19 +83,19 @@ from .trajectory import PEAK, joint_path, lowest, min_seconds
 HZ = 50.0               # goal writes per second during a move
 TORQUE_CAP = 50         # percent of full torque on the arm joints (each servo's Torque_Limit)
 GRIPPER_CAP = 50        # percent on the gripper: LeRobot's own ceiling for it (Max_Torque_Limit 500, "to avoid
-                        # burnout"), twice the 24% it squeezed at before, so a screwdriver held by its handle stays put.
-                        # At P 32 a ~12 mm handle stops the jaws far enough from closed for the cap to set the squeeze
+                        # burnout"). At P 32 a ~12 mm handle stops the jaws far enough from closed for the cap to set
+                        # the squeeze
 GRIPPER_OVERLOAD = 60   # percent: the gripper's overload threshold (Overload_Torque) while powered. configure() sets
-                        # 25, and the servo cuts an output over it for its Protection_Time (2 s) to its Protective_Torque
-                        # (20%), as read from the servo, so a squeeze at GRIPPER_CAP would weaken 2 s in
+                        # 25, and the servo cuts an output over it for its Protection_Time (2 s) to its
+                        # Protective_Torque (20%), so a squeeze at GRIPPER_CAP would weaken 2 s in
 MAX_JUMP = 3.0          # degrees a joint may move on its own as its torque comes on before every motor is cut
 MAX_STRAY = 5.0         # degrees a joint may be from where it should be during a move before every motor is cut
 MAX_STEP = 5.0          # degrees: no goal goes further than this from where its joint is (LeRobot's max_relative_target)
 MAX_JOINT_SPEED = 45.0  # degrees per second any joint may reach at a move's peak: the 1/345 elbow lifts the forearm
                         # from flat to straight up at it lagging 3.5° at most, under MAX_STRAY
 MAX_TIP_SPEED = 0.18    # metres per second the tool point may reach at a move's peak: the first move from the folded
-                        # rest then takes 7.7 s, held by the wrist flex's 185° at MAX_JOINT_SPEED, every joint 3.2° at most
-                        # from its goal (10.6 s at 0.12); the other moves of a pick and a put are held by the joint cap
+                        # rest then takes 7.7 s, held by the wrist flex's 185° at MAX_JOINT_SPEED, every joint within
+                        # 3.2° of its goal; the joint cap holds the other moves of a pick and a put
 RANGE_MARGIN = 2.0      # degrees inside each end of a joint's range that a move may aim for
 TOOL_FLOOR = 0.010      # metres above the table the tool point has to stay, unless config/robot.yaml's tool_floor_mm
                         # sets it: the tool point is the jaw tips, and a pick needs them lower
@@ -121,18 +121,16 @@ AIM = 0.2               # degrees from its target each joint should end a move w
 AIM_ROUNDS = 3          # re-aims a move may take before it settles for where its joints stopped
 MAX_OFFSET = 4.0        # degrees past its target a re-aim may set a goal: under MAX_STRAY, so a joint held that far
                         # short still sits clear of the stray cut
-REAIM_UNDER = 0.003     # metres a re-aim's goals may take the tool point under its floor, though never under
-                        # GRIP_FLOOR. They're set past where the joints stop, so a joint that stopped holding the tips up
-                        # just over a floor can still be taken up; if the tips reached those goals, they'd still be 2 mm
-                        # over the SAG cut
+REAIM_UNDER = 0.003     # metres a re-aim's goals may take the tool point under its floor, never under GRIP_FLOOR: goals
+                        # set past where the joints stop can still lift a joint holding the tips just over a floor, and
+                        # tips that reached them would still be 2 mm over the SAG cut
 GRIP_FLOOR = 0.001      # metres over the table (its margin included) the tool point has to stay on a move down to a
                         # grip, instead of the tool floor: about 3 mm over the desk as the touches measured it, so the
-                        # jaw tips can close under a 12 mm handle's widest point (from 8 mm over the desk they closed
-                        # over it). The cut for sagging SAG under this floor would come only under the desk,
-                        # which stops the tips first; the stray cut still guards every joint on the short way down
+                        # jaw tips close under a 12 mm handle's widest point. The cut for sagging SAG under it would
+                        # come only under the desk, which stops the tips first; the stray cut still guards every joint
 GRIPPER_SPEED = 60.0    # degrees per second the gripper's goal may reach at a release's peak: fully open in about 4 s.
-                        # The jaw pushes about 2.4% of drive per degree it trails its goal, so under a 24% cap it
-                        # topped out about 110°/s, 10° behind, where GRIP_LAG stops it; at 60°/s it trailed 4-6°
+                        # The jaw pushes about 2.4% of drive per degree it trails its goal, so at 60°/s it trails 4-6°,
+                        # well inside GRIP_LAG
 GRIP_SPEED = 60.0       # and at a grip's, so the jaws meet what they close on without a knock
 GRIP_LAG = 10.0         # degrees the jaw may trail its goal before release() stops it where it is: something's in the way
 GRIP_CLEAR = 30         # raw ticks from its closed end the jaw has to start a grip at
@@ -365,8 +363,9 @@ class Arm:
         brings it on, and confirms its torque-on. The other joints' goals aren't written, so they stay off. Refused,
         with nothing written, after a cut until clear_stop(), if torque is already on anywhere (configure() turns every
         motor off first, which would drop a held arm), or if check() refuses. RuntimeError, with torque still off, if
-        LeRobot's setup fails or a gain, a cap or the gripper's overload threshold doesn't read back. Tripped, with every motor cut, if a joint's goal
-        doesn't read back, it moves more than MAX_JUMP as it comes on, a cut arrives from elsewhere, or the bus fails.
+        LeRobot's setup fails or a gain, a cap or the gripper's overload threshold doesn't read back. Tripped, with
+        every motor cut, if a joint's goal doesn't read back, it moves more than MAX_JUMP as it comes on, a cut arrives
+        from elsewhere, or the bus fails.
         A reply that flags the input voltage is sent again (_flagged). `samples`, when given, gets every reading of
         the watch."""
         unknown = [m for m in joints if m not in JOINTS]

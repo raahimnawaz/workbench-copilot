@@ -4,8 +4,8 @@
 the standard library, and sends it each thing as it happens: the mic hearing someone, every model call from its start
 to its time (Spark, Wonder, SAM and Llama, timed where the call goes out, and Voice Transcribe for the request's own
 words), the request, the reply's first sentences (SUMMARY characters at most), the co-pilot speaking, and each turn's
-total time and spend. Every event is one of the page's own functions with its
-arguments (hud/README.md lists them), so all the page does is call it. The console prints its timeline as before.
+total time and spend. Every event is one of the page's own functions with its arguments (hud/README.md lists them),
+so all the page does is call it. The console prints its timeline as before.
 """
 from __future__ import annotations
 

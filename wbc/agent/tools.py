@@ -565,7 +565,8 @@ def build_toolbox(bench: Bench) -> Toolbox:
         return bench.confirm if (bench.robot_cfg.get("hand") or {}).get("check_over", True) else None
 
     go = " The user presses Enter before the arm moves." if bench.go_ahead == "enter" else " The arm moves at once."
-    containers = {key(name): float(h) for name, h in ((bench.robot_cfg.get("hand") or {}).get("containers") or {}).items()}
+    listed = (bench.robot_cfg.get("hand") or {}).get("containers") or {}
+    containers = {key(name): float(h) for name, h in listed.items()}  # a put stands things in these on end
 
     @tb.register("pick_up", (
         f"Pick a thing up off the desk with the arm, where locate last found it (locating it first if it hasn't).{go} "

@@ -82,17 +82,17 @@ servos:
   gripper: {id: 6}
 
 # The wrist roll turns all the way round, so its calibration has no stop and moves keep it inside the URDF's limits,
-# clear of where its reading wraps. It does stop at about -80°, though: a pick that drove it there held at -80.0° with
-# its goal going on, until its load tripped the 5° stray cut. So it's narrowed here (degrees, inside the URDF's), and a
-# move keeps RANGE_MARGIN inside that; a pick takes the other way round instead.
+# clear of where its reading wraps. It does stop at about -80°, where a move driving it further holds until its load
+# trips the 5° stray cut. So it's narrowed here (degrees, inside the URDF's), and a move keeps RANGE_MARGIN inside
+# that; a pick takes the other way round instead.
 limits_deg:
   wrist_roll: [-78, 180]
 
 # P gains written over the 16 that LeRobot's configure() gives every joint, each time after it runs. At 32 the elbow
 # lifts the forearm from flat to straight up at the speed caps, lagging 3.5° at most. At 16 the gripper stops where its
 # push near closed meets the friction, short of gripping the multimeter probe at the jaw tips; at 32 it holds it there.
-# At 16 the base, shoulder lift and wrist flex lag 3-5° behind their goals under a load, in jerks, near the driver's 5°
-# stray cut, and the shoulder lift tripped it carrying a screwdriver; at 32 they lag 2.1-2.8° at most.
+# At 16 the base, shoulder lift and wrist flex lag 3-5° behind their goals under a load, in jerks, up to the driver's
+# 5° stray cut while carrying a screwdriver; at 32 they lag 2.1-2.8° at most.
 gains:
   shoulder_pan: 32
   shoulder_lift: 32

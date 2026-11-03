@@ -22,8 +22,8 @@ reader:
   px_per_mm: 5.5                    # the top-down board view SAM sees; the open SAM 3 works at 1008 px
   margin_mm: 7                      # around the boards' bodies, which look up to 6% larger (register_scale)
   wire_phrase: wire                 # SAM 3.1 finds every wire as "wire", and nothing as "jumper wire"
-  snap_mm: 1.3                      # a wire end farther than this from every hole is flagged: at 1.2, ends read
-                                    # 1.26-1.27 mm from their right holes were left unconnected
+  snap_mm: 1.3                      # a wire end farther than this from every hole is flagged: ends can read
+                                    # 1.27 mm from their right holes
   # From the end of a wire's mask back to its hole. Negative: the hole lies beyond the mask, because SAM's mask
   # stops where the insulation does and the bare leg goes on about 1 mm.
   tip_inset_mm: -1.0

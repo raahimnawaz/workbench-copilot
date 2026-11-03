@@ -1,4 +1,4 @@
-"""Kokoro-82M on this Mac for the co-pilot's voice: a local server that keeps the model loaded and turns words into a WAV.
+"""Kokoro-82M for the co-pilot's voice: a server on this Mac that keeps the model loaded and turns words into a WAV.
 
 macOS `say`'s voices can't be in a published video (the macOS license allows them only for personal, non-commercial
 use), and Meta's API has no text to speech. Kokoro-82M's weights are Apache-2.0. scripts/kokoro-say, the mouth's
