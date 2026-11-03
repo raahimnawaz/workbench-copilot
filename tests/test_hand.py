@@ -1377,3 +1377,53 @@ def test_without_a_container_listed_a_put_on_a_cup_is_the_flat_put_it_was():
     robot.between["gripper"] = (1400, math.inf)
     result = tb.dispatch("move_thing", {"thing": "screwdriver", "place": "cup"})
     assert result["ok"] and "on_end" not in result and result["steps"][-1]["step"] == "back up"
+
+
+# The idle pose
+
+IDLE = {"hand": {**HAND["hand"], "idle_deg": [0, 0, 0, 90, 0]}}
+
+
+def test_the_idle_pose_is_the_l_pose_with_the_gripper_pointing_straight_down():
+    assert BENCH_CFG["hand"]["idle_deg"] == [0, 0, 0, 90, 0]
+    tool = BENCH_CHAIN.fk(np.radians(BENCH_CFG["hand"]["idle_deg"]))
+    assert tool[:3, 0] == pytest.approx([0, 0, -1], abs=1e-4), "the approach axis points down"
+    assert 1000 * (tool[2, 3] - Surface.from_config(BENCH_CFG).desk(tool[0, 3], tool[1, 3])) > 90, \
+        "the jaw tips well over the desk"
+
+
+def test_idle_waits_in_the_idle_pose_from_the_folded_rest_and_only_empty_handed():
+    hand, robot = on_the_bench()
+    hand.idle_q = np.radians(BENCH_CFG["hand"]["idle_deg"])
+    rest = hand.rest.copy()
+    hand.idle()
+    assert np.degrees(hand.arm.read().q) == pytest.approx([0, 0, 0, 90, 0], abs=0.5)
+    assert hand.rest == pytest.approx(rest), "rest, where the motors can go off, stays the folded pose"
+    hand.held, sent = "screwdriver", len(robot.sent)
+    with pytest.raises(Refused, match="holds the screwdriver"):
+        hand.idle()
+    assert len(robot.sent) == sent
+    assert Hand(hand.arm, HAND).idle() is None, "no idle pose: nothing moves"
+
+
+def test_a_put_that_leaves_the_jaws_empty_ends_in_the_idle_pose_and_a_pick_doesnt():
+    arm, robot, _ = make(FakeFollower(start=pose(REST)), table=TABLE)
+    b, tb, asked = bench(arm_port="fake", go_ahead="request")
+    b.hand = Hand(arm, IDLE)
+    b.seen["screwdriver"] = (SCREWDRIVER, time.monotonic())
+    b.seen["tray"] = (TRAY, time.monotonic())
+    robot.between["gripper"] = (1400, math.inf)
+    picked = tb.dispatch("pick_up", {"thing": "screwdriver"})
+    assert picked["ok"] and "idle" not in picked, "holding it, the arm waits where the pick left it"
+    put = tb.dispatch("put_down", {"thing": "tray"})
+    assert put["ok"] and put["idle"] == "the arm waits in its idle pose"
+    assert np.degrees(arm.read().q) == pytest.approx([0, 0, 0, 90, 0], abs=0.5) and asked == []
+
+
+def test_arm_home_goes_to_the_idle_pose_and_enter_asks_for_it():
+    arm, robot, _ = make(FakeFollower(start=pose(REST)), table=TABLE)
+    b, tb, asked = bench(arm_port="fake")
+    b.hand = Hand(arm, IDLE)
+    assert tb.dispatch("arm_home", {}) == {"ok": True, "idle": True}
+    assert asked == ["Move the arm to its idle pose? The motors come on first."]
+    assert np.degrees(arm.read().q) == pytest.approx([0, 0, 0, 90, 0], abs=0.5)

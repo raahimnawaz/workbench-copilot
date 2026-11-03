@@ -485,12 +485,13 @@ def build_toolbox(bench: Bench) -> Toolbox:
         found, problem = targets([(thing, height_mm)])
         return (found[0] if found else None), problem
 
-    def move(question: str, run, plan=None) -> dict:
+    def move(question: str, run, plan=None, idle_after: bool = True) -> dict:
         """run(hand) under the arm lock, powering the arm on first if it's off: at once with hand.go_ahead "request",
         the request itself being the go-ahead, and once the user presses Enter with "enter". Before that, the arm is
         checked (with its motors off, past an end of a range or too hot) and plan(hand) runs, so what the driver or IK
         would refuse is refused before anything is asked or written. The driver's refusals and trips, and the spoken
-        stop, come back as errors."""
+        stop, come back as errors. With idle_after, a move that worked and left the jaws empty ends in the idle pose
+        (then_idle)."""
         if not bench.arm_port:
             return {"ok": False, "error": "the arm's tools are off: start the agent with --arm"}
         if bench.powering is not None:  # warm_up's, started before the locate
@@ -529,7 +530,8 @@ def build_toolbox(bench: Bench) -> Toolbox:
                 return dict(SAID_STOP)
             if off:
                 hand.power_on()
-            return run(hand)
+            result = run(hand)
+            return then_idle(hand, result) if idle_after else result
         except Refused as e:
             return {"ok": False, "error": f"refused, nothing moved for it: {e}"}
         except Tripped as e:
@@ -547,6 +549,22 @@ def build_toolbox(bench: Bench) -> Toolbox:
                     except OSError as e:  # a log it couldn't write mustn't hide how the move went
                         bench.say(f"The arm's move log wasn't saved: {e}")
             bench.arm_lock.release()
+
+    def then_idle(hand, result: dict) -> dict:
+        """After a move that worked and left the jaws empty, the idle pose (robot.yaml's hand.idle_deg), once the user
+        presses Enter for it too with hand.go_ahead "enter". Not after a stop, and not holding something. A refusal
+        leaves the arm where the move ended, and says so beside the move's own result, which stands."""
+        if not result.get("ok") or hand.idle_q is None or hand.held or bench.halted.is_set() or bench.stopped.is_set():
+            return result
+        if bench.go_ahead == "enter" and not bench.confirm("Move the arm to its idle pose?"):
+            return {**result, "idle": "the user didn't press Enter, so the arm stays where the move ended"}
+        from wbc.motion.arm import Refused
+
+        try:
+            hand.idle()
+        except Refused as e:
+            return {**result, "idle": f"refused, so the arm stays where the move ended: {e}"}
+        return {**result, "idle": "the arm waits in its idle pose"}
 
     def warm_up():
         """With hand.go_ahead "request", the request being the go-ahead, power the arm on in the background while the
@@ -715,7 +733,8 @@ def build_toolbox(bench: Bench) -> Toolbox:
         forget(result, thing, place)
         return result
 
-    @tb.register("arm_home", f"Move the arm back to where it rested when its motors came on.{go}",
+    @tb.register("arm_home", f"Move the arm to its idle pose (the L pose, the gripper pointing down), or with none set, "
+                             f"back to where it rested when its motors came on.{go}",
                  {"type": "object", "properties": {}}, label="arm")
     def arm_home() -> dict:
         if bench.halted.is_set():
@@ -724,10 +743,14 @@ def build_toolbox(bench: Bench) -> Toolbox:
             return {"ok": True, "sim": True, "home": True}
 
         def home(hand):
+            if hand.idle_q is not None and not hand.held:
+                hand.idle()
+                return {"ok": True, "idle": True}
             hand.home()
             return {"ok": True, "home": True}
 
-        return move("Move the arm back to where it rested?", home)
+        return move("Move the arm to its idle pose?" if bench.hand and bench.hand.idle_q is not None
+                    else "Move the arm back to where it rested?", home, idle_after=False)
 
     return tb
 
