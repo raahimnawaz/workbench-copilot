@@ -1,11 +1,12 @@
-"""The demo board's schematic as a KiCad 10 file, drawn from KiCad's own symbols.
+"""The demo boards' schematics as KiCad 10 files, drawn from KiCad's own symbols: the LED board or the sensor board.
 
-    python scripts/make_schematic.py [OUT.kicad_sch]     # hardware/demo_sensor.kicad_sch by default
+    python scripts/make_schematic.py [led|sensor] [OUT.kicad_sch]   # led, to hardware/demo_<board>.kicad_sch
 
-ESP32-WROOM-32 (the DOIT DevKit's module) as U1, its 3V3 and GND, EN tied high, and every other pin marked unused:
-3V3 -> TFS-100 -> row 26 (GPIO 4) -> 10 kohm -> GND. Nets are joined by labels at pin ends. A schematic carries a copy
-of every library symbol it uses, which KiCad writes one token a line; here each pin and shape takes one line instead,
-and the ids come from each item's place in the drawing, so the same script always draws the same file.
+ESP32-WROOM-32 (the DOIT DevKit's module) as U1, its 3V3 and GND, EN tied high, and every other pin marked unused.
+led: GPIO 4 -> 330 ohm -> LED anode, cathode to GND (the LED board: jumper a5-a26, resistor b26-b42, LED 42-43).
+sensor: 3V3 -> TFS-100 -> row 26 (GPIO 4) -> 10 kohm -> GND. GPIO 4 runs to its part by a wire, named by a label on
+it, and each part's text sits where KiCad's own library puts it. Each item's id comes from the board and its place in
+the drawing, so the same script always draws the same file.
 """
 import itertools
 import re
@@ -13,51 +14,9 @@ import sys
 import uuid
 from pathlib import Path
 
-LIBS = Path("/Applications/KiCad/KiCad.app/Contents/SharedSupport/symbols")
-OUT = Path(__file__).resolve().parent.parent / "hardware" / "demo_sensor.kicad_sch"
-TOKEN = re.compile(r'"(?:\\.|[^"\\])*"|[()]|[^\s()"]+')  # a quoted string, a parenthesis or a bare word
-OWN_LINE = {"symbol", "property", "pin", "rectangle", "polyline", "circle", "arc", "text", "bezier", "embedded_fonts"}
+from wbc.perception.schematic import HIDDEN, library_symbol, sexpr_block, turned
 
-
-def sexpr_block(text: str, start: int) -> str:
-    """The balanced (...) starting at `start`, skipping parentheses inside quoted strings."""
-    depth, i = 0, start
-    while i < len(text):
-        c = text[i]
-        if c == '"':
-            i += 1
-            while text[i] != '"':
-                i += 2 if text[i] == "\\" else 1
-        elif c == "(":
-            depth += 1
-        elif c == ")":
-            depth -= 1
-            if depth == 0:
-                return text[start:i + 1]
-        i += 1
-    raise ValueError("unbalanced")
-
-
-def compact(block: str) -> str:
-    """A library symbol's text with each of its units, properties, pins and shapes on a line of its own, instead of
-    KiCad's one token a line. Only whitespace outside quoted strings changes, so KiCad reads the same symbol."""
-    tokens = TOKEN.findall(block)
-    out, depth = [], 0
-    for k, tok in enumerate(tokens):
-        if tok == "(" and k and depth <= 2 and tokens[k + 1] in OWN_LINE:
-            out.append("\n" + "\t" * (depth + 1))
-        elif tok != ")" and out and out[-1] != "(":
-            out.append(" ")
-        out.append(tok)
-        depth += {"(": 1, ")": -1}.get(tok, 0)
-    return "\t" + "".join(out)
-
-
-def lib_symbol(lib: str, name: str) -> str:
-    text = (LIBS / f"{lib}.kicad_sym").read_text()
-    m = re.search(r'\n\t\(symbol "' + re.escape(name) + r'"\n', text)
-    block = sexpr_block(text, m.start() + 2)
-    return compact(block.replace(f'(symbol "{name}"', f'(symbol "{lib}:{name}"', 1))
+HARDWARE = Path(__file__).resolve().parent.parent / "hardware"
 
 
 def pins(block: str) -> dict:
@@ -70,62 +29,73 @@ def pins(block: str) -> dict:
     return out
 
 
-IDS = itertools.count()
+def fields(block: str) -> dict:
+    """Reference and Value -> (x, y, angle, justify) in symbol space, where a library symbol puts them."""
+    out = {}
+    for name in ("Reference", "Value"):
+        m = re.search(r'\(property "' + name + r'" "[^"]*"\s*\(at ([-\d.]+) ([-\d.]+)(?: ([-\d.]+))?\)', block)
+        j = re.search(r'\(justify ([^)]*)\)', sexpr_block(block, m.start()))
+        out[name] = (float(m.group(1)), float(m.group(2)), float(m.group(3) or 0), j.group(1) if j else "")
+    return out
 
 
-def u() -> str:
-    """The next item's id, from its place in the drawing."""
-    return str(uuid.uuid5(uuid.NAMESPACE_URL, f"workbench-copilot/demo_sensor/{next(IDS)}"))
-
-
-ROOT_UUID = u()
-FONT = "(effects (font (size 1.27 1.27)))"
-HIDDEN = "(effects (font (size 1.27 1.27)) (hide yes))"
+def effects(hidden: bool, justify: str = "") -> str:
+    return ("(effects (font (size 1.27 1.27))" + (f" (justify {justify})" if justify else "")
+            + (" (hide yes)" if hidden else "") + ")")
 
 
 class Sheet:
-    def __init__(self):
+    def __init__(self, board: str):
+        self.board, self._ids = board, itertools.count()
         self.libs, self.items, self.pins = {}, [], {}
-        self.refs = {}
+        self.root = self.u()
 
-    def place(self, lib, name, ref, value, x, y, angle=0):
+    def u(self) -> str:
+        """The next item's id, from the board and the item's place in the drawing."""
+        return str(uuid.uuid5(uuid.NAMESPACE_URL, f"workbench-copilot/demo_{self.board}/{next(self._ids)}"))
+
+    def place(self, lib, name, ref, value, x, y, angle=0, text_at=None):
+        """`text_at`: where its Reference and Value go, each (x, y, angle, justify) on the sheet, if not where the
+        library puts them."""
         key = f"{lib}:{name}"
         if key not in self.libs:
-            self.libs[key] = lib_symbol(lib, name)
+            self.libs[key] = library_symbol(lib, name)
         p = pins(self.libs[key])
         ends = {}
         for number, (px, py, pname) in p.items():
-            # symbol y is up, the sheet's down; rotation counterclockwise on screen
-            if angle == 0:
-                sx, sy = px, -py
-            elif angle == 90:
-                sx, sy = -py, -px
-            elif angle == 180:
-                sx, sy = -px, py
-            else:
-                sx, sy = py, px
+            sx, sy = turned(px, py, angle)
             ends[number] = (round(x + sx, 2), round(y + sy, 2), pname)
         self.pins[ref] = ends
         hide = ref.startswith("#")
-        value_font = HIDDEN if hide and "FLAG" in name else FONT
-        props = [f'(property "Reference" "{ref}" (at {x + 2.54} {y - 2.54} 0) {HIDDEN if hide else FONT})',
-                 f'(property "Value" "{value}" (at {x + 2.54} {y + 2.54} 0) {value_font})',
+        if text_at is None:
+            f = fields(self.libs[key])
+            text_at = [(round(x + turned(fx, fy, angle)[0], 2), round(y + turned(fx, fy, angle)[1], 2), fa, fj)
+                       for fx, fy, fa, fj in (f["Reference"], f["Value"])]
+        (rx, ry, ra, rj), (vx, vy, va, vj) = text_at
+        props = [f'(property "Reference" "{ref}" (at {rx} {ry} {ra}) {effects(hide, rj)})',
+                 f'(property "Value" "{value}" (at {vx} {vy} {va}) {effects(hide and "FLAG" in name, vj)})',
                  f'(property "Footprint" "" (at {x} {y} 0) {HIDDEN})',
                  f'(property "Datasheet" "" (at {x} {y} 0) {HIDDEN})']
-        pin_lines = " ".join(f'(pin "{n}" (uuid "{u()}"))' for n in p)
+        pin_lines = " ".join(f'(pin "{n}" (uuid "{self.u()}"))' for n in p)
         self.items.append(
             f'(symbol (lib_id "{key}") (at {x} {y} {angle}) (unit 1) (exclude_from_sim no) '
-            f'(in_bom {"no" if hide else "yes"}) (on_board yes) (dnp no) (uuid "{u()}") {" ".join(props)} {pin_lines} '
-            f'(instances (project "demo" (path "/{ROOT_UUID}" (reference "{ref}") (unit 1)))))')
+            f'(in_bom {"no" if hide else "yes"}) (on_board yes) (dnp no) (uuid "{self.u()}") {" ".join(props)} '
+            f'{pin_lines} (instances (project "demo" (path "/{self.root}" (reference "{ref}") (unit 1)))))')
         return ends
 
     def label(self, name, at):
-        x, y = at[0], at[1]
-        self.items.append(f'(label "{name}" (at {x} {y} 0) (effects (font (size 1.27 1.27)) (justify left bottom)) '
-                          f'(uuid "{u()}"))')
+        self.items.append(f'(label "{name}" (at {at[0]} {at[1]} 0) {effects(False, "left bottom")} '
+                          f'(uuid "{self.u()}"))')
+
+    def wire(self, a, b):
+        self.items.append(f'(wire (pts (xy {a[0]} {a[1]}) (xy {b[0]} {b[1]})) (stroke (width 0) (type default)) '
+                          f'(uuid "{self.u()}"))')
+
+    def junction(self, at):
+        self.items.append(f'(junction (at {at[0]} {at[1]}) (diameter 0) (color 0 0 0 0) (uuid "{self.u()}"))')
 
     def no_connect(self, at):
-        self.items.append(f'(no_connect (at {at[0]} {at[1]}) (uuid "{u()}"))')
+        self.items.append(f'(no_connect (at {at[0]} {at[1]}) (uuid "{self.u()}"))')
 
     def power(self, name, ref, at, flag=False):
         self.place("power", name, ref, name, at[0], at[1])
@@ -135,15 +105,18 @@ class Sheet:
     def text(self) -> str:
         libs = "\n".join(self.libs.values())
         body = "\n".join(self.items)
-        return (f'(kicad_sch (version 20250114) (generator "eeschema") (generator_version "10.0") (uuid "{ROOT_UUID}") '
+        return (f'(kicad_sch (version 20250114) (generator "eeschema") (generator_version "10.0") (uuid "{self.root}") '
                 f'(paper "A4") (title_block (title "Workbench Co-Pilot demo board") (rev "1"))\n'
                 f"(lib_symbols\n{libs}\n)\n{body}\n"
                 f'(sheet_instances (path "/" (page "1"))) (embedded_fonts no))\n')
 
 
 def main():
-    out = Path(sys.argv[1]) if len(sys.argv) > 1 else OUT
-    s = Sheet()
+    board = sys.argv[1] if len(sys.argv) > 1 else "led"
+    if board not in ("led", "sensor"):
+        sys.exit("python scripts/make_schematic.py [led|sensor] [OUT.kicad_sch]")
+    out = Path(sys.argv[2]) if len(sys.argv) > 2 else HARDWARE / f"demo_{board}.kicad_sch"
+    s = Sheet(board)
     esp = s.place("RF_Module", "ESP32-WROOM-32", "U1", "ESP32-WROOM-32 (DOIT DevKit)", 101.6, 101.6)
     used = set()
     gnd_pins = [n for n, (_, _, name) in esp.items() if name == "GND"]
@@ -154,16 +127,30 @@ def main():
     used.update(gnd_pins)
     s.power("+3V3", "#PWR02", esp[vdd], flag=True)
     used.add(vdd)
-    s.power("+3V3", "#PWR03", esp[en])
+    tie = (round(esp[en][0] - 5.08, 2), esp[en][1])  # EN tied high a little way out, clear of U1's name
+    s.wire(esp[en], tie)
+    s.power("+3V3", "#PWR03", tie)
     used.add(en)
-    s.label("GPIO4", esp[io4])
     used.add(io4)
-    f = s.place("Device", "R", "R1", "TFS-100 force sensor", 152.4, 83.82)  # vertical: pin 1 up, pin 2 down
-    s.power("+3V3", "#PWR04", f["1"])
-    s.label("GPIO4", f["2"])
-    r = s.place("Device", "R", "R2", "10k", 152.4, 101.6)
-    s.label("GPIO4", r["1"])
-    s.power("GND", "#PWR05", r["2"])
+    x4, y4 = esp[io4][0], esp[io4][1]
+    if board == "led":
+        # GPIO 4 runs out to the resistor's top; the LED hangs from its bottom, anode up, and its cathode goes to GND
+        r = s.place("Device", "R", "R1", "330", 152.4, round(y4 + 3.81, 2))  # vertical: pin 1 up, pin 2 down
+        s.wire((x4, y4), r["1"])
+        d = s.place("Device", "LED", "D1", "LED", 152.4, round(y4 + 11.43, 2), 90,  # turned: anode up, on R1's pin 2
+                    text_at=[(158.75, round(y4 + 10.16, 2), 90, "left"), (158.75, round(y4 + 12.7, 2), 90, "left")])
+        k = next(n for n, (_, _, name) in d.items() if name == "K")
+        s.label("LED_A", r["2"])
+        s.power("GND", "#PWR04", d[k])
+    else:
+        # GPIO 4 runs out to the middle of the divider: the sensor from 3V3 above it, 10 kohm to GND below
+        f = s.place("Device", "R", "R1", "TFS-100 force sensor", 152.4, round(y4 - 3.81, 2))
+        s.power("+3V3", "#PWR04", f["1"])
+        r = s.place("Device", "R", "R2", "10k", 152.4, round(y4 + 3.81, 2))
+        s.power("GND", "#PWR05", r["2"])
+        s.wire((x4, y4), r["1"])
+        s.junction(r["1"])
+    s.label("GPIO4", (round(x4 + 5.08, 2), y4))  # on the wire
     for n, end in esp.items():
         if n not in used:
             s.no_connect(end)

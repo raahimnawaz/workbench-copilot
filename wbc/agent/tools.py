@@ -20,7 +20,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Callable
 
-from . import coder, dut
+from . import coder, dut, parts
 
 MAX_READ = 64_000
 SEEN_S = 60.0  # seconds a thing stays where locate found it: after that, or once the arm has moved it, locate again
@@ -116,6 +116,8 @@ class Bench:
     stopped: threading.Event = field(default_factory=threading.Event)  # the session is ending: no arm move starts
     interrupted: threading.Event = field(default_factory=threading.Event)  # Ctrl-C: nothing's staged or flashed either
     halted: threading.Event = field(default_factory=threading.Event)  # the spoken stop: no arm move until resume()
+    open: tuple | None = None  # (client, model, label): Muse Spark Open on Baseten, for add_part; None without its key
+    show: Callable | None = None  # with --show: puts a schematic in KiCad's window (wbc/agent/show.py)
 
     def halt(self) -> None:
         """The spoken stop, from any thread: a move running stops at its next tick and the arm holds where it got to,
@@ -327,6 +329,21 @@ def build_toolbox(bench: Bench) -> Toolbox:
         from wbc.perception import schematic
 
         return {"ok": True, **schematic.read(bench.root / drawn)}
+
+    known = {k: v["what"] for k, v in ((bench.parts or {}).get("modules") or {}).items()
+             if isinstance(v, dict) and v.get("what") and v.get("pins")}
+
+    @tb.register("add_part", (
+        "Add a part to the board's design: Muse Spark Open works out how to wire it to the ESP32's free pins and how "
+        "to drive it (library and setup code), saved as a skill, and the part is drawn into a copy of the KiCad "
+        "schematic, checked by KiCad's electrical rules check and shown in KiCad. Nothing on the board changes and "
+        "nothing is flashed. Parts it knows: " + ("; ".join(f"{k} ({w})" for k, w in known.items()) or "none") + "."), {
+        "type": "object",
+        "properties": {"part": {"type": "string", "description": "The part's name from the list"},
+                       "use": {"type": "string", "description": "What the user wants it for, if they said"}},
+        "required": ["part"]}, label="Spark Open")
+    def add_part(part: str, use: str = "") -> dict:
+        return parts.add(bench, part, use)
 
     @tb.register("read_breadboard", (
         "Photograph the breadboard with the overhead camera, segment its jumper wires with SAM 3.1, and return "

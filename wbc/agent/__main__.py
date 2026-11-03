@@ -92,6 +92,7 @@ def build(sim: bool, backup: bool, router_model: str | None = None, arm: bool = 
     o = models.get("open")
     reaches = config.open_client(models) if o and not sim else None
     open_route = (hud.watch(reaches), o["model"], o.get("label", "Spark Open")) if reaches else None
+    bench.open = open_route  # add_part asks Spark Open too
     if o and not sim:
         hud.note(f"{o.get('label', 'Spark Open')}: " + ("questions no tool is needed for" if reaches else
                                                       f"off, no {o.get('key_env', 'BASETEN_API_KEY')}"))
@@ -221,6 +222,7 @@ def main(argv=None) -> int:
         drawn = (bench.layout or {}).get("schematic")
         if drawn and not args.sim:
             hud.note(show.schematic(config.ROOT / drawn))
+            bench.show = show.schematic  # add_part's copy goes in the same window
 
     home = True  # at the end of the input (Ctrl-D) the arm goes back to rest before its motors go off, as --help says
     try:

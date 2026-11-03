@@ -23,9 +23,10 @@ Everything in this repository was written during the hackathon, starting Oct 26,
 | `wbc/motion/carrier.py`, `scripts/register_arm.py` | Registering the arm to the carrier from points touched with the motors off, and the touch test |
 | `wbc/perception/` | The SAM 3.1 client, camera capture, the board reader (the carrier's tags, the top-down view, the hole grid fit, wire tracing, the netlist and its check against `pins.h`) and the desk camera's `locate` |
 | `scripts/` | The smoke test, the board reader and its carrier sheet, the desk camera, the joint map check and arm registration |
-| `wbc/perception/schematic.py`, `scripts/make_schematic.py`, `hardware/demo_sensor.kicad_sch` | The demo board's KiCad schematic, drawn from KiCad's own symbols, and `read_schematic`: its nets and KiCad's electrical rules check, through `kicad-cli` |
+| `wbc/perception/schematic.py`, `scripts/make_schematic.py`, `hardware/*.kicad_sch` | The demo boards' KiCad schematics, drawn from KiCad's own symbols, and `read_schematic`: their nets and KiCad's electrical rules check, through `kicad-cli` |
+| `wbc/agent/parts.py` | `add_part`: Muse Spark Open teaches itself a part from `parts.yaml` (its wiring to the DevKit's free GPIOs, its library and setup code, saved as a skill in `.wbc/skills/`), and the part is drawn into a copy of the schematic in `.wbc/schematics/`, kept only if KiCad's electrical rules check passes, and shown in KiCad with `--show` |
 | `scripts/kokoro_server.py`, `scripts/kokoro-say` | The co-pilot's voice: Kokoro-82M kept loaded on this Mac, and a stand-in for `say` that plays its audio |
-| `config/`, `fixtures/`, `tests/` | Model, bench and arm config, the recorded bench for `--sim`, 828 offline tests |
+| `config/`, `fixtures/`, `tests/` | Model, bench and arm config, the recorded bench for `--sim`, 842 offline tests |
 | `firmware/dut_demo/` | Act 1's demo board: reads the force sensor and prints millivolts and the pin it reads |
 
 | Reused | License | Used for |
@@ -41,7 +42,7 @@ Everything in this repository was written during the hackathon, starting Oct 26,
 | [AprilTag](https://april.eecs.umich.edu/software/apriltag)'s tag36h11 family, as built into OpenCV's ArUco module | BSD-2-Clause | The carrier's and the desk's tags |
 | [Kokoro-82M](https://huggingface.co/hexgrad/Kokoro-82M) weights, run by [kokoro-onnx](https://github.com/thewh1teagle/kokoro-onnx) with onnxruntime and espeak-ng (through espeakng-loader and phonemizer) | Apache-2.0; MIT; MIT; GPL-3.0 (espeak-ng, phonemizer) | The co-pilot's voice (Meta's API has no text-to-speech model), in its own venv: `pip install kokoro-onnx==0.6.1` |
 | macOS `say` | Part of macOS | The voice only when `mouth.command` is unset: its voices can't be in a published video |
-| [KiCad](https://www.kicad.org) 10 and its symbol libraries | GPL-3.0; CC-BY-SA-4.0 with KiCad's exception for designs | `kicad-cli` exports the schematic's netlist and runs its electrical rules check; the symbols are drawn into `hardware/demo_sensor.kicad_sch` |
+| [KiCad](https://www.kicad.org) 10 and its symbol libraries | GPL-3.0; CC-BY-SA-4.0 with KiCad's exception for designs | `kicad-cli` exports the schematics' netlists and runs their electrical rules checks; the symbols are drawn into `hardware/*.kicad_sch` |
 | Muse Spark Open (`meta-models/muse-spark-open-1026`) on [Baseten](https://www.baseten.co) | Meta's open weights, served by Baseten | Questions no tool is needed for (`open` in `models.yaml`) |
 | openai, numpy, PyYAML, httpx, sounddevice, pyserial, pytest, OpenCV, Pillow | Apache-2.0, BSD-3, MIT, BSD-3, MIT, BSD-3, MIT, Apache-2.0, MIT-CMU | Python dependencies |
 | [PlatformIO](https://platformio.org) and the [Arduino core for ESP32](https://github.com/espressif/arduino-esp32) | Apache-2.0, LGPL-2.1 | Building and flashing the demo board's firmware |
@@ -62,6 +63,7 @@ Everything in this repository was written during the hackathon, starting Oct 26,
 | Board reader | Runs live: it reads the flat wires, traces the nets, and reports a wire on the wrong GPIO with the line to fix. |
 | Schematic | Offline: `read_schematic` gives the demo board's nets and a clean electrical rules check in under 1 s, and Spark gets them with the board read. Not run live yet. |
 | Spark Open | Runs live on Baseten: a question no tool is needed for goes to Spark Open with the bench facts, which answered "what should I read on GPIO4 when the LED is on?" from the schematic and the firmware in 7.4 s; anything else, or a failure, goes to Spark. |
+| Add a part | Ran live on Baseten against the LED board's schematic: Spark Open worked out the screen's wiring in 8.7 s on its first try (the ESP32's hardware SPI pins for the clock and data, free GPIOs for the rest), and KiCad's check passed on the drawn copy, about 1¢ a run. Not in a take yet. |
 | Desk camera and `locate` | Runs live: a screwdriver or a sticky note found on the desk and placed in the arm's frame. |
 | FK/IK and the joint map | 200 of 200 bench poses round-trip within 0.2 mm and 0.5°. All five joint signs checked by hand on the arm. |
 | Budget guard | Every paid call checks tracked spend first. |

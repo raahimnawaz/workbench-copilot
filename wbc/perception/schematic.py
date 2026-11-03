@@ -3,7 +3,10 @@
 The schematic is the design: what the board should be. `read_schematic` gives Spark its nets beside the board read (what
 the board is) and pins.h (what the firmware thinks), so a fault shows as the three disagreeing. Both come from KiCad's
 own command line (kicad-cli, from KiCad 10 at /Applications/KiCad), so nothing here parses the drawing itself.
-scripts/make_schematic.py draws hardware/demo_sensor.kicad_sch from KiCad's symbols.
+
+What draws one is here too, for scripts/make_schematic.py (the demo boards in hardware/) and add_part
+(wbc/agent/parts.py): a schematic carries a copy of every library symbol it uses, which KiCad writes one token a
+line; library_symbol copies it with each pin and shape on a line of its own instead, which KiCad reads the same.
 """
 from __future__ import annotations
 
@@ -15,7 +18,59 @@ import tempfile
 from pathlib import Path
 
 KICAD_CLI = Path("/Applications/KiCad/KiCad.app/Contents/MacOS/kicad-cli")  # where KiCad's macOS installer puts it
+KICAD_SYMBOLS = Path("/Applications/KiCad/KiCad.app/Contents/SharedSupport/symbols")  # and its symbol libraries
 TIMEOUT_S = 30
+FONT = "(effects (font (size 1.27 1.27)))"
+HIDDEN = "(effects (font (size 1.27 1.27)) (hide yes))"
+TOKEN = re.compile(r'"(?:\\.|[^"\\])*"|[()]|[^\s()"]+')  # a quoted string, a parenthesis or a bare word
+OWN_LINE = {"symbol", "property", "pin", "rectangle", "polyline", "circle", "arc", "text", "bezier", "embedded_fonts"}
+
+
+def sexpr_block(text: str, start: int) -> str:
+    """The balanced (...) starting at `start`, skipping parentheses inside quoted strings."""
+    depth, i = 0, start
+    while i < len(text):
+        c = text[i]
+        if c == '"':
+            i += 1
+            while text[i] != '"':
+                i += 2 if text[i] == "\\" else 1
+        elif c == "(":
+            depth += 1
+        elif c == ")":
+            depth -= 1
+            if depth == 0:
+                return text[start:i + 1]
+        i += 1
+    raise ValueError("unbalanced")
+
+
+def compact(block: str) -> str:
+    """A library symbol's text with each of its units, properties, pins and shapes on a line of its own. Only
+    whitespace outside quoted strings changes."""
+    tokens = TOKEN.findall(block)
+    out, depth = [], 0
+    for k, tok in enumerate(tokens):
+        if tok == "(" and k and depth <= 2 and tokens[k + 1] in OWN_LINE:
+            out.append("\n" + "\t" * (depth + 1))
+        elif tok != ")" and out and out[-1] != "(":
+            out.append(" ")
+        out.append(tok)
+        depth += {"(": 1, ")": -1}.get(tok, 0)
+    return "\t" + "".join(out)
+
+
+def library_symbol(lib: str, name: str) -> str:
+    """KiCad's symbol `name` from its library `lib`, as a schematic's lib_symbols carries it ("lib:name"), compact."""
+    text = (KICAD_SYMBOLS / f"{lib}.kicad_sym").read_text(encoding="utf-8")
+    m = re.search(r'\n\t\(symbol "' + re.escape(name) + r'"\n', text)
+    return compact(sexpr_block(text, m.start() + 2).replace(f'(symbol "{name}"', f'(symbol "{lib}:{name}"', 1))
+
+
+def turned(px: float, py: float, angle: float) -> tuple:
+    """A point of a symbol placed at `angle`, (px, py) in symbol space, as an offset on the sheet: symbol y is up, the
+    sheet's down, and a symbol turns counterclockwise."""
+    return {0: (px, -py), 90: (-py, -px), 180: (-px, py), 270: (py, px)}[int(angle) % 360]
 
 
 def kicad_cli() -> str | None:
