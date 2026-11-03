@@ -27,19 +27,21 @@
        hues averaged and turned half round) warming the rim. While it listens or talks, a voice glow in the orb's own
        colors rises from the bottom through the dots. A dot a crest whitecaps or the voice reaches lights up as a
        brighter, lighter version of its own color, not white.
-     - The model's name is white, edged in black liquid metal that glints in the model's colors, on a pane of glass;
+     - The model's name is plain white after a dot in its colors, on a pane of glass, so it reads at a glance;
        "on Baseten" is bright green metal. The reply comes in a sentence at a time, white with a touch of light orange
        and a glowing Meta-blue outline, in a glass bubble that grows to fit it, its outline faint like a shadow. The
        metal is our own WebGL shader, after libraries.dev's Metal.
-     - The call bar at the bottom lists each model call with its time. A model comes in the moment it starts, its dot
+     - The call bar at the bottom lists each model call with its time, large and white, like the request above the
+       reply: they're the turn's evidence. A model comes in the moment it starts, its dot
        a tiny orb in that model's colors, breathing until its time comes in.
      - The typed way in is a text and file box with a beam of the orb's colors riding its border, a paperclip, and a
        send button of live black metal that catches the beam and sinks in when pressed.
      - The sky is a faint neural map: while the orb works, nodes fire in its colors and the signal runs along the links.
      - Opened by the copilot (python -m wbc.agent --hud, at http://127.0.0.1:8766/), the page shows it live: each event
-       the agent sends over Server-Sent Events is a call to one of the functions in README.md, and the mocked Act 1
-       doesn't play. Opened on its own, it plays the mock.
-     Keys: A plays Act 1, H hides the controls, C opens the camera. -->
+       the agent sends over Server-Sent Events is a call to one of the functions in README.md, the mocked Act 1
+       doesn't play, and the typed box and the Camera button are hidden, since the take is spoken. Opened on its own,
+       it plays the mock.
+     Keys: A plays Act 1, H hides the controls (the Camera button too), C opens the camera. -->
 <style>
   :root { --ink: #f5f5f7; --muted: rgba(245, 245, 247, .62); --glass: rgba(255, 255, 255, .08); --edge: rgba(255, 255, 255, .18);
           --m-warm: #ffd7b5; --m-cool: #95aed6; --m-tint: #c6b2e6; --m-pos: 0%; --b1: #3054C6; --b2: #E040FB; --b3: #62B4FF; --sheen: 50%; }
@@ -51,10 +53,9 @@
   body { background: radial-gradient(55% 45% at 50% 30%, rgba(38, 62, 150, .1), rgba(22, 32, 86, .05) 45%, transparent 75%),
                      radial-gradient(70% 70% at 50% 38%, #0c0e16 0%, #000 72%); }
   #stars { position: fixed; inset: 0; width: 100%; height: 100%; pointer-events: none; }
-  /* live liquid metal: a canvas over the words draws the name white, edged in black metal glinting in the model's
-     colors, and the reply white outlined in blue, where the page lays them out; the page's own text stays for
-     selecting and reading aloud, but invisible. The send button draws its own. Without WebGL the CSS metal below
-     stays */
+  /* live liquid metal: a canvas over the words draws the reply white outlined in blue, and "on Baseten" in green, where
+     the page lays them out; the page's own text stays for selecting and reading aloud, but invisible. The send button
+     draws its own. Without WebGL the CSS metal below stays */
   #metalfx { position: fixed; left: 0; top: 0; z-index: 3; display: none; pointer-events: none; }
   /* the live liquid glass on the panes behind the words: see liquidGlass */
   #glassfx { position: fixed; inset: 0; width: 100%; height: 100%; z-index: 2; pointer-events: none; }
@@ -116,9 +117,10 @@
          padding-bottom: 12vh; }
   #orb { width: 100vw; height: 56vh; display: block; }
   #model { font-size: clamp(20px, 2.6vh, 30px); font-weight: 600; letter-spacing: -0.01em; }
-  /* the model's name and the reply sit on panes of glass with a soft top sheen, so their metal has something to stand
+  /* the model's name and the reply sit on panes of glass with a soft top sheen, so their words have something to stand
      against; the reply's is a bubble that grows to fit each sentence as it comes in (see wrapReply) */
-  #model { position: relative; isolation: isolate; padding: .16em .8em .22em; }
+  #model { position: relative; isolation: isolate; padding: .16em .8em .22em; display: flex; align-items: center; gap: .45em;
+           color: var(--ink); }
   #model::before { content: ''; position: absolute; inset: 0; z-index: -1; border-radius: 999px; }
   #bubble { position: absolute; left: 0; top: 0; z-index: -1; width: 0; height: 0; opacity: 0; pointer-events: none; }
   /* the reply bubble's outline: a faint, soft semi-translucent gradient, more a shadow than a line: barely light at the
@@ -138,18 +140,21 @@
             box-shadow: inset 0 1px 0 rgba(255, 255, 255, .1), inset 0 -1px 0 rgba(0, 0, 0, .3), inset 0 0 14px rgba(255, 255, 255, .03),
                         0 10px 30px rgba(0, 0, 0, .45); }
   #role { font-size: clamp(14px, 1.8vh, 20px); color: var(--muted); margin-top: 2px; }
-  #you { font-size: clamp(15px, 2vh, 22px); color: var(--muted); margin-top: 2.4vh; min-height: 1.5em;
-         max-width: 80vw; text-align: center; }
+  /* the request and the call bar are the turn's evidence (what was heard, which models worked and for how long), so
+     they're set large and near white, to read in a small inset of the video */
+  #you { font-size: clamp(20px, 2.9vh, 32px); color: rgba(245, 245, 247, .92); margin-top: 2.4vh; min-height: 1.5em;
+         max-width: 80vw; text-align: center; text-wrap: balance; }
   #say { font-size: clamp(24px, 3.6vh, 44px); font-weight: 500; letter-spacing: -0.015em; line-height: 1.25;
-         margin-top: .6vh; min-height: 2.6em; max-width: min(84vw, 1100px); text-align: center; }
+         margin-top: .6vh; min-height: 2.6em; max-width: min(84vw, 1100px); text-align: center; text-wrap: balance; }
   #say b { font-weight: 700; }
   /* each sentence of the reply fades in quickly, one after another */
   #say .arrive { opacity: 0; animation: arrive .3s ease-out forwards; }
   @keyframes arrive { to { opacity: 1; } }
-  #calls { position: fixed; z-index: 1; left: 0; right: 0; bottom: 2.2vh; display: flex; justify-content: center; flex-wrap: wrap;
-           gap: 8px 22px; padding: 0 40px; font-size: clamp(14px, 1.8vh, 20px); color: var(--muted); }
-  #calls span { display: inline-flex; align-items: center; gap: 8px; animation: rise .5s ease both; }
-  #calls i { width: 11px; height: 11px; border-radius: 50%; }
+  #calls { position: fixed; z-index: 1; left: 0; right: 0; bottom: 3.2vh; display: flex; justify-content: center; flex-wrap: wrap;
+           gap: 10px 30px; padding: 0 40px; font-size: clamp(20px, min(3.1vh, 2vw), 36px); font-weight: 500; color: var(--ink);
+           font-variant-numeric: tabular-nums; text-shadow: 0 1px 8px rgba(0, 0, 0, .8); }
+  #calls span { display: inline-flex; align-items: center; gap: .4em; animation: rise .5s ease both; }
+  #calls i, #model i { width: .55em; height: .55em; border-radius: 50%; flex: none; }
   /* a call still running: its dot breathes until its time comes in */
   #calls span.pending i { animation: breathe 1.2s ease-in-out infinite; }
   @keyframes breathe { 50% { transform: scale(.72); opacity: .55; } }
@@ -172,7 +177,7 @@
   #dev button { font: inherit; font-size: 12px; border-radius: 8px; padding: 4px 9px; cursor: pointer; }
   #dev button.on { border-color: rgba(255, 255, 255, .7); }
   #dev .gap { width: 10px; }
-  body.clean #dev { display: none; }
+  body.clean #dev, body.clean #cam, body.copilot #cam, body.copilot #ask { display: none; }
   @media (prefers-reduced-motion: reduce) {
     #say .arrive { animation: none; opacity: 1; }
     #calls span, #calls span.pending i { animation: none; }
@@ -187,7 +192,7 @@
 <div id="panel" class="glass">Camera feed</div>
 <main>
   <canvas id="orb"></canvas>
-  <div id="model" class="metal"></div>
+  <div id="model"></div>
   <div id="role"></div>
   <div id="you"></div>
   <div id="bubble"></div>
@@ -881,10 +886,9 @@ function liveMetal(dt) {
   metal.time += dt * (.35 + 2 * view.spin) * ORB_PACE;
   metal.btnTime += dt * (.12 + .25 * view.spin) * ORB_PACE;
   const { words: gw, wu } = metal, fx = $('metalfx');
-  // the words: the model's name, each sentence of the reply and "on Baseten", each word drawn into the mask where the
-  // page put it, at its sentence's opacity (so the fade-in still shows); the name's outline is wider, for its black
-  // metal. The mask is redrawn only when something about the words changes
-  const parts = [[$('model'), 2], ...[...$('say').children].map(s => [s, 0]), ...[...document.querySelectorAll('#role .baseten')].map(s => [s, 1])];
+  // the words: each sentence of the reply and "on Baseten", each word drawn into the mask where the page put it, at its
+  // sentence's opacity (so the fade-in still shows). The model's name stays plain text, to read at a glance. The mask is redrawn only when something about the words changes
+  const parts = [...[...$('say').children].map(s => [s, 0]), ...[...document.querySelectorAll('#role .baseten')].map(s => [s, 1])];
   const runs = [];
   for (const [el, kind] of parts) {
     const alpha = +getComputedStyle(el).opacity, walk = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
@@ -1400,6 +1404,8 @@ function speech(t) {
 }
 
 function frame(now) {
+  if (!W || !H) resize();
+  if (!W || !H) { requestAnimationFrame(frame); return; }
   const dt = Math.max(0, Math.min(0.05, (now - last) / 1000)), t = now / 1000;
   last = now;
   const k = 1 - Math.exp(-dt * 3.5), calm = REDUCE ? 1 / 3 : 1, ease = 1 - Math.exp(-dt * 2);
@@ -1698,7 +1704,7 @@ function frame(now) {
 function setModel(m) {
   model = m;
   goalColor = hex(MODELS[m].color);
-  $('model').textContent = MODELS[m].name;
+  $('model').innerHTML = `<i style="${dotFor(m)}"></i>${MODELS[m].name}`;
   $('role').innerHTML = MODELS[m].role;
   mark();
 }
@@ -1851,6 +1857,7 @@ requestAnimationFrame(frame);
 // live, each event from the copilot is [function, ...arguments] for one of the functions above, or clear, which empties
 // the call bar for a new turn. On its own, the page plays the mocked Act 1
 if (LIVE) {
+  document.body.classList.add('copilot');
   const live = { setState, setModel, you, say, begin, call, total, clear: () => { $('calls').innerHTML = ''; } };
   new EventSource('events').onmessage = e => { const [fn, ...args] = JSON.parse(e.data); live[fn]?.(...args); };
 } else setTimeout(playAct1, 1500);
