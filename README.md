@@ -26,6 +26,15 @@ flowchart TD
 
 Every reply shows on the HUD, and Kokoro says it on this Mac. The dashed lines are the two routes that skip Spark; [how the router works](#how-the-router-works) gives the rules.
 
+## Results
+
+Over the build, API costs came down by up to 75%, and the time spent waiting on models by about 90%. The changes behind them:
+
+- **The whole conversation in every Spark call,** instead of chaining calls on `previous_response_id`: a follow-up call went from 12–14 s to about 2 s.
+- **Bench facts gathered by code, kept locally and sent up front.** Before Spark's first call of a turn, code fetches `pins.h`, the schematic and the board read in parallel, so Spark doesn't spend a round asking for them. The board read and the schematic are made once at start-up and kept for the session, so later turns pay for neither the photo nor SAM.
+- **Arm commands on a local model.** Plain rules and Llama 3.2 3B on this Mac, with its prompt cache, take an arm command in about 0.25 s, against about 4.4 s through Spark, and cost nothing.
+- **Work started before it's needed:** the coder's sandbox is warmed at start-up (the fix compiles in about 8 s, not 14 s), the desk camera stays open so a photo doesn't wait for it to settle, and the arm powers on during the photo. Tool calls in one round run in parallel.
+
 ## Built during the hackathon, and what it builds on
 
 Everything in this repository was written during the hackathon, starting Oct 26, 2026, and the commit history dates every change. The exceptions are the vendored URDF and the two pieces of MIT-licensed code the HUD's page adapts, all listed below.
