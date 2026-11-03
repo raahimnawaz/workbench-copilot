@@ -55,7 +55,7 @@ Everything in this repository was written during the hackathon, starting Oct 26,
 | `wbc/perception/schematic.py`, `scripts/make_schematic.py`, `hardware/*.kicad_sch` | The demo boards' KiCad schematics, drawn from KiCad's own symbols, and `read_schematic`: their nets and KiCad's electrical rules check, through `kicad-cli` |
 | `wbc/agent/parts.py` | `add_part`: Muse Spark Open teaches itself a part from `parts.yaml` (its wiring to the DevKit's free GPIOs, its library and setup code, saved as a skill in `.wbc/skills/`), and the part is drawn into a copy of the schematic in `.wbc/schematics/`, kept only if KiCad's electrical rules check passes, and shown in KiCad with `--show` |
 | `scripts/kokoro_server.py`, `scripts/kokoro-say` | The co-pilot's voice: Kokoro-82M kept loaded on this Mac, and a stand-in for `say` that plays its audio |
-| `config/`, `fixtures/`, `tests/` | Model, bench and arm config, the recorded bench for `--sim`, 875 offline tests |
+| `config/`, `fixtures/`, `tests/` | Model, bench and arm config, the recorded bench for `--sim`, 882 offline tests |
 | `firmware/dut_demo/` | Act 1's demo board: blinks an LED and logs each blink over serial |
 
 | Reused | License | Used for |
