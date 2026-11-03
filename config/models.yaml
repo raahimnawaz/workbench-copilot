@@ -91,6 +91,7 @@ memory:                             # what outlives a conversation (wbc/agent/me
   compact_at_tokens: 60000
   keep_turns: 40                    # ...or once this many turns have piled up since the last summary
   notebook_in_prompt: 20            # newest notes the router sees every turn; recall finds the rest
+  # embeddings: {base_url: http://127.0.0.1:8091/v1, model: <name>}   # optional: matches by meaning beside words
 
 budget:
   # Hard stop. Every paid call checks it first, and the agent, coder, voice and smoke test stop once
