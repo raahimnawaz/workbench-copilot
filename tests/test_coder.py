@@ -144,3 +144,34 @@ def test_propose_patch_applies_to_the_working_tree(tmp_path):
     assert out["ok"] and out["files"] == [PINS] and out["line"] == 5
     assert "#define LED_PIN  4 " in (root / PINS).read_text()
     assert coder.propose_patch(root, diff, why)["ok"] is False, "a second apply must fail cleanly"
+
+
+def test_a_diff_that_doesnt_apply_goes_back_once_with_the_error_and_the_fix_comes_back(tmp_path):
+    root = project(tmp_path)
+    wrong = FIX.replace("LED_PIN  5 ", "LED_PIN  7 ")
+    client = FakeClient([NS(output_text=wrong, usage=usage()), NS(output_text=FIX, usage=usage())])
+    out = coder.ask_coder(client, cfg(retries=1), budget(), root, "Fix the LED pin", [PINS])
+    assert out["ok"] and out["attempts"] == 2 and "+#define LED_PIN  4 " in out["diff"]
+    first, second = (r["input"] for r in client.responses.requests)
+    assert second.startswith(first) and "Your last answer didn't pass the checks: diff does not apply." in second
+    assert "LED_PIN  7" in second, "with the diff it sent"
+
+
+def test_a_build_that_fails_twice_says_so_after_two_tries(tmp_path):
+    client = FakeClient([NS(output_text=FIX, usage=usage()), NS(output_text=FIX, usage=usage())])
+    out = coder.ask_coder(client, cfg(retries=1, compile_cmd="sh -c 'echo pins.h:5: error: oops; exit 1'"), budget(),
+                          project(tmp_path), "Fix the LED pin", [PINS])
+    assert out["ok"] is False and out["error"] == "patched firmware does not compile" and out["attempts"] == 2
+    assert "pins.h:5: error: oops" in client.responses.requests[1]["input"], "the build's error goes back"
+
+
+def test_a_retry_that_doesnt_come_back_keeps_the_first_failure(tmp_path):
+    client = FakeClient([NS(output_text="I can't.", usage=usage()), TimeoutError("read timed out")])
+    out = coder.ask_coder(client, cfg(retries=1), budget(), project(tmp_path), "x", [PINS])
+    assert out["ok"] is False and out["error"] == "coder returned no diff" and "TimeoutError" in out["retry"]
+
+
+def test_without_retries_one_call(tmp_path):
+    client = FakeClient([NS(output_text="I can't.", usage=usage())])
+    out = coder.ask_coder(client, cfg(), budget(), project(tmp_path), "x", [PINS])
+    assert out["error"] == "coder returned no diff" and len(client.responses.requests) == 1

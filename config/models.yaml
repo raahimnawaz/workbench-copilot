@@ -30,6 +30,7 @@ coder:
   compile_cmd: pio run -d firmware/dut_demo   # runs in a sandbox copy; leave empty to skip
   compile_dir: firmware/dut_demo
   compile_timeout_s: 180
+  retries: 1                        # a diff that doesn't apply or compile goes back once, with the error
 
 eyes:
   model: sam-3.1                    # request format from dev.meta.ai/docs/sam: one noun phrase per request
