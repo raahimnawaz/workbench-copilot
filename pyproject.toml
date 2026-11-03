@@ -23,7 +23,8 @@ arm = ["pyserial>=3.5"]
 eyes = ["meta-sam-parser>=0.1,<0.2", "opencv-python-headless>=4.8", "pillow>=10"]
 firmware = ["platformio>=6.1"]   # builds and flashes the ESP32 firmware; also turns on ask_coder's compile check
 lerobot = ["lerobot[feetech]>=0.6"]   # arm calibration and moves; brings PyTorch, so CI leaves it out
-dev = ["pytest>=8"]
+dev = ["pytest>=8", "safetensors>=0.4"]   # safetensors: the Toolformer adapter's conversion and its tests
+train = ["modal>=1.0"]   # scripts/toolformer_train.py, which runs on Modal
 
 [project.scripts]
 wbc = "wbc.agent.__main__:cli"
