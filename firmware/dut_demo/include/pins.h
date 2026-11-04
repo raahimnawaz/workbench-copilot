@@ -3,4 +3,4 @@
 #pragma once
 
 #define LED_PIN  5     // the LED's anode, through its jumper
-#define BLINK_MS 250   // the LED is on this long, then off this long
+#define REPORT_MS 500  // how often it says over serial that the LED is on

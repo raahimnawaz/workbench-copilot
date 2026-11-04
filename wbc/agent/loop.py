@@ -90,6 +90,30 @@ def _spoken_list(names: list) -> str:
     return text[:1].upper() + text[1:]
 
 
+# take.lanes (the video's take): what each lane hears, as plain() leaves a clause
+SENTENCES = re.compile(r"(?<=[.!?])\s+")
+LANE_COURTESY = frozenset("great sorry alright right also cool awesome perfect".split())
+LANE_FLASH = re.compile(r"(go|go ahead|yes|yeah|yep|sure|do it|flash it|flash|flash the fix|yes flash it|go flash it|"
+                        r"yes go ahead|yes do it|yes go)")
+FLASH_OFFERED = re.compile(r"\bflash\b|\bsay go\b", re.IGNORECASE)
+LANE_SCREEN = re.compile(r"\b(screen|display|oled)\b")
+LANE_SCREEN_ASK = re.compile(r"\b(add|schematic|kicad|keycad|use|wire|hook|learn|how|design|board)\b")
+
+
+def _fast_call(command: dict) -> tuple:
+    return command["tool"], json.dumps(command["args"])
+
+
+def _screen_said(res: dict) -> str:
+    """add_part's result as the take says it: the skill Spark Open learned, and where each signal pin goes."""
+    if not res.get("ok"):
+        return f"Adding the screen didn't work: {res.get('error') or 'it failed'}."
+    pins = ", ".join(f"{pin} to GPIO {to[4:]}" for pin, to in (res.get("wiring") or {}).items()
+                     if str(to).startswith("GPIO"))
+    return (f"{res.get('by') or 'Spark Open'} learned a new skill for your screen and saved it for next time, and "
+            f"drew it into your schematic with {pins}; it's drawn, not wired.")
+
+
 class _RouterBase:
     label = "router"
 
@@ -109,6 +133,10 @@ class _RouterBase:
         self.pool = ThreadPoolExecutor(max_workers=4)
         self.memory = memory  # what outlives a conversation; None keeps only the conversation itself
         self.fast = fast  # the arm's fast path (fast_arm.py); None sends every request to the router's model
+        self._side, self._side_lock = [], threading.Lock()  # side turns waiting to join the conversation (side_turn)
+        self.lanes = None  # models.yaml's take.lanes, set by the agent for a take: see _lanes
+        self.side_runner = None  # with take.alongside: runs an arm clause beside the turn (set by the agent)
+        self.last_reply = ""  # the last turn's reply, set by the agent: what a bare "go" answers
         self.open = open  # (client, model, label): Spark Open for questions no tool is needed for; None: the router
         self._input_tokens = 0  # the last call's input: how full the conversation is
         self._failures = 0  # turns in a row that failed in a way that may mean the conversation is broken
@@ -227,8 +255,13 @@ class _RouterBase:
         """One request, from the user's words to the reply. With memory, the turn is recorded however it ends, the
         session becomes a summary first when that's due, and a full context costs one summary instead of every later
         turn. Nothing runs twice: not the bench facts, and never a tool that has acted on the bench."""
+        self.join_side()
         done = []
         self.unfinished = (user_text, done)
+        if self.lanes is not None:
+            reply = self._lanes(user_text, done)
+            if reply is not None:
+                return reply
         asked = user_text  # what the router's model gets: the request, and what the fast path did if it failed
         if self.fast is not None:
             reply = self._fast(user_text, done)
@@ -295,6 +328,83 @@ class _RouterBase:
         self._failures = 0
         self._record(user_text, done, text, live=True)
         return text
+
+    def _lanes(self, user_text: str, done: list) -> str | None:
+        """models.yaml's take.lanes, for the video's take (Nov 4): a request whose every clause is one of the take's own
+        commands runs them at once, with no planning call to the router's model. A go-ahead to the flash it just
+        offered (build_and_flash), adding the screen (add_part: Spark Open learns it, live) and arm commands (the fast
+        path's Llama, beside the turn with take.alongside) go together; the reply is built from their results. None,
+        and the router's model takes the whole request as before, when a clause is anything else, or when the only
+        command is the arm's, which the fast path already takes."""
+        from wbc.agent.fast_arm import CLAUSE, COURTESY, plain
+
+        offered = FLASH_OFFERED.search(self.last_reply or "") and (self.last_reply or "").rstrip().endswith("?")
+        flash, screen, arm = False, None, []
+        for clause in (c for part in SENTENCES.split(user_text) for c in CLAUSE.split(part)):
+            words = " ".join(w for w in plain(clause).split() if w not in COURTESY and w not in LANE_COURTESY)
+            if not words:
+                continue
+            if offered and LANE_FLASH.fullmatch(words):
+                flash = True
+            elif LANE_SCREEN.search(words) and LANE_SCREEN_ASK.search(words):
+                screen = clause.strip()
+            elif self.fast is not None and (command := self.fast.take(clause)) is not None:
+                arm.append((clause.strip(), command))
+            else:
+                return None
+        if not flash and screen is None:
+            return None
+        calls = ([Call("lane0", "build_and_flash", "{}")] if flash else []) + (
+            [Call("lane1", "add_part", json.dumps({"part": self.lanes.get("screen_part", "ssd1306_spi_7"),
+                                                   "use": screen}))] if screen is not None else [])
+        for clause, command in arm:  # beside this turn, so the LED check doesn't wait for the arm
+            if self.side_runner is not None:
+                self.side_runner(clause)
+            else:
+                calls.append(Call(f"lane{len(calls)}", *_fast_call(command)))
+        results = dict(zip((c.name for c in calls), self._round(calls, done)))
+        said_parts = []
+        for c in calls:
+            res = results[c.name]
+            if c.name == "add_part":
+                said_parts.append(_screen_said(res))
+            elif c.name not in ("build_and_flash",):
+                said_parts.append(said(c.name, res) if res.get("ok", True) else
+                                  f"The arm couldn't do that: {res.get('error') or res.get('stopped')}.")
+        if flash:  # last, so its question opens the answer window
+            res = results["build_and_flash"]
+            said_parts.append("Flashed, and I'm checking my own fix: is the LED on now?" if res.get("ok") else
+                              f"The flash didn't work: {res.get('error') or 'it failed'}.")
+        text = " ".join(said_parts)
+        self.hud.reply("fast path", text)
+        self._join(user_text, text)
+        self.unfinished = None
+        self._failures = 0
+        self._record(user_text, done, text, live=True)
+        return text
+
+    def side_turn(self, user_text: str, command: dict) -> tuple:
+        """An arm command the fast path took (`command`, from fast.take) while another turn runs: it runs at once
+        rather than waiting, and the arm's own lock keeps it from overlapping another move. (reply, result): the reply
+        to say, None when the move came back failed. Its exchange joins the conversation once the running turn is over
+        (join_side), since joining mid-turn could land between that turn's calls and their results."""
+        done = []
+        result = self._round([Call("side0", command["tool"], json.dumps(command["args"]))], done)[0]
+        if not result.get("ok", True):
+            return None, result
+        text = said(command["tool"], result)
+        self.hud.reply("fast path", text)
+        with self._side_lock:
+            self._side.append((user_text, done, text))
+        return text, result
+
+    def join_side(self) -> None:
+        """The side turns that finished since the last call, into the conversation and the session."""
+        with self._side_lock:
+            finished, self._side = self._side, []
+        for user_text, done, text in finished:
+            self._join(user_text, text)
+            self._record(user_text, done, text, live=True)
 
     def _open_answer(self, user_text: str) -> str | None:
         """Spark Open answering a question no tool is needed for, from the bench facts, with no tools: its reply is

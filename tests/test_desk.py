@@ -251,6 +251,36 @@ def test_an_upright_cups_middle_comes_from_its_outline_and_its_height(where):
     assert told.top_z == pytest.approx(95)
 
 
+def near_wall_mask(cam, fit, center=CUP[0], radius=CUP[1], height=CUP[2]) -> np.ndarray:
+    """The top-down view's mask of only a cup's wall that faces the camera, base to rim: pens standing in it hide its
+    far rim and its inside, as on Nov 3."""
+    toward = (cam.C[:2] - center) / np.linalg.norm(cam.C[:2] - center)
+    a = math.atan2(toward[1], toward[0]) + np.linspace(-math.pi / 2, math.pi / 2, 61)
+    half = np.column_stack([center[0] + radius * np.cos(a), center[1] + radius * np.sin(a)])
+    points = np.vstack([np.column_stack([half, np.zeros(len(a))]), np.column_stack([half, np.full(len(a), height)])])
+    image = np.zeros((SIZE[1], SIZE[0]), np.uint8)
+    cv2.fillConvexPoly(image, np.round(cv2.convexHull(cam.project(points).astype(np.float32))).astype(np.int32), 255)
+    x0, y0, x1, y1 = CFG["region_mm"]
+    size = (int(round((y1 - y0) * CFG["px_per_mm"])), int(round((x1 - x0) * CFG["px_per_mm"])))
+    M = desk.view_matrix(CFG["region_mm"], CFG["px_per_mm"]) @ fit.H
+    return cv2.warpPerspective(image, M, size, flags=cv2.INTER_NEAREST, borderValue=0) > 127
+
+
+def test_a_round_container_seen_only_by_its_near_wall_has_its_middle_half_its_width_out():
+    cam = Camera(*OBLIQUE)
+    fit = desk.fit(detections(cam), TOUCHED, SIZE, F)
+    to_arm = np.linalg.inv(desk.view_matrix(CFG["region_mm"], CFG["px_per_mm"]))
+    wall = near_wall_mask(cam, fit)
+    as_seen = desk.found(wall, to_arm, fit, CUP[2], "cup")
+    taken_round = desk.found(wall, to_arm, fit, CUP[2], "cup", round_=True)
+    assert np.linalg.norm(as_seen.center - CUP[0]) > 12  # its middle read toward the near wall: the Nov 3 miss
+    assert np.linalg.norm(taken_round.center - CUP[0]) < 6 and taken_round.width_mm == pytest.approx(76, abs=6)
+    # a cup seen whole is as deep as it's wide, so taking it as round changes nothing
+    whole = cup_mask(cam, fit)
+    assert desk.found(whole, to_arm, fit, CUP[2], "cup", round_=True).center == pytest.approx(
+        desk.found(whole, to_arm, fit, CUP[2], "cup").center)
+
+
 def test_a_wrong_height_moves_a_cups_middle_by_a_fraction_of_the_error():
     cam = Camera(*OBLIQUE)
     fit = desk.fit(detections(cam), TOUCHED, SIZE, F)

@@ -48,6 +48,10 @@ ears:
   # and "chip select" made those phrases come out worse ("pinsh h", "chip chip select"). ADC is untested
   # as a hint.
   keywords: [GPIO, ADC, regrasp]
+  # For the take (Nov 3, local): every utterance of two words or more is a request, with no wake phrase, and an
+  # utterance ends after 1.4 s of quiet rather than 0.8, so "why ... isn't my LED on?" isn't cut in two.
+  every_utterance: true
+  hangover_s: 1.4
 
 mouth:                              # spoken replies (--voice or --speak): Meta's API has no TTS
   command: scripts/kokoro-say       # Kokoro-82M on this Mac (scripts/kokoro_server.py); none: macOS `say`, whose
@@ -104,3 +108,11 @@ budget:
     muse-voice-transcribe-1.0: {per_hour: 0.18}                # third-party
     sam-3.1: {per_1k_images: 2.50}                              # Meta's pricing page
     meta-models/muse-spark-open-1026: {in: 1.00, out: 4.00}    # a placeholder: Baseten's price not checked
+
+take:                               # for the video's take (Nov 3, local): cuts the dead air
+  warm_at_start: true               # one tiny call each to Spark, Wonder and Spark Open at start, about $0.001, so no
+                                    # turn pays a cold first call (Baseten's scale-up above all)
+  alongside: true                   # an arm command the fast path takes runs at once while another turn is running,
+                                    # instead of waiting for it to end
+  lanes:                            # the take's own commands with no planning call to Spark: "go" to an offered
+    screen_part: ssd1306_spi_7      # flash, adding the screen (Spark Open, live) and arm commands, together

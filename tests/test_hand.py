@@ -1122,6 +1122,22 @@ def run_main(monkeypatch, run_turn, keyboard, stdin, can_go_home=True):
     return agent.main([]), bench, parked
 
 
+@pytest.mark.parametrize("on", [True, False])
+def test_with_idle_at_start_the_arm_goes_to_its_idle_pose_before_the_first_request(monkeypatch, on):
+    order = []
+    bench = NS(park=lambda home=True: None, stop_arm=lambda: None, hand=None, stopped=threading.Event(),
+               can_go_home=lambda: True, resume=lambda: None, robot_cfg={"hand": {"idle_at_start": on}})
+    budget = NS(spent=0.0, limit=5.0, check=lambda: None, pop_warning=lambda: None)
+    toolbox = NS(dispatch=lambda name, args: order.append(name) or {"ok": True, "idle": True})
+    router = NS(label="Spark", model="spark", run_turn=lambda text: order.append(text) or "Done.", toolbox=toolbox)
+    monkeypatch.setattr(agent, "build", lambda *a: ({"ears": {}, "coder": {}, "mouth": {}}, budget, SilentHud(), router,
+                                                    bench, Keyboard(say=lambda s: None, wait_s=0.05)))
+    monkeypatch.setattr(agent.coder, "compile_in_sandbox", lambda *a: None)
+    monkeypatch.setattr("sys.stdin", io.StringIO("pick up the screwdriver\n"))
+    assert agent.main(["--arm", "--no-fast-arm"]) == 0
+    assert order == (["arm_home"] if on else []) + ["pick up the screwdriver"]
+
+
 def test_the_end_of_the_input_answers_a_waiting_question_no_and_the_arm_goes_home_after_the_turn(monkeypatch):
     keyboard, answers = Keyboard(say=lambda s: None, wait_s=30), []
 
@@ -1302,6 +1318,19 @@ def test_a_pick_grips_a_thing_where_locate_said_to_as_wide_as_it_is_there():
                                                                  grip_y=2.0, grip_width_mm=3.0)
 
 
+def test_a_board_standing_on_its_long_edge_is_gripped_by_its_ends_not_its_thickness():
+    hand, _ = on_the_bench()
+    desk = 1000 * hand.arm.table.desk(0.2, -0.08)
+    screen = Thing("screen", 200.0, -80.0, desk + 27, heading_deg=30.0, length_mm=38, width_mm=1.6, height_mm=27)
+    held = screen.gripped()
+    assert held.by_ends and held.width_mm == 38 and held.jaws_deg == pytest.approx(line(30))  # along it, end to end
+    steps = hand.plan_pick(screen)
+    assert line(hand.jaws_heading(steps[2].q) - 30) == pytest.approx(0, abs=3)
+    assert hand.opening_for(held) > hand.opening_for(dataclasses.replace(screen, height_mm=0, width_mm=1.6))
+    lying = dataclasses.replace(screen, height_mm=0, width_mm=12)  # thick enough: across its width, as before
+    assert not lying.gripped().by_ends and lying.jaws_deg == pytest.approx(line(120))
+
+
 # ------------------------------------------------------------------ into a container, on end
 
 def handle_with_a_tip(x=150.0, y=-60.0, heading=35.0, tip_toward=215.0):
@@ -1364,6 +1393,52 @@ def test_move_thing_into_a_container_picks_it_up_and_stands_it_in_on_end():
     assert [s["step"] for s in result["steps"]][-4:] == ["on end, over it", "down over it", "into it", "back up"]
     assert result["steps"][-5]["step"].startswith("lift, the jaws across the arm")
     assert hand.held is None and hand.held_thing is None
+
+
+def test_bring_to_user_picks_a_screen_up_by_its_ends_and_sets_it_down_on_the_hand_over_spot():
+    hand, robot = on_the_bench()
+    spot = [[252.6, -326.5], [29.8, -244.7]]  # line A, Nov 3: its middle is x 141.2, y -285.6
+    b = tools.Bench(ROOT, {}, None, None, robot_cfg={"hand": {"check_over": False, "hand_over_mm": spot,
+                                                              "standing_mm": {"screen": 25}}},
+                    arm_port="fake", confirm=lambda question: True)
+    tb = tools.build_toolbox(b)
+    b.hand = hand
+    desk = 1000 * hand.arm.table.desk(0.2, -0.1)
+    screen = Thing("screen", 200.0, -100.0, desk + 25, heading_deg=20.0, length_mm=38, width_mm=1.6, height_mm=25)
+    b.seen["screen"] = (screen, time.monotonic())
+    robot.between["gripper"] = (1400, math.inf)  # its ends between the jaws: no look after
+    result = tb.dispatch("bring_to_user", {"thing": "screen"})  # standing_mm gives its height
+    assert result["ok"] and result["onto"] == "hand-over spot" and hand.held is None
+    put = np.array([[s["x_mm"], s["y_mm"]] for s in result["steps"] if s["step"] == "down to it"][-1])
+    a, b = np.array(spot[0]), np.array(spot[1])  # on line A, from its middle toward its end nearer the base
+    along = (put - b) @ (a - b) / np.linalg.norm(a - b) ** 2
+    assert 0 <= along <= 0.5 and np.linalg.norm(b + along * (a - b) - put) < 1
+
+
+def test_a_name_ending_in_a_standing_things_name_takes_its_measured_height():
+    hand, robot = on_the_bench()
+    b = tools.Bench(ROOT, {}, None, None, robot_cfg={"hand": {"check_over": False, "standing_mm": {"screen": 25}}},
+                    arm_port="fake", confirm=lambda question: True)
+    tb = tools.build_toolbox(b)
+    b.hand = hand
+    asked = []
+    b.seen["small screen"] = (Thing("small screen", 200.0, -100.0, 0.0, height_mm=99), time.monotonic())
+    tools_located = tools._locate_all
+    tools._locate_all = lambda bench, wants: asked.extend(wants) or {}
+    try:
+        tb.dispatch("pick_up", {"thing": "small screen"})  # seen at 99 mm, asked at screen's 25: located again
+    finally:
+        tools._locate_all = tools_located
+    assert asked == [("small screen", 25.0)]
+
+
+def test_bring_to_user_without_a_hand_over_spot_says_so_and_moves_nothing():
+    hand, robot = on_the_bench()
+    b = tools.Bench(ROOT, {}, None, None, robot_cfg={"hand": {}}, arm_port="fake", confirm=lambda question: True)
+    tb = tools.build_toolbox(b)
+    b.hand = hand
+    result = tb.dispatch("bring_to_user", {"thing": "screen", "thing_height_mm": 25})
+    assert not result["ok"] and "hand_over_mm" in result["error"] and robot.sent == []
 
 
 def test_without_a_container_listed_a_put_on_a_cup_is_the_flat_put_it_was():

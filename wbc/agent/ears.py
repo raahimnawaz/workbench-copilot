@@ -284,7 +284,7 @@ def listen_forever(on_text, cfg: dict, api_key: str, budget, hud, mic=None, tran
         return
     transcriber = transcriber or Transcriber(cfg, api_key, budget)
     phrase = cfg.get("wake_phrase", "copilot")
-    gate = Segmenter(mic.rate)
+    gate = Segmenter(mic.rate, hangover_s=cfg.get("hangover_s", 0.8))
     under = Segmenter(mic.rate, max_s=STOP_PIECE_S) if on_stop is not None else None  # over its voice: the stop only
     hud.note(f'voice on {mic.name}: say "{phrase.capitalize()}," and your request')
     listened, checked, awake_until, hearing, spoke, before = 0.0, False, 0.0, False, 0.0, ""
@@ -331,6 +331,8 @@ def listen_forever(on_text, cfg: dict, api_key: str, budget, hud, mic=None, tran
                 request = text  # the request after the wake phrase alone
             if request is None and question is not None and question.answer(text, clock(), spoke):
                 request = text  # the answer to what the co-pilot just asked
+            if request is None and cfg.get("every_utterance") and len(re.findall(r"[A-Za-z0-9']+", text)) >= 2:
+                request = text  # models.yaml's ears.every_utterance, for a take: no wake phrase, but not a lone word
             if on_stop is not None and (is_stop(request) if request is not None else bare_stop(text)):
                 awake_until = 0.0
                 hud.note(f"heard ({seconds:.1f} s): {text}")

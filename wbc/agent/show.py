@@ -8,6 +8,7 @@ about a file open twice. The agent needs neither: without Chrome or KiCad it say
 """
 from __future__ import annotations
 
+import shutil
 import subprocess
 import time
 from pathlib import Path
@@ -60,6 +61,15 @@ def schematic(path: Path, run=subprocess.run, editor: Path = SCHEMATIC_EDITOR, s
         else:
             run(["open", "-a", str(editor), str(path)], capture_output=True)
     return f"schematic: {path.name} opened in KiCad"
+
+
+def in_editor(path: Path, line: int | None = None, popen=subprocess.Popen, which=shutil.which) -> str:
+    """Open `path` in VS Code (its `code` command), at `line` if given, so a take shows it as it changes: pins.h when
+    Wonder's fix is staged, and the skill add_part saves. What happened, for the HUD's notes."""
+    if not which("code"):
+        return "VS Code: no `code` command on PATH, so nothing opened"
+    popen(["code", "-g", f"{path}:{line}" if line else str(path)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    return f"VS Code: {path.name}"
 
 
 def _running(run) -> bool:

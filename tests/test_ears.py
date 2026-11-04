@@ -152,6 +152,16 @@ def test_routes_only_what_is_said_to_the_copilot():
     assert any(n.startswith("room noise") for n in notes)
 
 
+def test_for_a_take_every_utterance_of_two_words_is_a_request_and_a_pause_doesnt_cut_one_in_two():
+    hud, sent = SilentHud(), []
+    mic = FakeMic(quiet(2.5), voice(0.4), quiet(1.0), voice(1), quiet(2.0), voice(0.4), quiet(2.0), voice(1), quiet(2.0))
+    t = FakeTranscriber("why isn't my LED on?", "uh", "put my screwdriver in my cup")
+    listen_forever(sent.append, {"wake_phrase": "copilot", "every_utterance": True, "hangover_s": 1.4}, "key", None,
+                   hud, mic=mic, transcriber=t)
+    assert sent == ["why isn't my LED on?", "put my screwdriver in my cup"]  # the 1 s pause is inside the first
+    assert len(t.seconds) == 3 and t.seconds[0] > 2  # one utterance: "why", the pause and the rest
+
+
 @pytest.mark.parametrize("later, routed", [(5.0, ["flash it"]), (9.0, [])])
 def test_wake_phrase_alone_waits_for_the_request(later, routed):
     mic = FakeMic(quiet(2.5), voice(0.6), quiet(1.5), voice(1), quiet(1.5))
