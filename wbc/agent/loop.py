@@ -110,8 +110,10 @@ def _screen_said(res: dict) -> str:
         return f"Adding the screen didn't work: {res.get('error') or 'it failed'}."
     pins = ", ".join(f"{pin} to GPIO {to[4:]}" for pin, to in (res.get("wiring") or {}).items()
                      if str(to).startswith("GPIO"))
-    return (f"{res.get('by') or 'Spark Open'} learned a new skill for your screen and saved it for next time, and "
-            f"drew it into your schematic with {pins}; it's drawn, not wired.")
+    library = str(res.get("library") or "").split("/")[-1].strip()
+    drive = f"drive it with the {library} library, " if library else ""
+    return (f"{res.get('by') or 'Spark Open'} learned how to use your screen and saved it as a skill: {drive}"
+            f"{pins}, drawn into your schematic but not wired.")
 
 
 class _RouterBase:

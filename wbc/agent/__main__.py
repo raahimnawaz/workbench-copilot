@@ -319,6 +319,7 @@ def main(argv=None) -> int:
             if args.hear:
                 continue
             bench.resume()  # a new request: after a stop, the arm may move again
+            getattr(bench, "seen", {}).clear()  # and a new desk photo: things may have moved since the last request
             question.close()
             hud.turn(text)
             busy.set()

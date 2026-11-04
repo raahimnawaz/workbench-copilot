@@ -35,11 +35,24 @@ Over the build, API costs came down by up to 75%, and the time spent waiting on 
 - **Arm commands on a local model.** Plain rules and Llama 3.2 3B on this Mac, with its prompt cache, take an arm command in about 0.25 s, against about 4.4 s through Spark, and cost nothing.
 - **Work started before it's needed:** the coder's sandbox is warmed at start-up (the fix compiles in about 8 s, not 14 s), the desk camera stays open so a photo doesn't wait for it to settle, and the arm powers on during the photo. Tool calls in one round run in parallel.
 
+### Measured in the video's takes (Nov 4)
+
+29 takes of the whole scene on the real bench, by voice: "Why isn't my LED on?", then "Go. Also, put my screwdriver in my cup, and add my screen to my schematic." Times are each tool's own, from the take logs.
+
+| Step | Worked | Median | Range |
+|---|---|---|---|
+| Spark finds the wire on the wrong GPIO, Wonder writes the fix and it compiles in the sandbox (`ask_coder`) | 29 of 29 | 9.2 s | 2.8–13.1 s |
+| Build and flash (`build_and_flash`) | 18 of 18 | 18.1 s | 12.9–25.0 s |
+| Spark Open on Baseten learns the screen, and KiCad's rules check passes on the drawn copy (`add_part`) | 28 of 29 | 11.4 s | 7.4–30.3 s |
+| The arm stands the screwdriver in the cup (`move_thing`) | 7 of 25 | 42.0 s | 38.9–46.7 s |
+
+A take cost $0.056 at the median ($0.038–0.168). The arm's 18 misses, all caught before anything was damaged: the jaws closing beside the screwdriver (4), the screwdriver dropped where the arm can't point straight down, refused before anything moved (4), the desk tags covered so the camera couldn't place the desk (4), the wrist straying past the 5° cut on a close-in pick (3), and three more once each (the jaws sticking as they opened, and locate missing the cup once and the screwdriver once). Spark Open's one miss was wiring the code's check turned down twice.
+
 ## Design notes
 
 What each idea is, the research it lines up with, and what was measured. The papers are under [References](#references).
 
-- **The Toolformer-style fine-tune** (`scripts/toolformer_*.py`): adapted from Meta's Toolformer [1], which teaches a model a tool from labels written for it, keeping only the calls that help. Here Spark writes spoken requests and labels each in the fast path's own prompt, and a label is kept only when it matches the intent it was written for and its call runs on the recorded bench, where Toolformer keeps a call when it lowers the model's loss. The student is Llama 3.2 3B [3] with a LoRA [13]. Measured: 351 of 390 labels kept, for $0.99; the training hasn't run yet.
+- **The Toolformer-style fine-tune** (`scripts/toolformer_*.py`): adapted from Meta's Toolformer [1], which teaches a model a tool from labels written for it, keeping only the calls that help. Here Spark writes spoken requests and labels each in the fast path's own prompt, and a label is kept only when it matches the intent it was written for and its call runs on the recorded bench, where Toolformer keeps a call when it lowers the model's loss. The student is Llama 3.2 3B [3] with a LoRA [13]. Measured: 351 of 390 labels kept, for $0.99. Trained on Modal, the right tool on held-out requests went from 47 to 50 of 53 (bf16); on the 4-bit model the fast path serves, the tuned and base models answered 199 of the 200 benchmark phrasings the same, at the same 0.18 s, so the fast path keeps the base model.
 - **Reading the board with SAM:** SAM 3.1 [2] segments the wires from one noun phrase, and plain code does the rest: an AprilTag carrier [14] maps the photo to millimeters, so there's no camera calibration to keep, and the hole grid is fitted to the photo, searching 1.2 mm, 1° and a scale of 0.97–1.06 around the printed outline; a wire end snaps to a hole within 1.3 mm. Measured: live on the bench, it finds Act 1's wire on the wrong GPIO with the line to fix.
 - **The arm's fast path:** a cheap local model first and Spark as the fallback, an LLM cascade like FrugalGPT [7] and RouteLLM [8]. What's different: the arm moves only when two independent checks agree, plain rules and Llama 3.2 3B, and anything else goes to Spark. Measured: about 0.25 s from request to reply, against about 4.4 s through Spark; on 117 phrasings neither was tuned on, no wrong arm move, where the model alone made 20 and the rules alone 3.
 - **Hiding dead time:** bench facts fetched before Spark's first call and kept for the session, tool calls in one round run in parallel, and a request that asks for an arm move and something else runs both at once, so Spark Open can work while the arm moves. The same idea as LLMCompiler's parallel function calling [9]. Measured: a follow-up Spark call went from 12–14 s to about 2 s, and the wait on models fell by about 90% over the build.
@@ -69,7 +82,7 @@ Everything in this repository was written during the hackathon, starting Oct 26,
 | `wbc/perception/schematic.py`, `scripts/make_schematic.py`, `hardware/*.kicad_sch` | The demo boards' KiCad schematics, drawn from KiCad's own symbols, and `read_schematic`: their nets and KiCad's electrical rules check, through `kicad-cli` |
 | `wbc/agent/parts.py` | `add_part`: Muse Spark Open teaches itself a part from `parts.yaml` (its wiring to the DevKit's free GPIOs, its library and setup code, saved as a skill in `.wbc/skills/`), and the part is drawn into a copy of the schematic in `.wbc/schematics/`, kept only if KiCad's electrical rules check passes, and shown in KiCad with `--show` |
 | `scripts/kokoro_server.py`, `scripts/kokoro-say` | The co-pilot's voice: Kokoro-82M kept loaded on this Mac, and a stand-in for `say` that plays its audio |
-| `config/`, `fixtures/`, `tests/` | Model, bench and arm config, the recorded bench for `--sim`, 894 offline tests |
+| `config/`, `fixtures/`, `tests/` | Model, bench and arm config, the recorded bench for `--sim`, 908 offline tests |
 | `firmware/dut_demo/` | Act 1's demo board: lights an LED, keeps it on and says so over serial |
 
 | Reused | License | Used for |
@@ -86,6 +99,7 @@ Everything in this repository was written during the hackathon, starting Oct 26,
 | [Modal](https://modal.com) and its Python client | Modal's terms; the client Apache-2.0 | The A10G the fine-tune runs on (`pip install -e '.[train]'`) |
 | [AprilTag](https://april.eecs.umich.edu/software/apriltag)'s tag36h11 family, as built into OpenCV's ArUco module | BSD-2-Clause | The carrier's and the desk's tags |
 | [Kokoro-82M](https://huggingface.co/hexgrad/Kokoro-82M) weights, run by [kokoro-onnx](https://github.com/thewh1teagle/kokoro-onnx) with onnxruntime and espeak-ng (through espeakng-loader and phonemizer) | Apache-2.0; MIT; MIT; GPL-3.0 (espeak-ng, phonemizer) | The co-pilot's voice (Meta's API has no text-to-speech model), in its own venv: `pip install kokoro-onnx==0.6.1` |
+| [Visual Studio Code](https://code.visualstudio.com)'s `code` command | Microsoft's product license | `--show` opens `pins.h` as Wonder's fix lands in it, and the skill `add_part` saves |
 | macOS `say` | Part of macOS | The voice only when `mouth.command` is unset: its voices can't be in a published video |
 | [KiCad](https://www.kicad.org) 10 and its symbol libraries | GPL-3.0; CC-BY-SA-4.0 with KiCad's exception for designs | `kicad-cli` exports the schematics' netlists and runs their electrical rules checks; the symbols are drawn into `hardware/*.kicad_sch` |
 | Muse Spark Open (`meta-models/muse-spark-open-1026`) on [Baseten](https://www.baseten.co) | Meta's open weights, served by Baseten | Questions no tool is needed for (`open` in `models.yaml`) |
@@ -104,11 +118,11 @@ Everything in this repository was written during the hackathon, starting Oct 26,
 | HUD | Runs live with `--hud`, every model call under its own name with its time. Still to come: the board view, the netlist and the diff. |
 | Arm fast path | Live against `mlx_lm.server`: an arm command in about 0.25 s from request to reply, against about 4.4 s through Spark. On 117 phrasings neither was tuned on, rules and model agreeing never moved the arm wrongly. |
 | Arm driver | Runs on the real arm: power-on without a jump, moves at up to 45°/s and 180 mm/s, every motor cut on a stray. |
-| Picks and puts | Run on the real arm by voice: "put my screwdriver on my sticky note" worked in 4 of its last 6 tries, the quickest 31.5 s from the request. The other two: the wrist roll's stop, which moves keep clear of now, and a note out of reach straight down. "Put my screwdriver in my cup" stood it in the mug on end, handle first, in 43 s. |
+| Picks and puts | Run on the real arm by voice: "put my screwdriver on my sticky note" worked in 4 of its last 6 tries, the quickest 31.5 s from the request. The other two: the wrist roll's stop, which moves keep clear of now, and a note out of reach straight down. "Put my screwdriver in my cup" stood it in the mug on end, handle first, in 43 s. In the video's takes, 7 of 25 tries, 42 s at the median; [Results](#measured-in-the-videos-takes-nov-4) has what stopped the rest. |
 | Board reader | Runs live: it reads the flat wires, traces the nets, and reports a wire on the wrong GPIO with the line to fix. |
 | Schematic | `read_schematic` gives the LED board's nets and a clean electrical rules check in under 1 s when Spark asks for the design, and `add_part` reads it too. It isn't sent by default: it labels the LED's net GPIO4, which beside `pins.h` would give Act 1's fix away before the board read finds it. |
 | Spark Open | Runs live on Baseten: a question no tool is needed for goes to Spark Open with the bench facts, which answered "what should I read on GPIO4 when the LED is on?" in 7.4 s; anything else, or a failure, goes to Spark. |
-| Add a part | Ran live on Baseten against the LED board's schematic: Spark Open worked out the screen's wiring in 8.7 s on its first try (the ESP32's hardware SPI pins for the clock and data, free GPIOs for the rest), and KiCad's check passed on the drawn copy, about 1¢ a run. Not in a take yet. |
+| Add a part | Ran live on Baseten against the LED board's schematic: Spark Open worked out the screen's wiring in 8.7 s on its first try (the ESP32's hardware SPI pins for the clock and data, free GPIOs for the rest), and KiCad's check passed on the drawn copy, about 1¢ a run. In the video's takes it worked 28 times of 29, in 11.4 s at the median. |
 | Desk camera and `locate` | Runs live: a screwdriver or a sticky note found on the desk and placed in the arm's frame. |
 | FK/IK and the joint map | 200 of 200 bench poses round-trip within 0.2 mm and 0.5°. All five joint signs checked by hand on the arm. |
 | Budget guard | Every paid call checks tracked spend first. |
@@ -137,6 +151,7 @@ Then type `My LED isn't on. Check my wiring against the firmware.` With `--sim`,
 - With `--voice`, replies are said out loud: the first sentence or two of each, while the HUD shows all of it. The mic drops what it hears while the co-pilot speaks, so it never answers itself. `--no-speak` keeps replies on the HUD, and `--speak` says them without `--voice`. The voice is Kokoro-82M on this Mac: install it in a venv of its own with a short path (`python3 -m venv ~/kokoro-venv && ~/kokoro-venv/bin/pip install kokoro-onnx==0.6.1`), and leave `~/kokoro-venv/bin/python -I scripts/kokoro_server.py` running (`--models` names the folder with kokoro-onnx's v1.0 model files). `mouth:` in `config/models.yaml` picks the voice (the server's `/voices` lists them).
 - `--hud` shows each turn live on the HUD's orb page: open <http://127.0.0.1:8766/> in Chrome (`--hud 8800` picks another port). `hud/README.md` has the details.
 - `--show`, for a take on macOS, opens the HUD (with `--hud`) as a Chrome app window of its own, with no tabs or address bar, and the board's schematic in KiCad's Schematic Editor. The window closes when the agent ends (`wbc/agent/show.py`).
+- For a recorded take, a few switches cut the dead air, all off by default: `hand.idle_at_start` in `config/robot.yaml` (the arm waits in its idle pose from the start), and in `config/models.yaml` `ears.every_utterance` (no wake phrase, with `ears.hangover_s` 1.4 so a slow question isn't cut in two) and a `take:` section with `warm_at_start` (one tiny call to each model), `alongside` (an arm command runs while another turn does) and `lanes` (a "go" to an offered flash, adding the screen and arm commands run together, with no planning call to Spark).
 - `--arm` lets the arm's tools move it. With `hand.go_ahead: request` in `config/robot.yaml`, your request is the go-ahead and the arm moves at once. "Copilot, stop", or "Stop!" on its own, goes straight from the ears to the arm, even mid-turn: it holds where it is with its motors on, and the requests waiting behind it are dropped. `--enter` makes each move wait for Enter at the keyboard, for bench tests. Ctrl-C cuts every motor and the arm drops, so keep a hand near it. `--no-prefetch` skips Act 1's board checks in a session that only moves the arm.
 - Arm commands can skip Spark. Serve Llama 3.2 3B on this Mac in its own venv: `pip install mlx-lm==0.32.2`, then `mlx_lm.server --model mlx-community/Llama-3.2-3B-Instruct-4bit --port 8090 --prompt-cache-bytes 536870912` (the first run downloads 1.8 GB). While it runs, a request naming a thing and a place the rules know (`fast_arm:` in `config/models.yaml`) runs at once if Llama agrees on the kind of command, and the result is said when the move is done. Everything else goes to Spark with no extra wait. `--no-fast-arm` sends everything to Spark, to compare.
 - Every turn is recorded in `.wbc/session.json`, however it ends. Each run starts a new session; `--resume` picks up the last one, and `--sim` keeps its own. A conversation that grows too long, or fails twice in a row, becomes a summary that the next one starts from, and code never runs a tool twice: after a tool has run, it asks what's still to do. The turns a summary folds away are kept, and a request that mentions one brings it back whole, with the exchange around it, in that turn's own message, so "which pin was the LED on earlier?" finds the turn that said so while the instructions stay the same from turn to turn. Matches are scored by BM25 (a rare word counts most, whole words only, evened out for length), by age at 1 / ln(e + age) for up to half, so an old match fades slowly instead of falling off, and by what the turn did: one that changed the bench counts 1.5 times talk. Past the newest 20 notes, an old note the request is about reaches its turn the same way. Spark Open sees the last six turns, so a question can refer back to them.
@@ -174,9 +189,51 @@ flowchart TD
 Once a request reaches Muse Spark, it decides what runs, and every other model sits behind a tool:
 
 - Before Spark's first call of a turn, code fetches the bench facts it will need (`router.prefetch`): `pins.h` and the board read, which is made once at start-up and kept for the session. The schematic isn't among them, since it would give Act 1's fix away; Spark calls `read_schematic` when the design is asked about. Spark calls `read_breadboard` itself when you say the wiring changed.
-- `ask_coder` sends a task, the bench facts and up to 4 files to Muse Wonder. The diff it returns must pass `git apply --check` and a PlatformIO build in a sandbox copy, and then it's staged in the working tree, never committed. A diff that fails either check goes back to Wonder once with the error and the build log, inside the same call, so Spark doesn't spend a round asking again. `build_and_flash` uploads it to the demo board once you say go, and Spark asks whether the LED blinks.
+- `ask_coder` sends a task, the bench facts and up to 4 files to Muse Wonder. The diff it returns must pass `git apply --check` and a PlatformIO build in a sandbox copy, and then it's staged in the working tree, never committed. A diff that fails either check goes back to Wonder once with the error and the build log, inside the same call, so Spark doesn't spend a round asking again. `build_and_flash` uploads it to the demo board once you say go, and Spark asks whether the LED is on.
 - Tool calls in one round run in parallel. Every model id and price lives in `config/models.yaml`.
 - **Budget stop:** every paid call checks tracked spend first. Nothing more goes out once it reaches `budget.limit_usd` ($140, just under the $150 credit), and the HUD warns once past `budget.warn_usd` ($100). Tracked spend lives in `.wbc/spend.json` and uses the estimated prices in `models.yaml`. Calls made elsewhere aren't counted, so keep the spend alert on the Meta Billing page as the backstop.
+
+## The arm's fast path: rules, Llama and a Toolformer-style fine-tune
+
+A spoken arm command shouldn't wait on a cloud model. So arm commands take a hybrid path on this Mac (`wbc/agent/fast_arm.py`), where plain rules and a small local model each get a say, and the arm moves only when they agree:
+
+```mermaid
+flowchart LR
+  req["“Put my screwdriver<br>in my cup”"] --> rules{"Plain rules:<br>an arm command?"}
+  rules -->|"no: a question, a “not”,<br>“I…”, an unknown thing,<br>more than one command"| spark["Muse Spark"]
+  rules -->|"yes: its kind, thing<br>and place"| llama{"Llama 3.2 3B:<br>the same kind?"}
+  llama -->|"no, slow or off"| spark
+  llama -->|yes| run["The tool runs,<br>no Spark call"]
+  run -->|"the move failed"| spark
+```
+
+- **The rules propose, the model can only veto.** The rules take the kind of command from its trigger words ("put", "pick up", "go home"), and the thing and the place from the names in `fast_arm:` in `config/models.yaml`, or, for "put it away", from the place a note gives it in quotes. Llama 3.2 3B, served by `mlx_lm.server` with its prompt cache, then reads the same request and must name the same kind of command. It never supplies a name, so it can't send the arm to something the rules didn't find, and a request the rules don't take costs no model call at all.
+- **Measured on 117 phrasings neither was tuned on:** the model alone would have moved the arm wrongly 20 times, the rules alone 3 times (each now caught by a rule), and the two agreeing never; 49 of the 62 real commands ran locally. A command takes about 0.25 s from request to reply, against about 4.4 s through Spark, and costs nothing.
+
+### Teaching the local model, after Toolformer
+
+Meta's Toolformer [1] teaches a model to use tools from labels it writes itself, keeping only the calls that help. Here a large model teaches a small one, and a label is kept only when its call works on the bench:
+
+1. **Spark writes the requests** (`scripts/toolformer_data.py`): varied spoken requests for 13 intents, arm commands on the recorded desk's screwdriver, tray and cup, and the things that only sound like them (questions, "I put…", "don't…", idioms, wiring requests).
+2. **Spark labels each one exactly as the fast path asks Llama:** the same instructions (`fast_arm.SYSTEM`) and the same bench state.
+3. **Only labels that work are kept.** A label must match the intent its request was written for, and an arm call must run on the recorded bench (`--sim`): a `put_down` labeled while nothing is held fails there and is dropped. Toolformer keeps a call when it lowers the model's loss; this keeps one when it executes. Every phrasing the benchmark tests is left out, so the evaluation stays unseen.
+4. **A LoRA on Modal** (`scripts/toolformer_train.py`): rank 8, alpha 16, on every layer's `q_proj` and `v_proj` [13], the loss on the answer only, 3 epochs at 2e-4 on one A10G, from Llama 3.2 3B Instruct.
+5. **Back on this Mac** (`scripts/toolformer_mlx.py`): PEFT's adapter is transposed and renamed into the layout `mlx_lm.server` loads with `--adapter-path`, over the 4-bit model the fast path serves.
+
+| Measured (Nov 3) | |
+|---|---|
+| Labels kept | 351 of 390, for $0.99 of Spark; 298 to train on and 53 held out |
+| Right tool on the 53 held out (bf16, on Modal) | 47 before, 50 after |
+| The 200 benchmark phrasings on the 4-bit model | the tuned and base models answered 199 the same, both at 0.18 s at the median; the one difference ("put the tweezers where they belong", empty-handed) the base got right |
+
+So the fast path keeps the base model for now: the rules already catch what the model gets wrong, and the gain on held-out labels didn't carry over to the 4-bit model on the benchmark. What would move it: scoring the benchmark's phrasings by hand, so each change is measured; regenerating the thin intents ("let go" kept 5 of 30, since the labeler was told the arm held nothing); training on what the mic actually transcribed rather than what Spark imagines it hears; training the 4-bit model directly, so what's tested is what was trained; and stopping when the held-out score stops improving.
+
+```bash
+.venv/bin/python scripts/toolformer_data.py --exclude <benchmark phrasings>   # about $1: .wbc/toolformer/train.jsonl, valid.jsonl, labels.jsonl
+.venv/bin/modal setup && .venv/bin/modal run scripts/toolformer_train.py   # under $1 on Modal: .wbc/toolformer/adapter-peft
+.venv/bin/python scripts/toolformer_mlx.py                                   # free: .wbc/toolformer/adapter-mlx
+mlx_lm.server --model mlx-community/Llama-3.2-3B-Instruct-4bit --adapter-path .wbc/toolformer/adapter-mlx --port 8090
+```
 
 ## Reading the breadboard
 
@@ -188,7 +245,7 @@ Once a request reaches Muse Spark, it decides what runs, and every other model s
 4. **Wires.** Each mask is thinned to its center line and followed out to both tips. Each tip snaps to the nearest hole within 1.3 mm, and a tip farther from every hole is flagged.
 5. **Netlist and `pins.h`.** Each row's a–e and f–j strips and each rail is a node, wires join nodes, and the ESP32's and the LED's pins sit in holes given in `config/bench.yaml`. Plain code follows each `pins.h` signal from its part's pin to the GPIO its net reaches, and reports any mismatch, its wire and hole, and the line to fix.
 
-**The Act 1 board** is an ESP32 DevKit lighting an LED: one jumper from the DevKit's header to a row, 330 Ω from that row to the LED's anode, and the LED's cathode to ground. The DevKit straddles the center channel, which leaves only column a free beside its pins, so the board carries one signal wire. Watch its blinks with `.venv/bin/pio device monitor -b 115200`. A force sensor board on the same jumper (`hardware/demo_sensor.kicad_sch`) is what `read_sensor` reads. The reader reads flat pre-cut jumpers: loose leads stand about 15 mm off the board, and their tips look up to 4 mm from where they go in.
+**The Act 1 board** is an ESP32 DevKit lighting an LED: one jumper from the DevKit's header to a row, 330 Ω from that row to the LED's anode, and the LED's cathode to ground. The DevKit straddles the center channel, which leaves only column a free beside its pins, so the board carries one signal wire. Its firmware keeps the LED on and says `led on` over serial: watch it with `.venv/bin/pio device monitor -b 115200`. A force sensor board on the same jumper (`hardware/demo_sensor.kicad_sch`) is what `read_sensor` reads. The reader reads flat pre-cut jumpers: loose leads stand about 15 mm off the board, and their tips look up to 4 mm from where they go in.
 
 ```bash
 python scripts/make_carrier.py          # .wbc/vision/carrier.pdf: print at 100%, check the 100 mm bar
@@ -273,3 +330,7 @@ Meta's research first.
 16. Y. Nakamura and H. Hanafusa. *Inverse kinematic solutions with singularity robustness for robot manipulator control.* Journal of Dynamic Systems, Measurement, and Control 108(3), 1986.
 17. J. L. Pech-Pacheco, G. Cristóbal, J. Chamorro-Martínez and J. Fernández-Valdivia. *Diatom autofocusing in brightfield microscopy: a comparative study.* ICPR 2000.
 18. J. Tobin, R. Fong, A. Ray, J. Schneider, W. Zaremba and P. Abbeel. *Domain Randomization for Transferring Deep Neural Networks from Simulation to the Real World.* IROS 2017. [arXiv:1703.06907](https://arxiv.org/abs/1703.06907)
+
+## License
+
+Apache-2.0: see [LICENSE](LICENSE). The reused pieces keep their own licenses, listed [above](#built-during-the-hackathon-and-what-it-builds-on).

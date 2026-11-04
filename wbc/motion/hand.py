@@ -696,6 +696,8 @@ class Hand:
         want = self.opening_for(thing)
         self._move(over, aim=False)  # the way down to just over it re-aims instead
         opened = self.arm.release(want, samples=self._samples("open"))
+        if opened.opening < OPEN_ENOUGH / 100 * want:  # jaws shut hard can stick as they start (Nov 4, 12:15): again
+            opened = self.arm.release(want, samples=self._samples("open again"))
         if opened.opening < OPEN_ENOUGH / 100 * want:
             return {"ok": False, "error": f"the jaws stopped {opened.opening:.0f}% open over the {thing.name}, short "
                                           f"of the {want:.0f}% it needs: something's in their way, so they didn't go "

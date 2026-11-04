@@ -82,9 +82,9 @@ hand:
   # 0.16 and 0.25. The arm can't stay here unpowered, so the end of a session still parks it at rest before the
   # motors go off. Delete the line to have the arm wait where its last move ended.
   idle_deg: [0, 0, 0, 90, 0]
-  # Go there as soon as the agent starts with --arm, rather than at the end of the first move (Nov 3), so no
-  # request starts with the slow move out of the folded rest (7.7 s, run 32).
-  idle_at_start: true
+  # true: go there as soon as the agent starts with --arm, rather than at the end of the first move (Nov 3), so no
+  # request starts with the slow move out of the folded rest (7.7 s, run 32). On for the video's take.
+  idle_at_start: false
 
 # Servo ids, and the signs wbc/motion/joints.py maps raw ticks with: q = sign * (raw - 2047) * 2 pi / 4096 radians.
 # The URDF's zero is lerobot-calibrate's Part 1 L pose (base facing forward, upper arm straight up, forearm and
