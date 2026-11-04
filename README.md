@@ -6,6 +6,15 @@ An AI lab partner for the electronics bench. You talk to it hands free: say "Cop
 
 Built for the Meta Global AI Developer Hackathon (Indie track, Push the Frontier), Oct 26 – Nov 4, 2026.
 
+| Result | How |
+|---|---|
+| **Up to 75% lower** API cost, and **about 90% less** time waiting on models | over the build, from sending Spark the whole conversation, gathering bench facts in code and moving arm commands on-device |
+| **9 s** for Muse Wonder to write the LED fix and compile it | once Spark has found the miswired GPIO in a photo of the breadboard (median, video takes) |
+| **0.25 s** for a spoken arm command, against 4.4 s through the cloud | a hybrid of plain rules and Llama 3.2 3B on this Mac, at no API cost |
+| **0 wrong arm moves** on 117 unseen phrasings | the rules and Llama must agree; the model alone made 20, the rules alone 3 |
+| **11 s** to learn a new part and wire it into the schematic | Muse Spark Open on Baseten, checked by KiCad's electrical rules (median, video takes) |
+| **6 Meta models**, about **$0.06** a full demo | Muse Spark, Muse Wonder, Muse Spark Open, SAM 3.1, Muse Voice Transcribe and Llama 3.2 3B |
+
 ## How it fits together
 
 ```mermaid
@@ -126,6 +135,18 @@ Everything in this repository was written during the hackathon, starting Oct 26,
 | Desk camera and `locate` | Runs live: a screwdriver or a sticky note found on the desk and placed in the arm's frame. |
 | FK/IK and the joint map | 200 of 200 bench poses round-trip within 0.2 mm and 0.5°. All five joint signs checked by hand on the arm. |
 | Budget guard | Every paid call checks tracked spend first. |
+
+## Hardware
+
+| Part | Role |
+|---|---|
+| SO-101 arm, six Feetech STS3215 servos (a 1/345 elbow) on a 1 Mbps bus | picks things up and puts them away |
+| ESP32 DevKit (30-pin DOIT) on a breadboard, an LED and 330 Ω | the demo board the co-pilot debugs and flashes |
+| Two Logitech C920 webcams | one over the breadboard, one 71 cm over the desk |
+| Printed AprilTag sheets (tag36h11) | map each photo to millimeters and the desk to the arm's frame |
+| Razer Seiren Mini microphone | hands-free voice |
+| A Mac with Apple Silicon | runs the agent, Llama 3.2 3B, the Kokoro voice and KiCad |
+| SSD1306 0.96" OLED screen | the part the co-pilot teaches itself to add |
 
 ## Setup (Apple Silicon)
 
@@ -330,6 +351,10 @@ Meta's research first.
 16. Y. Nakamura and H. Hanafusa. *Inverse kinematic solutions with singularity robustness for robot manipulator control.* Journal of Dynamic Systems, Measurement, and Control 108(3), 1986.
 17. J. L. Pech-Pacheco, G. Cristóbal, J. Chamorro-Martínez and J. Fernández-Valdivia. *Diatom autofocusing in brightfield microscopy: a comparative study.* ICPR 2000.
 18. J. Tobin, R. Fong, A. Ray, J. Schneider, W. Zaremba and P. Abbeel. *Domain Randomization for Transferring Deep Neural Networks from Simulation to the Real World.* IROS 2017. [arXiv:1703.06907](https://arxiv.org/abs/1703.06907)
+
+## Author
+
+Raahim Nawaz ([@raahimnawaz](https://github.com/raahimnawaz)), for the Meta Global AI Developer Hackathon 2026.
 
 ## License
 
