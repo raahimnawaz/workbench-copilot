@@ -104,3 +104,4 @@ budget:
     muse-voice-transcribe-1.0: {per_hour: 0.18}                # third-party
     sam-3.1: {per_1k_images: 2.50}                              # Meta's pricing page
     meta-models/muse-spark-open-1026: {in: 1.00, out: 4.00}    # a placeholder: Baseten's price not checked
+

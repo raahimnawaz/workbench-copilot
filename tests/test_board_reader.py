@@ -169,7 +169,7 @@ def test_color_names(bgr, name):
 
 def test_pins_h_defines():
     defines = netlist.read_defines(ROOT / "firmware/dut_demo/include/pins.h")
-    assert defines["LED_PIN"] == (5, 5) and defines["BLINK_MS"] == (250, 6)
+    assert defines["LED_PIN"] == (5, 5) and defines["REPORT_MS"] == (500, 6)
 
 
 def test_module_pins_follow_their_headers():

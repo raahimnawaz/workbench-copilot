@@ -87,19 +87,23 @@ class Stream:
 
     def __init__(self, index: int, width: int = 1920, height: int = 1080, settle_s: float = 1.5,
                  pick_s: float = 1.5):
-        self.index = index
-        self._cap = open_camera(index, width, height)
-        self._ready = time.monotonic() + settle_s + pick_s
+        self.index, self._size, self._wait = index, (width, height), settle_s + pick_s
         self._frames = collections.deque()  # (when, frame) for the last FRESH_S
         self._lock = threading.Lock()
+        self._start()
+
+    def _start(self) -> None:
+        self._cap = open_camera(self.index, *self._size)
+        self._ready = time.monotonic() + self._wait
         self._done = threading.Event()
-        self._thread = threading.Thread(target=self._read, name=f"camera {index}", daemon=True)
+        self._thread = threading.Thread(target=self._read, args=(self._cap, self._done), name=f"camera {self.index}",
+                                        daemon=True)
         self._thread.start()
 
-    def _read(self) -> None:
+    def _read(self, cap, done) -> None:
         try:
-            while not self._done.is_set():
-                ok, f = self._cap.read()
+            while not done.is_set():
+                ok, f = cap.read()
                 if not ok or f is None:
                     time.sleep(0.01)
                     continue
@@ -109,14 +113,14 @@ class Stream:
                     while now - self._frames[0][0] > FRESH_S:
                         self._frames.popleft()
         finally:
-            self._cap.release()
+            cap.release()
 
     def capture(self, index: int, width: int = 1920, height: int = 1080) -> np.ndarray:
         """A still from camera `index`, as capture() gives one: this camera's from its stream, another's from
         capture()."""
         if index != self.index:
             return capture(index, width, height)
-        asked = time.monotonic()
+        asked, restarted = time.monotonic(), False
         while True:
             now = time.monotonic()
             with self._lock:
@@ -124,6 +128,11 @@ class Stream:
             if now >= self._ready and recent and recent[-1][0] > asked:
                 break
             if now > max(asked, self._ready) + STALLED_S:
+                if not restarted:  # a stream that stalls (Nov 4, 12:16) opens again once before giving up
+                    self.close()
+                    self._start()
+                    asked, restarted = time.monotonic(), True
+                    continue
                 raise RuntimeError(f"camera {index} stopped sending frames. {NOT_ALLOWED}")
             time.sleep(0.01)
         frame = max((f for _, f in recent), key=sharpness)

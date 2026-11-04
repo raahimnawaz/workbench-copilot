@@ -63,7 +63,18 @@ hand:
   # Places a put stands what's held in on end, by name, with how tall each stands (mm): a put turns the gripper up
   # from straight down until it's on end over the opening and lets go once its lower end is inside the rim. The
   # height here wins over any given in the request, since it's measured: the mug, just under 4 in.
-  containers: {cup: 98, mug: 98}
+  containers: {cup: 102, mug: 98}  # the cup: the pen cup since Nov 3, about 4 in
+  # Where the arm brings something to you (Nov 3): the line from desk tag 24's center to tag 23's, moved 1 in
+  # toward you, the keyboard side; arm mm, from its tag-24 end. Tag 23 from the Nov 2 photos (the multimeter covered
+  # it on Nov 3; tag 24 read within 0.3 mm of Nov 2). Its middle is about 32 cm from the base.
+  hand_over_mm: [[252.6, -326.5], [29.8, -244.7]]
+  # Things that stand up, by name, with how tall each stands (mm), measured: locate can't see height, and these win
+  # over any given in a request. The screen stands on its long edge for the arm to grip by its ends (a guess until
+  # it's measured).
+  standing_mm: {screen: 25}
+  # A put into a container turns the jaws across the arm on the way over it, not in a stop of their own first. Off:
+  # the one try (Nov 3, 20:01) dropped the screwdriver as the gripper turned up; the stop of its own worked at 20:05.
+  roll_on_the_way: false
   # Where the arm waits between requests, empty-handed, with its motors on (URDF degrees: pan, lift, elbow, wrist flex,
   # wrist roll): the L pose with the gripper pointing straight down, the jaw tips about 230 mm out and 100 mm over the
   # desk. A move that worked and left the jaws empty ends here, and arm_home comes here. Holding gravity there takes
@@ -71,6 +82,9 @@ hand:
   # 0.16 and 0.25. The arm can't stay here unpowered, so the end of a session still parks it at rest before the
   # motors go off. Delete the line to have the arm wait where its last move ended.
   idle_deg: [0, 0, 0, 90, 0]
+  # true: go there as soon as the agent starts with --arm, rather than at the end of the first move (Nov 3), so no
+  # request starts with the slow move out of the folded rest (7.7 s, run 32). On for the video's take.
+  idle_at_start: false
 
 # Servo ids, and the signs wbc/motion/joints.py maps raw ticks with: q = sign * (raw - 2047) * 2 pi / 4096 radians.
 # The URDF's zero is lerobot-calibrate's Part 1 L pose (base facing forward, upper arm straight up, forearm and

@@ -110,6 +110,8 @@ CAGE_MM = 8.0           # back from the tips, toward the palm, that a loosely he
 ON_END_SLOW = 2.0       # times as long as the speed caps allow that the turns on end take, so a loose hold keeps it:
                         # at this, a screwdriver turned to level on end stayed in the jaws
 ROUND = 1.3             # a thing whose length is under this many times its width has no long axis to grip across
+THIN_STANDING_MM = 6.0  # standing up, a thing thinner than this is under the closed tips' gap, so a pick grips it across
+                        # its length instead: a screen stood on its long edge, by its ends (Nov 3)
 IK_MISS_MM = 2.0        # an IK answer further than this from its target is refused
 TILT_MISS_DEG = 3.0     # and one whose gripper points further than this from the pitch asked for
 JAW_MISS_DEG = 5.0      # and one whose jaws close further than this from the line asked for
@@ -149,6 +151,7 @@ class Thing:
     grip_x: float | None = None  # where a pick grips it, when locate found an even stretch to grip off its middle
     grip_y: float | None = None
     grip_width_mm: float | None = None  # how wide it is there
+    by_ends: bool = False  # gripped across its length rather than its width (THIN_STANDING_MM)
 
     @classmethod
     def from_summary(cls, s: dict) -> Thing:
@@ -156,14 +159,20 @@ class Thing:
                    s["height_mm"], s.get("grip_x_mm"), s.get("grip_y_mm"), s.get("grip_width_mm"))
 
     def gripped(self) -> Thing:
-        """Itself as a pick takes it: centred where locate said to grip it, as wide as it is there."""
+        """Itself as a pick takes it: centred where locate said to grip it, as wide as it is there. Something standing
+        up thinner than THIN_STANDING_MM is taken by its ends, as wide as it's long."""
+        if self.height_mm > 0 and self.width_mm < THIN_STANDING_MM and not self.by_ends:
+            return replace(self, width_mm=self.length_mm, by_ends=True)
         if self.grip_x is None:
             return self
         return replace(self, x=self.grip_x, y=self.grip_y, width_mm=self.grip_width_mm or self.width_mm)
 
     @property
     def jaws_deg(self) -> float | None:
-        """The line the jaws close along to hold it across its long axis, or None when it's about round."""
+        """The line the jaws close along to hold it across its long axis (along it when gripped by its ends), or None
+        when it's about round."""
+        if self.by_ends:
+            return line(self.heading_deg)
         if self.length_mm < ROUND * max(self.width_mm, 1.0):
             return None
         return line(self.heading_deg + 90.0)
@@ -189,6 +198,7 @@ class Hand:
         self.across_roll = float(hand.get("across_roll_deg", 0.0))
         self.rest = None   # where power_on found the arm, just inside its ranges: home() goes back there
         idle = hand.get("idle_deg")
+        self.roll_on_the_way = bool(hand.get("roll_on_the_way", False))  # see put_in
         self.idle_q = np.radians(np.asarray(idle, float)) if idle is not None else None  # see idle()
         self.held = None   # the name of what the jaws hold, from pick_up until put_down
         self.held_thing = None  # it, as locate found it, for a put into a container: its length and narrow end
@@ -585,7 +595,10 @@ class Hand:
     def put_in(self, place: Thing, confirm=None, steps: list | None = None) -> dict:
         """Put what the jaws hold into a container, on end: through plan_insert's steps (planned now unless given),
         letting go once its lower end is under the rim, then back up and the jaws closed. The turns on end take
-        ON_END_SLOW times as long as the caps allow. confirm as for pick_up, asked on end over the container."""
+        ON_END_SLOW times as long as the caps allow. The jaws turn across the arm in a stop of their own, before it turns
+        on end, unless robot.yaml's hand.roll_on_the_way turns them on the way over: the one try of that (Nov 3, 20:01)
+        dropped the screwdriver as the gripper turned up, from a grip that may not have held it. The lift step is
+        planned and checked either way. confirm as for pick_up, asked on end over the container."""
         if not self.held and not self.arm.jaw().holding:
             raise Refused("the jaws hold nothing to put in")
         if steps is None:
@@ -594,7 +607,8 @@ class Hand:
             steps = self.plan_insert(place, self.held_thing, tip=self.held_tip)
         lift, high, over, into, up = steps
         try:
-            self._move(lift, aim=False, slow=ON_END_SLOW)
+            if not self.roll_on_the_way:
+                self._move(lift, aim=False, slow=ON_END_SLOW)
             self._move(high, aim=False, slow=ON_END_SLOW)
             if confirm is not None:
                 answer = confirm(f"On end over the {place.name}. Put it in?")
@@ -682,6 +696,8 @@ class Hand:
         want = self.opening_for(thing)
         self._move(over, aim=False)  # the way down to just over it re-aims instead
         opened = self.arm.release(want, samples=self._samples("open"))
+        if opened.opening < OPEN_ENOUGH / 100 * want:  # jaws shut hard can stick as they start (Nov 4, 12:15): again
+            opened = self.arm.release(want, samples=self._samples("open again"))
         if opened.opening < OPEN_ENOUGH / 100 * want:
             return {"ok": False, "error": f"the jaws stopped {opened.opening:.0f}% open over the {thing.name}, short "
                                           f"of the {want:.0f}% it needs: something's in their way, so they didn't go "

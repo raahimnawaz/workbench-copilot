@@ -98,11 +98,13 @@ def test_the_screen_is_drawn_into_a_copy_of_the_schematic_that_kicad_accepts(tmp
     shown = []
     b = bench(tmp_path, FakeChatClient([chat_response("<think>pins…</think>" + json.dumps(GOOD))]))
     b.show = lambda path: shown.append(path) or "schematic: opened in KiCad"
+    b.show_file = lambda path: shown.append(path) or "VS Code: opened"  # the new skill, as it's saved
     original = (tmp_path / "hardware" / "demo_sensor.kicad_sch").read_text()
     result = build_toolbox(b).dispatch("add_part", {"part": "ssd1306_spi_7", "use": "show the force reading"})
     assert result["ok"], result
     assert result["schematic"] == ".wbc/schematics/demo_sensor+ssd1306_spi_7.kicad_sch" == b.layout["schematic"]
-    assert result["erc"] == {"errors": 0} and shown == [tmp_path / result["schematic"]]
+    assert result["erc"] == {"errors": 0} and shown == [tmp_path / result["skill"], tmp_path / result["schematic"]]
+    assert result["learned"].startswith("Spark Open learned a new skill for the SSD1306 OLED screen")
     nets = {n["net"]: n["connects"] for n in schematic.read(tmp_path / result["schematic"])["nets"]}
     assert nets["OLED_CS"] == ["U1 IO5", "U2 CS"] and nets["OLED_SCK"] == ["U1 IO18", "U2 D0"]
     assert "U2 GND" in nets["GND"] and "U2 VCC" in nets["+3V3"]

@@ -216,6 +216,43 @@ def test_a_command_it_takes_runs_and_is_said_with_no_call_to_spark(tmp_path):
     assert turn["calls"][0]["tool"] == "move_thing" and turn["calls"][0]["ok"] and turn["live"]
 
 
+def test_a_command_beside_a_running_turn_runs_at_once_and_joins_the_conversation_after_it(tmp_path):
+    fast, _, hud, b = ready(tmp_path, answer("move_thing", "screwdriver", "cup"))
+    router, api, memory = router_with(tmp_path, fast)
+    command = fast.take("put the screwdriver in the cup")
+    reply, result = router.side_turn("put the screwdriver in the cup", command)
+    assert reply == "The screwdriver is in the cup." and result["ok"] and api.requests == []
+    assert router.history == [] and memory.session.turns == []  # not mid-turn: it waits for the turn to end
+    router.join_side()
+    assert router.history == [{"role": "user", "content": "put the screwdriver in the cup"},
+                              {"role": "assistant", "content": "The screwdriver is in the cup."}]
+    [turn] = memory.session.turns
+    assert turn["calls"][0]["tool"] == "move_thing" and turn["live"]
+
+
+OFFER = "I staged the fix to pin four in your editor, say go and I will flash it?"
+
+
+def test_with_take_lanes_go_and_an_arm_command_run_together_with_no_call_to_spark(tmp_path):
+    fast, _, hud, b = ready(tmp_path, answer("move_thing", "screwdriver", "cup"))
+    router, api, memory = router_with(tmp_path, fast)
+    router.lanes, router.last_reply = {"screen_part": "ssd1306_spi_7"}, OFFER
+    reply = router.run_turn("Go. Also, put my screwdriver in my cup.")
+    assert reply == "The screwdriver is in the cup. Flashed, and I'm checking my own fix: is the LED on now?"
+    assert api.requests == []
+    [turn] = memory.session.turns
+    assert [c["tool"] for c in turn["calls"]] == ["build_and_flash", "move_thing"]
+
+
+@pytest.mark.parametrize("last, text", [("Your LED is dark because the firmware drives pin five.", "go"),  # nothing offered
+                                        (OFFER, "why isn't my LED on?"), (OFFER, "go, and tell me a joke")])
+def test_take_lanes_leave_anything_else_to_spark(tmp_path, last, text):
+    fast, _, _, b = ready(tmp_path)
+    router, api, _ = router_with(tmp_path, fast, [response("r1", text="Sure.")])
+    router.lanes, router.last_reply = {"screen_part": "ssd1306_spi_7"}, last
+    assert router.run_turn(text) == "Sure." and len(api.requests) == 1
+
+
 def test_spark_hears_about_it_in_the_next_turn(tmp_path):
     fast, _, _, _ = ready(tmp_path, answer("move_thing", "screwdriver", "cup"))
     router, api, _ = router_with(tmp_path, fast, [response("r1", text="It's in the cup, as you asked.")])

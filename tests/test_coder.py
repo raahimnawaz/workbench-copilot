@@ -16,7 +16,7 @@ FIX = """Here's the fix.
 @@ -5,2 +5,2 @@
 -#define LED_PIN  5     // the LED's anode, through its jumper
 +#define LED_PIN  4     // the LED's anode, through its jumper
- #define BLINK_MS 250   // the LED is on this long, then off this long
+ #define REPORT_MS 500  // how often it says over serial that the LED is on
 ```
 WHY: The LED's jumper lands on GPIO 4, so pins.h has to match the wire.
 """

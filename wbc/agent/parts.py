@@ -76,6 +76,8 @@ def add(bench, key: str, use: str = "") -> dict:
         return {"ok": False, "error": f"{label}'s wiring didn't check out, twice: " + "; ".join(problems),
                 "seconds": seconds}
     skill = save_skill(bench.root, key, part, wiring, answer, model)
+    if getattr(bench, "show_file", None):  # --show: the new skill on screen as it's saved
+        bench.show_file(skill)
     out = bench.root / ".wbc" / "schematics" / f"{src.stem}+{key}.kicad_sch"
     ref, esp, nets = draw(src, out, key, part, wiring, answer.get("nets"))
     after = schematic.read(out)
@@ -92,7 +94,8 @@ def add(bench, key: str, use: str = "") -> dict:
     shown = bench.show(out) if bench.show else None
     return {"ok": True, "part": key, "by": label, "seconds": seconds, "wiring": wiring, "nets": nets,
             "library": answer.get("library"), "notes": answer.get("notes"), "say": answer.get("say"),
-            "skill": rel(skill), "schematic": rel(out), "erc": after["erc"], **({"shown": shown} if shown else {}),
+            "skill": rel(skill), "learned": f"{label} learned a new skill for the {part.get('what', key)}: how to wire "
+            f"and drive it, saved as {rel(skill)} for next time", "schematic": rel(out), "erc": after["erc"], **({"shown": shown} if shown else {}),
             "board": "unchanged: nothing is wired or flashed"}
 
 

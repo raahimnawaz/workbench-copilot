@@ -32,6 +32,8 @@ TOUCHED = Path(".wbc") / "desk_tags.json"  # where touch saves the tags' centers
 NOMINAL_WIDTH = 1920  # config/desk.yaml's focal_px is for frames this wide
 STRAIGHT_DOWN = 20.0  # degrees of tilt under which one view can't tell the focal length from the camera's height
 OWN_TAGS = 2  # of the desk's own tags a camera has to show for the carrier's to count: the board camera sees those
+ROUND_BELOW = 0.7   # a round container whose outline reads less deep than this share of its width has its far side
+                    # hidden (pens standing in it, Nov 3), so its depth is taken as its width
 GRIP_STEP_MM = 2.0   # the slices along a flat thing's long axis its width is measured in
 GRIP_OFF_MM = 10.0   # how far from its middle toward its narrow end a pick grips something lying flat: on a
                      # screwdriver, its handle 1 cm from the middle toward the tip, near where it balances, so it
@@ -295,14 +297,16 @@ def _grip(d: np.ndarray, middle: np.ndarray, major: np.ndarray, minor: np.ndarra
     return middle + at * major + float(np.nanmean(centres[near])) * minor, float(np.nanmedian(widths[near]))
 
 
-def _standing(shadow: np.ndarray, desk: DeskFit, height_mm: float) -> tuple:
+def _standing(shadow: np.ndarray, desk: DeskFit, height_mm: float, round_: bool = False) -> tuple:
     """(middle, length, width, heading) of something height_mm tall, from its outline on the table.
 
     Seen from the camera, its outline reaches from its base's near edge, which is on the table and so where it looks,
     out to its top's far edge, which the table puts k = H / (H - h) times as far from the point under the camera (H the
     camera's height). Along the line from that point through the outline, the near edge is c - r and the far edge
     k (c + r), which gives the middle c and the footprint's half-size r. Across that line, the top is widest, k times
-    its size."""
+    its size. With round_, for a round container, an outline under ROUND_BELOW times as deep as it's wide has lost
+    its far side, and its middle is half its width out from its near edge: on Nov 3 pens standing in the cup hid
+    its far rim, and the middle read on the near wall, 4 cm short."""
     foot, k = desk.camera[:2], desk.camera[2] / (desk.camera[2] - height_mm)
     out = shadow.mean(axis=0) - foot
     if np.linalg.norm(out) < 1.0:  # right under the camera: the top hides the base
@@ -312,35 +316,40 @@ def _standing(shadow: np.ndarray, desk: DeskFit, height_mm: float) -> tuple:
     (near, far), (left, right) = _span(_along(shadow - foot, radial)), _span(_along(shadow - foot, side))
     middle_r, middle_s = (far / k + near) / 2, (left + right) / (2 * k)
     deep, wide = 2 * (middle_r - near), (right - left) / k
+    if round_ and deep < ROUND_BELOW * wide:
+        middle_r, deep = near + wide / 2, wide
     middle = foot + middle_r * radial + middle_s * side
     return middle, max(deep, wide), min(deep, wide), _heading(radial if deep >= wide else side)
 
 
 def found(mask: np.ndarray, to_arm: np.ndarray, desk: DeskFit, height_mm: float = 0.0, phrase: str = "",
-          score: float | None = None) -> Found:
+          score: float | None = None, round_: bool = False) -> Found:
     """What a mask in the top-down view says about the thing: where it stands, how big it is and which way it lies.
 
     The view is the table, so a mask pixel is where the camera's ray through that bit of the thing meets the table:
-    for a flat thing (height 0) its footprint, and for one standing up an outline stretched away from the camera."""
+    for a flat thing (height 0) its footprint, and for one standing up an outline stretched away from the camera.
+    round_: it's a round container, as _standing takes it."""
     v, u = np.nonzero(mask)
     if len(u) < 3:
         raise ValueError(f"the mask for {phrase or 'it'} is empty")
     shadow = tagmap.to_mm(to_arm, np.column_stack([u, v]).astype(float))
     if height_mm > 0:
-        (middle, length, width, heading), grip = _standing(shadow, desk, height_mm), None
+        (middle, length, width, heading), grip = _standing(shadow, desk, height_mm, round_), None
     else:
         middle, length, width, heading, grip = _lying(shadow)
     return Found(phrase, score, middle, float(height_mm), desk.table_z + height_mm, float(length), float(width),
                  heading, float(np.hypot(*middle)), int(len(u)), *(grip or (None, None)))
 
 
-def locate(frame: np.ndarray, desk: DeskFit, cfg: dict, segment, phrase: str, height_mm: float = 0.0) -> tuple:
+def locate(frame: np.ndarray, desk: DeskFit, cfg: dict, segment, phrase: str, height_mm: float = 0.0,
+           round_: bool = False) -> tuple:
     """SAM's matches for `phrase` on the table as Found, most confident first, with the top-down view SAM saw and its
     Segmentation. `segment(image, phrase)` sends the request: scripts/desk_camera.py binds sam_client.segment to its
     client, config and budget."""
     view, to_arm = top_down(frame, desk, cfg["region_mm"], cfg["px_per_mm"])
     seg = segment(view, phrase)
-    hits = [found(i.full_mask(view.shape), to_arm, desk, height_mm, phrase, i.score) for i in seg.instances if i.area]
+    hits = [found(i.full_mask(view.shape), to_arm, desk, height_mm, phrase, i.score, round_)
+            for i in seg.instances if i.area]
     hits.sort(key=lambda f: -(f.score or 0.0))
     return hits, view, seg
 

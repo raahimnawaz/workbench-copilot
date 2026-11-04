@@ -94,7 +94,7 @@ def plain(text: str) -> str:
     """The request as the rules read it: lower case, without the wake phrase, punctuation or leading fillers."""
     t = (wake_request(text, "copilot") or text).lower().replace("’", "'")
     t = " ".join(re.sub(r"[^a-z0-9' ]+", " ", t).split())
-    return re.sub(r"^((um|uh|okay|ok|hey|so|and|well)\s+)+", "", t)
+    return re.sub(r"^((um|uh|okay|ok|hey|so|and|well|also|great|alright|now|then|sorry|right)\s+)+", "", t)
 
 
 def asks_more(text: str, things: dict, places: dict) -> bool:

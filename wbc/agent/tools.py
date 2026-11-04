@@ -111,6 +111,7 @@ class Bench:
     halted: threading.Event = field(default_factory=threading.Event)  # the spoken stop: no arm move until resume()
     open: tuple | None = None  # (client, model, label): Muse Spark Open on Baseten, for add_part; None without its key
     show: Callable | None = None  # with --show: puts a schematic in KiCad's window (wbc/agent/show.py)
+    show_file: Callable | None = None  # with --show: opens a file in VS Code, such as the skill add_part saves
 
     def halt(self) -> None:
         """The spoken stop, from any thread: a move running stops at its next tick and the arm holds where it got to,
@@ -199,8 +200,11 @@ def _locate_all(bench: Bench, wants: list) -> dict:
     def segment(image, phrase):
         return sam_client.segment(bench.client, bench.models["eyes"], bench.budget, image, phrase)
 
+    listed = {key(name) for name in ((bench.robot_cfg.get("hand") or {}).get("containers") or {})}  # round, open
+
     with ThreadPoolExecutor(max_workers=max(1, len(wants))) as pool:  # SAM takes one concept per request
-        located = list(pool.map(lambda w: desk.locate(frame, fit, cfg, segment, w[0], w[1]), wants))
+        located = list(pool.map(lambda w: desk.locate(frame, fit, cfg, segment, w[0], w[1], key(w[0]) in listed),
+                                wants))
     out = bench.root / ".wbc" / "vision"
     out.mkdir(parents=True, exist_ok=True)
     when = f"{datetime.now():%Y%m%d-%H%M%S}-{next(LOCATES)}"  # two locates at once mustn't share files
@@ -588,6 +592,17 @@ def build_toolbox(bench: Bench) -> Toolbox:
     go = " The user presses Enter before the arm moves." if bench.go_ahead == "enter" else " The arm moves at once."
     listed = (bench.robot_cfg.get("hand") or {}).get("containers") or {}
     containers = {key(name): float(h) for name, h in listed.items()}  # a put stands things in these on end
+    stood = (bench.robot_cfg.get("hand") or {}).get("standing_mm") or {}
+    standing = {key(name): float(h) for name, h in stood.items()}  # things that stand up, as measured: these win too
+
+    def stands(thing: str, height_mm: float) -> float:
+        """Its height from standing_mm when its name is listed there or ends in a listed name ("small screen", "OLED
+        screen"), else the height given."""
+        k = key(thing)
+        for name, mm in standing.items():
+            if k == name or k.endswith(" " + name):
+                return mm
+        return height_mm
 
     @tb.register("pick_up", (
         f"Pick a thing up off the desk with the arm, where locate last found it (locating it first if it hasn't).{go} "
@@ -597,6 +612,7 @@ def build_toolbox(bench: Bench) -> Toolbox:
     def pick_up(thing: str, height_mm: float = 0) -> dict:
         if bench.halted.is_set():
             return dict(SAID_STOP)
+        height_mm = stands(thing, height_mm)
         warm_up()
         t, problem = target(thing, height_mm)
         if problem:
@@ -669,11 +685,18 @@ def build_toolbox(bench: Bench) -> Toolbox:
             return dict(SAID_STOP)
         inside = key(place) in containers  # stood in on end, its height as measured
         place_height_mm = containers.get(key(place), place_height_mm)
+        thing_height_mm = stands(thing, thing_height_mm)
         warm_up()
         found, problem = targets([(thing, thing_height_mm), (place, place_height_mm)])
         if problem:
             return problem
-        t, p = found
+        return carry(found[0], [found[1]], inside)
+
+    def carry(t, spots: list, inside: bool) -> dict:
+        """Pick t up and put it on the first of `spots` (places, Things) the put can be planned for, into it, on end,
+        with `inside`; both planned before anything moves: move_thing's and bring_to_user's."""
+        p = spots[0]
+        thing, place = t.name, p.name
         if bench.sim:
             if bench.sim_held:
                 return {"ok": False, "error": f"refused, nothing moved for it: the jaws already hold the "
@@ -684,10 +707,22 @@ def build_toolbox(bench: Bench) -> Toolbox:
         planned = {}
 
         def plan(hand):  # both, before anything moves: the put from where the pick leaves the arm
+            from wbc.motion.arm import Refused
+
+            nonlocal p
             planned["pick"] = hand.plan_pick(t)
-            planned["put"] = (hand.plan_insert(p, t, start=planned["pick"][-1].q,
-                                               tip=hand.tip_from_jaws(t, planned["pick"][2].q))
-                              if inside else hand.plan_put(p, start=planned["pick"][-1].q))
+            why = None
+            for spot in spots:
+                try:
+                    planned["put"] = (hand.plan_insert(spot, t, start=planned["pick"][-1].q,
+                                                       tip=hand.tip_from_jaws(t, planned["pick"][2].q))
+                                      if inside else hand.plan_put(spot, start=planned["pick"][-1].q))
+                except Refused as e:
+                    why = why or e
+                    continue
+                p = spot
+                return
+            raise why
 
         def run(hand):
             from wbc.motion.arm import Refused
@@ -713,11 +748,46 @@ def build_toolbox(bench: Bench) -> Toolbox:
                     **({"on_end": True} if inside else {})}
 
         result = move(f"Pick up the {t.name} at x {t.x:.0f}, y {t.y:.0f} mm and put it {'in' if inside else 'on'} the "
-                      f"{p.name} at x {p.x:.0f}, y {p.y:.0f} mm?", run, plan=plan)
+                      f"{p.name}" + (f" at x {p.x:.0f}, y {p.y:.0f} mm?" if len(spots) == 1 else "?"), run, plan=plan)
         if result.get("ok") or "steps" in result or result.get("motors_cut") or result.get("halted"):  # it went to it
             bench.seen.pop(key(thing), None)
         forget(result, thing, place)
         return result
+
+    spot = (bench.robot_cfg.get("hand") or {}).get("hand_over_mm")  # a line on the desk in front of the user
+
+    @tb.register("bring_to_user", (
+        "Bring the user a thing on the desk, such as their screen, when they ask for it (\"hand me the screen\", "
+        "\"bring me the screen\"): one desk photo finds it (about $0.0025), then the arm picks it up and sets it down "
+        f"in front of them, on the hand-over spot set in robot.yaml.{go} Name it with a short noun phrase the camera "
+        "can see, and give its height if it's standing up, such as a screen stood on its edge."), {
+        "type": "object",
+        "properties": {
+            "thing": {"type": "string", "description": "what to bring, a short noun phrase, e.g. 'screen'"},
+            "thing_height_mm": {"type": "number", "minimum": 0, "maximum": 300, "default": 0,
+                                "description": "how tall it stands, for something standing up; 0 for something "
+                                               "lying flat"}},
+        "required": ["thing"]}, label="arm")
+    def bring_to_user(thing: str, thing_height_mm: float = 0) -> dict:
+        if bench.halted.is_set():
+            return dict(SAID_STOP)
+        if not spot:
+            return {"ok": False, "error": "no hand-over spot is set (robot.yaml's hand.hand_over_mm), so the arm "
+                                          "doesn't know where to set things down for the user"}
+        thing_height_mm = stands(thing, thing_height_mm)
+        warm_up()
+        found, problem = targets([(thing, thing_height_mm)])
+        if problem:
+            return problem
+        from wbc.motion.hand import Thing
+
+        # Its middle first, then along it toward its nearer end until the arm can reach down there: out at the middle
+        # (32 cm) it can't point straight down 3 cm over the desk. The desk's height comes from the touches, at the put.
+        (x0, y0), (x1, y1) = spot
+        if math.hypot(x0, y0) < math.hypot(x1, y1):
+            (x0, y0), (x1, y1) = (x1, y1), (x0, y0)
+        return carry(found[0], [Thing("hand-over spot", x1 + s * (x0 - x1), y1 + s * (y0 - y1), 0.0)
+                                for s in (0.5, 0.4, 0.3, 0.2, 0.1, 0.0)], inside=False)
 
     @tb.register("arm_home", f"Move the arm to its idle pose (the L pose, the gripper pointing down), or with none set, "
                              f"back to where it rested when its motors came on.{go}",

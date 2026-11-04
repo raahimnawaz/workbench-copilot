@@ -28,6 +28,7 @@ from __future__ import annotations
 import argparse
 import os
 import queue
+import re
 import sys
 import threading
 import time
@@ -101,6 +102,40 @@ def build(sim: bool, router_model: str | None = None, arm: bool = False,
                     prefetch=prefetch, memory=memory, fast=fast, fallback=r.get("fallback"), effort=r.get("effort"),
                     open=open_route)
     return models, budget, hud, router, bench, keyboard
+
+
+WARM_ASK = "Reply with the one word: ok."
+
+
+def warm_models(models: dict, budget, hud) -> None:
+    """models.yaml's take.warm_at_start: one tiny call each to Spark, Wonder and Spark Open, in parallel, so no turn of
+    a take pays a model's cold first call. Off the HUD's call bar; a failure is only noted."""
+    def one(label, call):
+        t0 = time.monotonic()
+        try:
+            call()
+            hud.note(f"warm: {label} answered in {time.monotonic() - t0:.1f} s")
+        except Exception as e:  # noqa: BLE001 - the take goes on; the turn's own call tries again
+            hud.note(f"warm: {label} didn't answer ({type(e).__name__})")
+
+    def responses(model):
+        def call():
+            r = config.meta_client(models).responses.create(model=model, input=WARM_ASK, reasoning={"effort": "low"})
+            budget.add_tokens(model, getattr(r, "usage", None))
+        return call
+
+    jobs = [("Spark", responses(models["router"]["model"])), ("Wonder", responses(models["coder"]["model"]))]
+    opened = config.open_client(models)
+    if opened is not None:
+        model = models["open"]["model"]
+
+        def spark_open():
+            r = opened.chat.completions.create(model=model, max_tokens=16,
+                                               messages=[{"role": "user", "content": WARM_ASK}])
+            budget.add_tokens(model, getattr(r, "usage", None))
+        jobs.append(((models["open"].get("label") or "Spark Open"), spark_open))
+    for label, call in jobs:
+        threading.Thread(target=one, args=(label, call), daemon=True).start()
 
 
 def main(argv=None) -> int:
@@ -179,12 +214,53 @@ def main(argv=None) -> int:
         hud.note("stopped: no arm move starts until the next request"
                  + (f"; dropped what was waiting: {' / '.join(dropped)}" if dropped else ""))
 
+    take = models.get("take") or {}
+    busy = threading.Event()  # set while a turn runs
+    fast_lane = getattr(router, "fast", None) if take.get("alongside") and not args.hear else None
+
+    def alongside(text: str) -> None:
+        """take.alongside: a request heard while a turn runs. An arm command the fast path takes runs now, beside
+        that turn; anything else, and a move that found the arm busy, waits on the queue as before."""
+        command = fast_lane.take(text)
+        if command is None:
+            inbox.put(text)
+            return
+        hud.note(f"alongside the running turn: {text}")
+        bench.resume()  # a new request: after a stop, the arm may move again
+        try:
+            reply, result = router.side_turn(text, command)
+        except Exception as e:  # noqa: BLE001 - the queue's turn explains it
+            hud.note(f"alongside: {type(e).__name__}: {e}")
+            inbox.put(text)
+            return
+        if reply is None:
+            if "another arm move is running" in str(result.get("error", "")):
+                inbox.put(text)  # it waits for the arm, as it would have without this
+            else:
+                reply = f"The arm couldn't do that: {result.get('error') or result.get('stopped') or 'it stopped'}."
+                hud.reply("fast path", reply)
+        if reply and mouth:
+            mouth.speak(reply)
+
+    if take.get("lanes") is not None and hasattr(router, "lanes") and not args.hear:
+        router.lanes = take["lanes"]  # the take's own commands, with no planning call: see Router._lanes
+        if fast_lane is not None:  # their arm clauses run beside the turn
+            router.side_runner = lambda clause: threading.Thread(target=alongside, args=(clause,), daemon=True).start()
+
+    def submit(text: str) -> None:
+        """A request from the keyboard or the ears: onto the queue, or with take.alongside while a turn runs, to
+        alongside() on a thread of its own."""
+        if fast_lane is not None and busy.is_set():
+            threading.Thread(target=alongside, args=(text,), daemon=True).start()
+        else:
+            inbox.put(text)
+
     def typed() -> None:
         for line in sys.stdin:
             if keyboard.offer(line):  # an arm move waiting for Enter takes it
                 continue
             if line.strip():
-                inbox.put(line.strip())
+                submit(line.strip())
         bench.stopped.set()  # the end of the input: no arm move starts now, and a question waiting gets its no
         keyboard.close()
         inbox.put(None)
@@ -196,10 +272,12 @@ def main(argv=None) -> int:
     fast = getattr(router, "fast", None)
     if fast is not None and not args.hear:  # it loads its model on the first request, so that goes now
         threading.Thread(target=fast.start, daemon=True).start()
+    if take.get("warm_at_start") and not args.sim and not args.hear:
+        warm_models(models, budget, hud)
     if not args.hear:  # build the firmware once now, so the session's first patch skips the cold build
         threading.Thread(target=coder.compile_in_sandbox, args=("", config.ROOT, models["coder"]), daemon=True).start()
     if args.voice or args.hear:
-        on_text = (lambda text: None) if args.hear else inbox.put  # listen_forever prints what it heard
+        on_text = (lambda text: None) if args.hear else submit  # listen_forever prints what it heard
         threading.Thread(target=ears.listen_forever, daemon=True,
                          args=(on_text, models["ears"], config.api_key(), budget, hud),
                          kwargs={"muted": mouth.busy if mouth else None, "on_stop": None if args.hear else stop,
@@ -216,7 +294,22 @@ def main(argv=None) -> int:
         if drawn and not args.sim:
             hud.note(show.schematic(config.ROOT / drawn))
             bench.show = show.schematic  # add_part's copy goes in the same window
+        fw = ((bench.layout or {}).get("firmware") or {}).get("file")
+        if fw and not args.sim:  # so the take sees Wonder's fix land in it, at the first pin it defines
+            lines = (config.ROOT / fw).read_text(encoding="utf-8").splitlines()
+            pin = next((i + 1 for i, line in enumerate(lines) if re.match(r"#define\s+\w+_PIN\b", line)), None)
+            hud.note(show.in_editor(config.ROOT / fw, pin))
+        bench.show_file = show.in_editor  # add_part's new skill, as it's saved
 
+    hand_cfg = (getattr(bench, "robot_cfg", None) or {}).get("hand") or {}
+    if args.arm and not args.sim and not args.hear and hand_cfg.get("idle_at_start"):
+        # robot.yaml's hand.idle_at_start (Nov 3): power on and wait in the idle pose from the start, so the first
+        # request doesn't begin with the slow move out of the folded rest. A move like any other: with --enter it waits
+        # for Enter, and requests that come meanwhile wait their turn.
+        hud.note("arm: to its idle pose now, so the first request starts there")
+        result = router.toolbox.dispatch("arm_home", {})
+        why = result.get("error") or result.get("stopped") or "it didn't move"
+        hud.note("arm: waiting in its idle pose" if result.get("ok") else f"arm: still at rest ({why})")
     home = True  # at the end of the input (Ctrl-D) the arm goes back to rest before its motors go off, as --help says
     try:
         while True:
@@ -226,10 +319,14 @@ def main(argv=None) -> int:
             if args.hear:
                 continue
             bench.resume()  # a new request: after a stop, the arm may move again
+            getattr(bench, "seen", {}).clear()  # and a new desk photo: things may have moved since the last request
             question.close()
             hud.turn(text)
+            busy.set()
             try:
                 reply = router.run_turn(text)
+                if hasattr(router, "last_reply"):
+                    router.last_reply = reply  # what a bare "go" next turn answers (take.lanes)
                 if mouth:
                     mouth.speak(reply)
                 question.asked(reply, time.monotonic())
@@ -252,6 +349,11 @@ def main(argv=None) -> int:
                 hud.turn_over(FAILED)
                 if mouth:
                     mouth.speak(FAILED)
+            finally:
+                busy.clear()
+                join_side = getattr(router, "join_side", None)
+                if join_side is not None:  # arm commands that ran beside the turn, now in the conversation
+                    join_side()
     except KeyboardInterrupt:
         home = False
         keyboard.close()  # a move waiting for Enter gets a no, and so does any that asks later

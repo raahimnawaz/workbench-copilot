@@ -74,3 +74,10 @@ def test_the_agent_takes_show(capsys):
     with pytest.raises(SystemExit) as e:
         main(["--show", "--help"])
     assert e.value.code == 0 and "--show" in capsys.readouterr().out
+
+
+def test_a_file_opens_in_vs_code_at_its_line_when_code_is_on_path(tmp_path):
+    opened = []
+    note = show.in_editor(tmp_path / "pins.h", 5, popen=lambda args, **kw: opened.append(args), which=lambda c: "/bin/code")
+    assert opened == [["code", "-g", f"{tmp_path / 'pins.h'}:5"]] and note == "VS Code: pins.h"
+    assert "nothing opened" in show.in_editor(tmp_path / "pins.h", which=lambda c: None)
