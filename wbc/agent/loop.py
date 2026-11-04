@@ -1,7 +1,6 @@
 """Router loop: one model decides, and every other model and the arm sit behind tools.
 
-Router speaks the Meta Model API's Responses endpoint (Muse Spark). ChatRouter speaks Chat Completions,
-for an open-weights model on your own machine (Muse Glimmer) or a partner's server.
+Router speaks the Meta Model API's Responses endpoint (Muse Spark).
 
 With a Memory (wbc/agent/memory.py), every turn is recorded, and when a conversation breaks or fills up, the
 next one starts from a summary of it, or from the recorded turns, instead of from nothing.
@@ -49,13 +48,17 @@ def image_data_url(image) -> str:
 # A question no tool is needed for goes to Spark Open (models.yaml's open): one that opens like a question and asks for
 # nothing to be done. "why" stays with the router, which diagnoses with its tools, and so does "can you ...".
 OPEN_FIRST = re.compile(r"^(what|whats|what's|how|which|when|where|is|are|does|do|should|would)\b")
-OPEN_NOT = re.compile(r"\b(why|fix|flash|move|put|pick|grab|hold|stage|build|compile|remember|forget|again|wrong)\b")
+# "do it", "do that": the answer to the co-pilot's question, which the ears pass without the wake word, is a go-ahead
+OPEN_NOT = re.compile(r"\b(why|fix|flash|move|put|pick|grab|hold|stage|build|compile|remember|forget|again|wrong|add|"
+                      r"do (?:it|that|this|so))\b")
 # Questions Spark Open can't answer from the design and the firmware: what the cameras or the arm would have to look
 # at now, what the notebook, the spend or the conversation holds. They go to the router, which has the tools and
 # the whole conversation.
 OPEN_ELSEWHERE = re.compile(r"\b(where|see|look|find|holding|arm|desk|cup|camera|notebook|note|notes|told|tell|said|"
                             r"say|earlier|before|last|spent|spend|cost|budget|blinking|working|works)\b")
-OPEN_PASS = "PASS"  # Spark Open's whole reply when the bench facts don't answer the question
+OPEN_PASS = "PASS"  # Spark Open's reply when the bench facts don't answer the question
+PASSED = re.compile(rf"\W*{OPEN_PASS}\b", re.IGNORECASE)  # however it's dressed: "**PASS**", "Pass: no reading here"
+THINKING = re.compile(r"<think>.*?(?:</think>|$)", re.S)  # its reasoning, closed or cut off at the token cap
 OPEN_TURNS = 6  # recent turns Spark Open sees, so a question can refer back to them
 OPEN_TURNS_MAX = 2500  # characters of them
 OPEN_TOKENS = 2048  # its reply is two sentences; the rest is room for its reasoning (518 tokens on a one-line question)
@@ -219,7 +222,6 @@ class _RouterBase:
     # Each router supplies _turn (one turn, recording its tool calls in `done` as they return), _chained (whether
     # the next turn continues a conversation) and _summarize (one chain-free call that turns a transcript into a
     # summary).
-    _keeps_failed_turns = False  # whether a turn that raised stays in the conversation the next turn continues
 
     def run_turn(self, user_text: str) -> str:
         """One request, from the user's words to the reply. With memory, the turn is recorded however it ends, the
@@ -260,15 +262,14 @@ class _RouterBase:
                 text = self._turn(asked, done, fetched)  # nothing has acted yet: start over in the new one, once
         except BudgetExceeded:
             self.unfinished = None
-            self._record(user_text, done, "(stopped: the budget's hard stop)", live=self._keeps_failed_turns)
+            self._record(user_text, done, "(stopped: the budget's hard stop)", live=False)
             raise
         except Exception as e:
             self.unfinished = None
             if not transient(e):
                 self._failures += 1
-            if not self._keeps_failed_turns:
-                self._seen = seen  # the conversation never received this turn's facts
-            self._record(user_text, done, f"(the turn failed: {type(e).__name__}: {e})", live=self._keeps_failed_turns)
+            self._seen = seen  # the conversation never received this turn's facts
+            self._record(user_text, done, f"(the turn failed: {type(e).__name__}: {e})", live=False)
             raise
         self.unfinished = None
         self._failures = 0
@@ -303,6 +304,7 @@ class _RouterBase:
         if not OPEN_FIRST.match(words) or OPEN_NOT.search(words) or OPEN_ELSEWHERE.search(words):
             return None
         client, model, label = self.open
+        self.budget.check()  # BudgetExceeded ends the session, as on every paid call
         try:
             facts = []
             for c, res, _ in self._fetch():
@@ -313,13 +315,13 @@ class _RouterBase:
                  + self._open_context(user_text)},
                 {"role": "user", "content": user_text}])
             self.budget.add_tokens(model, r.usage)
-            text = re.sub(r"<think>.*?</think>", "", r.choices[0].message.content or "", flags=re.S).strip()
+            text = THINKING.sub("", r.choices[0].message.content or "").strip()
         except Exception as e:  # noqa: BLE001 - no key, no network, Baseten down: the router answers instead
             self.hud.note(f"{label} didn't answer ({type(e).__name__}: {e}); the router takes it")
             return None
         if not text:
             return None
-        if text.strip(" .").upper() == OPEN_PASS:
+        if PASSED.match(text):
             self.hud.note(f"{label} passed: the bench facts don't answer it, so the router takes it")
             return None
         self.hud.reply(label, text)
@@ -532,75 +534,3 @@ class Router(_RouterBase):
         self._note_spend()
         return r
 
-
-class ChatRouter(_RouterBase):
-    """Same loop over Chat Completions, keeping the history locally."""
-
-    label = "Glimmer"
-    _keeps_failed_turns = True  # a failed turn's messages stay in the local history
-
-    def __init__(self, *args, reasoning: str | None = None, **kwargs):
-        super().__init__(*args, **kwargs)
-        self._reasoning = f"\n\nReasoning strength: {reasoning}" if reasoning else ""
-        self.messages = [{"role": "system", "content": self._instructions()}]
-
-    def _instructions(self) -> str:
-        return super()._instructions() + self._reasoning  # still the system prompt's last line, as before memory
-
-    def _chained(self) -> bool:
-        return len(self.messages) > 1
-
-    def _join(self, user_text: str, reply: str) -> None:
-        self.messages += [{"role": "user", "content": user_text}, {"role": "assistant", "content": reply}]
-
-    def _new_conversation(self) -> None:
-        super()._new_conversation()
-        del self.messages[1:]
-
-    def _summarize(self, text: str) -> str:
-        self.budget.check()
-        r = self.client.chat.completions.create(model=self.model, messages=[
-            {"role": "system", "content": SUMMARY_PROMPT}, {"role": "user", "content": text}])
-        self.budget.add_tokens(self.model, getattr(r, "usage", None))
-        self._note_spend()
-        return (r.choices[0].message.content or "").strip()
-
-    def _turn(self, user_text: str, done: list, fetched: list) -> str:
-        self._ran_out = False
-        self.messages[0]["content"] = self._instructions()  # the memory section may have changed since last turn
-        facts, pictures = self._bench_facts(fetched)
-        self.messages.append({"role": "user", "content": self._message(user_text, facts)})
-        self.messages.extend({"role": "user", "content": [
-            {"type": "text", "text": f"Image from {name}:"},
-            {"type": "image_url", "image_url": {"url": image_data_url(image)}}]} for name, image in pictures)
-        for _ in range(self.max_steps):
-            self.budget.check()
-            r = self.client.chat.completions.create(model=self.model, messages=self.messages,
-                                                    tools=self.toolbox.chat_schemas())
-            self._input_tokens = input_tokens(getattr(r, "usage", None))
-            self.budget.add_tokens(self.model, getattr(r, "usage", None))
-            self._note_spend()
-            msg = r.choices[0].message
-            calls = [Call(c.id, c.function.name, c.function.arguments) for c in (msg.tool_calls or [])]
-            turn = {"role": "assistant", "content": msg.content or ""}
-            if calls:
-                turn["tool_calls"] = [{"id": c.id, "type": "function",
-                                       "function": {"name": c.name, "arguments": c.arguments}} for c in calls]
-            self.messages.append(turn)
-            if not calls:
-                self.hud.reply(self.label, msg.content or "")
-                return msg.content or ""
-            results = self._round(calls, done)
-            images = []
-            for c, res in zip(calls, results):
-                image = _private(res).get("_image")
-                self.messages.append({"role": "tool", "tool_call_id": c.id, "content": json.dumps(res)})
-                if image is not None:
-                    images.append({"role": "user", "content": [
-                        {"type": "text", "text": f"Image from {c.name}:"},
-                        {"type": "image_url", "image_url": {"url": image_data_url(image)}}]})
-            # Tool messages must follow the assistant turn directly, so images go after all of them.
-            self.messages.extend(images)
-        self.hud.note(f"stopped after {self.max_steps} tool rounds")
-        self._ran_out = True
-        return ""

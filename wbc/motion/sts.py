@@ -1,4 +1,4 @@
-"""Minimal Feetech STS3215 client: read and write one servo's registers over the 1 Mbps half-duplex bus.
+"""Minimal Feetech STS3215 client: ping a servo and read its registers over the 1 Mbps half-duplex bus.
 
 LeRobot's bus does calibration and multi-servo sync writes. This module exists so a probe can read one
 servo a few hundred times a second without depending on LeRobot's API, which moved between releases.
@@ -8,41 +8,19 @@ are little-endian.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
-from time import sleep
-
-# EEPROM registers (kept through power cycles; writable only while LOCK is 0)
-ID = 5                # 1 byte. New servos all leave the factory as id 1.
+# EEPROM registers (kept through power cycles)
 MIN_POSITION_LIMIT = 9    # 2 bytes. lerobot-calibrate writes each joint's recorded range here and at 11,
 MAX_POSITION_LIMIT = 11   # 2 bytes, so the servo won't drive past either end
-MAX_TORQUE_LIMIT = 16     # 2 bytes, per mille. TORQUE_LIMIT starts from this at power-up
-UNLOADING_CONDITION = 19  # 1 byte: the status bits (FLAGS) whose protection is switched on
-P_COEFFICIENT = 21        # 1 byte
-PROTECTION_CURRENT = 28   # 2 bytes
-PROTECTIVE_TORQUE = 34    # 1 byte, percent: the most it puts out once overload protection trips
-PROTECTION_TIME = 35      # 1 byte, 10 ms units: how long the output may stay above OVERLOAD_TORQUE before it trips
-OVERLOAD_TORQUE = 36      # 1 byte, percent
-LOCK = 55             # 1 byte, in RAM: 0 unlocks the EEPROM, 1 locks it again
 
 # RAM registers
 TORQUE_ENABLE = 40    # 1 byte
-GOAL_POSITION = 42    # 2 bytes
-TORQUE_LIMIT = 48     # 2 bytes, 0-1000 (per mille of max drive). Resets from EEPROM at power-up.
 FEEDBACK_START = 56   # Present_Position (56) through Present_Current (69-70), read in one transaction
-FEEDBACK_LEN = 15
 
-PING, READ, WRITE = 0x01, 0x02, 0x03
-
-# Status bits every Feetech table names the same way. Bits 1 and 4 mean different things in different tables.
-FLAGS = {0: "voltage", 2: "overheat", 3: "current", 5: "overload"}
+PING, READ = 0x01, 0x02
 
 
 class STSError(IOError):
     pass
-
-
-def flag_names(status: int) -> str:
-    return ", ".join(FLAGS.get(bit, f"bit {bit}") for bit in range(8) if status >> bit & 1) or "none"
 
 
 def checksum(body: bytes) -> int:
@@ -52,39 +30,6 @@ def checksum(body: bytes) -> int:
 def packet(servo_id: int, instruction: int, params: bytes = b"") -> bytes:
     body = bytes([servo_id, len(params) + 2, instruction]) + params
     return b"\xff\xff" + body + bytes([checksum(body)])
-
-
-def sign_magnitude(value: int, sign_bit: int) -> int:
-    magnitude = value & ((1 << sign_bit) - 1)
-    return -magnitude if value & (1 << sign_bit) else magnitude
-
-
-@dataclass
-class Feedback:
-    position: int      # raw ticks, 4096 per turn
-    speed: int         # ticks/s, signed
-    load: int          # per mille of max drive, signed by direction of effort
-    voltage: float     # V
-    temperature: int   # °C
-    moving: bool
-    current: int       # raw units, signed. Check the scale against your servo before converting to mA.
-    error: int         # status flags from the reply (overload, overheat, voltage, ...); 0 when fine
-
-
-def parse_feedback(data: bytes, error: int = 0) -> Feedback:
-    def u16(i: int) -> int:
-        return data[i] | (data[i + 1] << 8)
-
-    return Feedback(
-        position=u16(0),                       # 56
-        speed=sign_magnitude(u16(2), 15),      # 58
-        load=sign_magnitude(u16(4), 10),       # 60: bit 10 is direction
-        voltage=data[6] / 10,                  # 62
-        temperature=data[7],                   # 63
-        moving=bool(data[10]),                 # 66
-        current=sign_magnitude(u16(13), 15),   # 69
-        error=error,
-    )
 
 
 class Bus:
@@ -115,14 +60,6 @@ class Bus:
             raise STSError(f"servo {servo_id}: asked for {length} bytes at {address}, got {len(data)}")
         return err, data
 
-    def write(self, servo_id: int, address: int, data: bytes) -> int:
-        return self._transact(servo_id, WRITE, bytes([address]) + data)[0]
-
-    def write_u8(self, servo_id: int, address: int, value: int) -> int:
-        return self.write(servo_id, address, bytes([value & 0xFF]))
-
-    def write_u16(self, servo_id: int, address: int, value: int) -> int:
-        return self.write(servo_id, address, bytes([value & 0xFF, (value >> 8) & 0xFF]))
 
     def read_u8(self, servo_id: int, address: int) -> int:
         return self.read(servo_id, address, 1)[1][0]
@@ -131,30 +68,6 @@ class Bus:
         _, data = self.read(servo_id, address, 2)
         return data[0] | (data[1] << 8)
 
-    def read_feedback(self, servo_id: int) -> Feedback:
-        err, data = self.read(servo_id, FEEDBACK_START, FEEDBACK_LEN)
-        return parse_feedback(data, err)
-
-    def set_id(self, old_id: int, new_id: int) -> None:
-        """Move one servo to a new id, stored in its EEPROM. Exactly one servo may answer to old_id."""
-        if not 0 <= new_id <= 253:
-            raise ValueError("servo ids run from 0 to 253")
-        if new_id == old_id:
-            return
-        if self.ping(new_id):
-            raise STSError(f"a servo already answers to id {new_id}")
-        self.write_u8(old_id, LOCK, 0)
-        try:
-            self.write_u8(old_id, ID, new_id)
-        except STSError:
-            pass  # the servo may already answer under its new id; the ping below is the real check
-        for _ in range(25):  # saving to EEPROM keeps it busy for a few ms (seen on the real arm)
-            if self.ping(new_id):
-                break
-            sleep(0.02)
-        else:
-            raise STSError(f"servo {old_id} didn't come back as id {new_id}")
-        self.write_u8(new_id, LOCK, 1)
 
     def _transact(self, servo_id: int, instruction: int, params: bytes = b"") -> tuple:
         sent = packet(servo_id, instruction, params)

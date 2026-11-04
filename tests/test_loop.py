@@ -8,7 +8,7 @@ import pytest
 from fakes import FakeChatClient, FakeClient, SilentHud, asked, chat_response, function_call, response
 
 from wbc.agent.budget import Budget
-from wbc.agent.loop import ChatRouter, Router
+from wbc.agent.loop import Router
 from wbc.agent.tools import Bench, Toolbox, build_toolbox
 from wbc.config import ROOT, load_yaml
 
@@ -370,27 +370,6 @@ def test_private_keys_stay_out_of_what_the_model_sees():
     assert all("_timing" not in i["output"] for i in api.requests[1]["input"] if i.get("type") == "function_call_output")
 
 
-def test_chat_router_gets_the_same_bench_facts():
-    router = ChatRouter(FakeChatClient([chat_response(content="ok")]), "glimmer", facts_toolbox([]),
-                        Budget(10, PRICES), SilentHud(), "system", prefetch=PREFETCH)
-    router.run_turn("check my wiring")
-    assert "#define LED_PIN 5" in router.messages[1]["content"]
-
-
-def test_chat_router_message_order():
-    client = FakeChatClient([
-        chat_response(tool_calls=[("t1", "point_at", '{"target": "c41"}')]),
-        chat_response(content="Pointing at c41."),
-    ])
-    router = ChatRouter(client, "glimmer", slow_toolbox([]), Budget(10, PRICES), SilentHud(), "system",
-                        reasoning="medium")
-    assert router.run_turn("point at c41") == "Pointing at c41."
-    roles = [m["role"] for m in router.messages]
-    assert roles == ["system", "user", "assistant", "tool", "user", "assistant"]
-    assert router.messages[0]["content"].endswith("Reasoning strength: medium")
-    assert router.messages[2]["tool_calls"][0]["function"]["name"] == "point_at"
-
-
 def test_toolbox_turns_exceptions_into_results():
     tb = Toolbox()
 
@@ -410,7 +389,7 @@ def test_sim_bench_tools():
     assert scene["ok"] and scene["mismatches"][0]["signal"] == "LED_PIN"
     assert "point_at" not in tb.names(), "Act 1 has no arm step: live, the stub only said it wasn't wired"
     assert "call ask_coder first" in tb.dispatch("propose_patch", {"patch_id": "p9"})["error"]
-    assert set(tb.names()) >= {"read_file", "ask_coder", "propose_patch", "read_breadboard", "look"}
+    assert set(tb.names()) >= {"read_file", "ask_coder", "propose_patch", "read_breadboard", "locate"}
 
 
 def test_a_kept_board_read_is_checked_against_pins_h_as_it_is_now(tmp_path, monkeypatch):
@@ -451,6 +430,8 @@ def test_nothing_the_agent_reads_by_default_says_where_the_bug_is():
     for name, text in seen.items():
         for hint in ("planted", "bug", "gpio 4", "gpio4", "says 15", "wrong pin", "wrong gpio"):
             assert hint not in text.lower(), f"{name} says {hint!r}"
+    prefetched = {p["tool"] for p in load_yaml("models.yaml")["router"]["prefetch"]}
+    assert prefetched <= {"read_breadboard", "read_file"}, "only the board read finds it; the schematic labels GPIO4"
 
 def test_read_file_refuses_paths_outside_the_repo():
     tb = build_toolbox(Bench(ROOT, load_yaml("models.yaml"), None, Budget(10, {})))
@@ -461,7 +442,6 @@ def test_read_file_refuses_paths_outside_the_repo():
 def test_schemas_in_both_formats():
     tb = build_toolbox(Bench(ROOT, load_yaml("models.yaml"), None, Budget(10, {})))
     assert all(s["type"] == "function" and "name" in s for s in tb.schemas())
-    assert all("function" in s and "name" in s["function"] for s in tb.chat_schemas())
 
 
 @pytest.mark.parametrize("name", ["router", "coder", "ears", "eyes"])
@@ -528,6 +508,27 @@ def test_when_the_bench_facts_dont_answer_it_spark_open_passes_and_the_router_an
     assert "PASS" in opened.requests[0]["messages"][0]["content"]
     assert any(e[0] == "note" and "Spark Open passed" in e[1] for e in hud.events)
     assert ("reply", "Spark Open", "PASS.") not in hud.events
+
+
+@pytest.mark.parametrize("request_", ["Do it.", "Do add the screen."])
+def test_a_go_ahead_that_starts_like_a_question_stays_with_the_router(request_):
+    router, opened, spark, _ = open_router([], [response("r1", text="Flashing.")])
+    assert router.run_turn(request_) == "Flashing." and opened.requests == []
+
+
+@pytest.mark.parametrize("reply", ["**PASS**", "PASS!", "Pass: the facts don't say.", "<think>cut off at the cap"])
+def test_a_pass_however_it_comes_dressed_hands_the_question_to_the_router(reply):
+    router, opened, spark, _ = open_router([chat_response(content=reply)], [response("r1", text="About 10 mA.")])
+    assert router.run_turn("What current should the LED draw?") == "About 10 mA." and len(spark.requests) == 1
+
+
+def test_spark_open_is_never_called_past_the_hard_stop():
+    from wbc.agent.budget import BudgetExceeded
+    router, opened, spark, _ = open_router([chat_response(content="About 10 mA.")])
+    router.budget.spent = router.budget.limit
+    with pytest.raises(BudgetExceeded):
+        router.run_turn("What current should the LED draw?")
+    assert opened.requests == []
 
 
 def test_when_spark_open_fails_the_router_answers():

@@ -175,3 +175,9 @@ def test_without_retries_one_call(tmp_path):
     client = FakeClient([NS(output_text="I can't.", usage=usage())])
     out = coder.ask_coder(client, cfg(), budget(), project(tmp_path), "x", [PINS])
     assert out["error"] == "coder returned no diff" and len(client.responses.requests) == 1
+
+
+def test_a_reasoned_no_diff_isnt_sent_back_for_a_diff(tmp_path):
+    client = FakeClient([NS(output_text="WHY: LED_PIN is in pins.h, which wasn't sent.", usage=usage())])
+    out = coder.ask_coder(client, cfg(retries=1), budget(), project(tmp_path), "Fix the LED pin", ["firmware/dut_demo/src/main.cpp"])
+    assert out["ok"] is False and out["declined"] and "pins.h" in out["why"] and len(client.responses.requests) == 1

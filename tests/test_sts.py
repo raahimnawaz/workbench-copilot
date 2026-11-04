@@ -11,10 +11,8 @@ class FakeServo:
         self.id, self.echo, self.corrupt, self.silent = servo_id, echo, corrupt, silent
         self.regs = bytearray(128)
         self.error = 0
-        self.writes = []
         self.out = bytearray()
         self.drop = 0          # replies still to lose, one per request
-        self.ignore = set()    # addresses whose writes are answered but don't land
 
     def set_u16(self, addr, value):
         self.regs[addr], self.regs[addr + 1] = value & 0xFF, value >> 8
@@ -36,11 +34,6 @@ class FakeServo:
         if instr == sts.READ:
             addr, n = params
             reply = bytes(self.regs[addr:addr + n])
-        elif instr == sts.WRITE:
-            addr, payload = params[0], bytes(params[1:])
-            if addr not in self.ignore:
-                self.regs[addr:addr + len(payload)] = payload
-            self.writes.append((addr, payload))
         body = bytes([self.id, len(reply) + 2, self.error]) + reply
         pkt = b"\xff\xff" + body + bytes([sts.checksum(body) ^ (0xFF if self.corrupt else 0)])
         self.out += pkt
@@ -63,47 +56,17 @@ def test_packet_matches_the_protocol():
     assert sts.packet(1, sts.READ, bytes([0x38, 2])) == bytes.fromhex("ffff0104023802be")
 
 
-def test_sign_magnitude():
-    assert sts.sign_magnitude(250, 10) == 250
-    assert sts.sign_magnitude(250 | 0x400, 10) == -250
-    assert sts.sign_magnitude(100 | 0x8000, 15) == -100
-
-
-def test_read_feedback_decodes_every_field():
-    servo = FakeServo()
-    servo.set_u16(56, 2048)
-    servo.set_u16(58, 120 | 0x8000)
-    servo.set_u16(60, 250 | 0x400)
-    servo.regs[62], servo.regs[63], servo.regs[66] = 121, 41, 1
-    servo.set_u16(69, 37)
-    fb = bus_for(servo).read_feedback(6)
-    assert (fb.position, fb.speed, fb.load, fb.voltage, fb.temperature, fb.moving, fb.current) == \
-        (2048, -120, -250, 12.1, 41, True, 37)
-
-
-def test_error_flags_come_back_with_the_data():
-    servo = FakeServo()
-    servo.error = 0x20  # overload
-    assert bus_for(servo).read_feedback(6).error == 0x20
-
-
-def test_writes_land_little_endian():
-    servo = FakeServo()
-    bus_for(servo).write_u16(6, sts.GOAL_POSITION, 0x0812)
-    assert servo.regs[42:44] == b"\x12\x08"
-
-
 def test_echoing_adapter_is_tolerated():
     servo = FakeServo(echo=True)
     servo.set_u16(56, 1234)
-    assert bus_for(servo).read_feedback(6).position == 1234
+    assert bus_for(servo).read_u16(6, sts.FEEDBACK_START) == 1234
 
 
 @pytest.mark.parametrize("kind, match", [("silent", "no reply"), ("corrupt", "checksum")])
 def test_bad_replies_raise(kind, match):
     servo = FakeServo(**{kind: True})
     with pytest.raises(sts.STSError, match=match):
-        bus_for(servo).read_feedback(6)
+        bus_for(servo).read_u16(6, sts.FEEDBACK_START)
 
 
 def test_ping():

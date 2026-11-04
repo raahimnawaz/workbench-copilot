@@ -1,4 +1,4 @@
-"""Run the bench agent: python -m wbc.agent [--sim] [--voice] [--hear] [--speak] [--backup] [--arm] [--enter]
+"""Run the bench agent: python -m wbc.agent [--sim] [--voice] [--hear] [--speak] [--arm] [--enter]
 [--no-prefetch] [--hud] [--show]
 
 Typed lines and spoken requests go on one queue, and the router handles them one turn at a time. Before each turn,
@@ -39,7 +39,7 @@ from wbc.agent.approve import Keyboard
 from wbc.agent.budget import Budget, BudgetExceeded
 from wbc.agent.fast_arm import FastArm
 from wbc.agent.hud import ConsoleHud
-from wbc.agent.loop import ChatRouter, Router
+from wbc.agent.loop import Router
 from wbc.agent.memory import Memory
 from wbc.agent.mouth import Mouth
 from wbc.agent.tools import Bench, add_memory_tools, build_toolbox
@@ -50,12 +50,12 @@ FAILED = "That turn failed. The error is on the screen."
 GO_AHEADS = ("request", "enter")  # robot.yaml's hand.go_ahead: what lets an arm move go
 
 
-def build(sim: bool, backup: bool, router_model: str | None = None, arm: bool = False,
+def build(sim: bool, router_model: str | None = None, arm: bool = False,
           calibration_dir: str | None = None, prefetch: bool = True, resume: bool = False,
           hud_port: int | None = None, enter: bool = False, fast: bool = True):
     models = config.load_yaml("models.yaml")
     budget = Budget.from_config(models, config.ROOT)
-    hud = ConsoleHud() if hud_port is None else WebHud(models, budget, hud_port, backup=backup)
+    hud = ConsoleHud() if hud_port is None else WebHud(models, budget, hud_port)
     meta = hud.watch(config.meta_client(models))  # the coder always runs on the Meta Model API
     robot_cfg = config.load_yaml("robot.yaml")
     go_ahead = "enter" if enter else (robot_cfg.get("hand") or {}).get("go_ahead", "enter")
@@ -96,16 +96,10 @@ def build(sim: bool, backup: bool, router_model: str | None = None, arm: bool = 
     if o and not sim:
         hud.note(f"{o.get('label', 'Spark Open')}: " + ("questions no tool is needed for" if reaches else
                                                       f"off, no {o.get('key_env', 'BASETEN_API_KEY')}"))
-    if backup:
-        b = models["backup"]
-        router = ChatRouter(hud.watch(config.backup_client(models)), b["model"], toolbox, budget, hud, SYSTEM,
-                            max_steps=max_steps, prefetch=prefetch, memory=memory, fast=fast,
-                            reasoning=b.get("reasoning"), open=open_route)
-    else:
-        r = models["router"]
-        router = Router(meta, router_model or r["model"], toolbox, budget, hud, SYSTEM, max_steps=max_steps,
-                        prefetch=prefetch, memory=memory, fast=fast, fallback=r.get("fallback"),
-                        effort=r.get("effort"), open=open_route)
+    r = models["router"]
+    router = Router(meta, router_model or r["model"], toolbox, budget, hud, SYSTEM, max_steps=max_steps,
+                    prefetch=prefetch, memory=memory, fast=fast, fallback=r.get("fallback"), effort=r.get("effort"),
+                    open=open_route)
     return models, budget, hud, router, bench, keyboard
 
 
@@ -117,7 +111,6 @@ def main(argv=None) -> int:
                     help="mic check: print what the mic hears and route nothing (implies --voice)")
     ap.add_argument("--speak", action=argparse.BooleanOptionalAction,
                     help="say each reply's first sentence or two with macOS say (on with --voice)")
-    ap.add_argument("--backup", action="store_true", help="route with the local open-weights model")
     ap.add_argument("--router-model", metavar="ID",
                     help="route with this model instead of router.model, e.g. muse-spark-1.1 to compare speed")
     ap.add_argument("--arm", action="store_true",
@@ -139,7 +132,7 @@ def main(argv=None) -> int:
     args = ap.parse_args(argv)
 
     try:
-        models, budget, hud, router, bench, keyboard = build(args.sim, args.backup, args.router_model, args.arm,
+        models, budget, hud, router, bench, keyboard = build(args.sim, args.router_model, args.arm,
                                                              args.calibration_dir, not args.no_prefetch, args.resume,
                                                              args.hud, args.enter, not args.no_fast_arm)
     except RuntimeError as e:  # missing key or voice extras

@@ -36,7 +36,7 @@ SUMMARY = 144  # the most characters of a reply the page shows
 def page_models(models: dict) -> dict:
     """The page's name (MODELS in the page) for each model id models.yaml gives a role. Any other id is the
     router's: router.model, its fallback, or --router-model."""
-    roles = (("coder", "wonder"), ("eyes", "sam"), ("ears", "transcribe"), ("backup", "open"), ("fast_arm", "llama"),
+    roles = (("coder", "wonder"), ("eyes", "sam"), ("ears", "transcribe"), ("fast_arm", "llama"),
              ("open", "open"))
     return {models[role]["model"]: page for role, page in roles if role in models}
 
@@ -74,7 +74,7 @@ class WebHud(ConsoleHud):
     newest model working, and between calls the last one that worked (the router before the first turn).
     """
 
-    def __init__(self, models: dict, budget, port: int = 8766, backup: bool = False, folder: Path | None = None,
+    def __init__(self, models: dict, budget, port: int = 8766, folder: Path | None = None,
                  clock=time.monotonic):
         self.models = page_models(models)
         self.budget = budget
@@ -83,7 +83,7 @@ class WebHud(ConsoleHud):
         self._pages = []  # a queue for each page connected to /events
         self._flying = {}  # page model: [calls in flight, when the first of them began]
         self._order = []  # the page models of the calls in flight, newest last
-        self._last = "open" if backup else "spark"
+        self._last = "spark"
         self._hearing = self._speaking = False
         self._turn = None  # (number, began, spend before) while a turn runs
         self._heard = {}  # a request from the ears: (began, spend before, transcription seconds) for its turn

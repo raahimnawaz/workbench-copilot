@@ -3,8 +3,7 @@
 read_breadboard photographs the board and reads it with SAM 3.1 (wbc/perception). locate finds things on the desk
 with the desk camera, and pick_up, put_down and arm_home move them with the arm (wbc/motion/hand.py), only with the
 agent started with --arm: at once, the request being the go-ahead, or each only after the user presses Enter, as
-robot.yaml's hand.go_ahead says. The spoken stop (Bench.halt) holds the arm where it got to. look is still a
-stub. With --sim,
+robot.yaml's hand.go_ahead says. The spoken stop (Bench.halt) holds the arm where it got to. With --sim,
 read_breadboard and locate return recorded scenes and the arm's tools pretend to move, so the router and coder can be
 tested with no hardware. remember, recall and forget keep the router's notebook (wbc/agent/memory.py).
 """
@@ -61,12 +60,6 @@ class Toolbox:
     def schemas(self) -> list:
         """Function tools in Responses API format."""
         return [{"type": "function", "name": t.name, "description": t.description, "parameters": t.parameters}
-                for t in self._tools.values()]
-
-    def chat_schemas(self) -> list:
-        """The same tools in Chat Completions format."""
-        return [{"type": "function", "function": {"name": t.name, "description": t.description,
-                                                  "parameters": t.parameters}}
                 for t in self._tools.values()]
 
     def dispatch(self, name: str, args: dict) -> dict:
@@ -248,11 +241,6 @@ def _save_moves(bench: Bench, request: str, log: list) -> None:
                                default=lambda v: v.item() if hasattr(v, "item") else str(v)), encoding="utf-8")
 
 
-def _not_wired(tool: str, day: str) -> dict:
-    return {"ok": False, "error": f"{tool} isn't wired to hardware yet (sheet 10, {day}). "
-                                  f"Run with --sim to use the recorded bench."}
-
-
 def build_toolbox(bench: Bench) -> Toolbox:
     tb = Toolbox()
     patch_ids = (f"p{i}" for i in itertools.count(1))
@@ -353,7 +341,7 @@ def build_toolbox(bench: Bench) -> Toolbox:
         if bench.sim:
             return json.loads((bench.root / "fixtures" / "breadboard_mismatch.json").read_text(encoding="utf-8"))
         if not bench.layout:
-            return _not_wired("read_breadboard", "D3")
+            return {"ok": False, "error": "config/bench.yaml isn't loaded, so the board can't be read"}
         from wbc.perception import camera, reader  # the eyes extra
 
         cam = bench.layout["camera"]
@@ -365,13 +353,6 @@ def build_toolbox(bench: Bench) -> Toolbox:
         result["_timing"] = {"capture": captured, **result["_timing"]}
         return result
 
-    @tb.register("look", "Grab a camera frame, segment the things named in the question, and return masks and an image.", {
-        "type": "object",
-        "properties": {"question": {"type": "string"},
-                       "camera": {"type": "string", "enum": ["overhead", "wrist"], "default": "overhead"}},
-        "required": ["question"]}, label="SAM")
-    def look(question: str, camera: str = "overhead") -> dict:
-        return _not_wired("look", "D3")
 
     @tb.register("read_sensor", (
         "Read the demo board's force sensor live over serial for a few seconds. Returns the readings in "
@@ -552,18 +533,23 @@ def build_toolbox(bench: Bench) -> Toolbox:
 
     def then_idle(hand, result: dict) -> dict:
         """After a move that worked and left the jaws empty, the idle pose (robot.yaml's hand.idle_deg), once the user
-        presses Enter for it too with hand.go_ahead "enter". Not after a stop, and not holding something. A refusal
-        leaves the arm where the move ended, and says so beside the move's own result, which stands."""
+        presses Enter for it too with hand.go_ahead "enter". Not after a stop, and not holding something. The move's
+        own result stands whatever the idle leg does: a refusal or a stop leaves the arm where it got to, and a cut
+        there says the motors are off, beside the result."""
         if not result.get("ok") or hand.idle_q is None or hand.held or bench.halted.is_set() or bench.stopped.is_set():
             return result
         if bench.go_ahead == "enter" and not bench.confirm("Move the arm to its idle pose?"):
             return {**result, "idle": "the user didn't press Enter, so the arm stays where the move ended"}
-        from wbc.motion.arm import Refused
+        from wbc.motion.arm import Halted, Refused, Tripped
 
         try:
             hand.idle()
         except Refused as e:
             return {**result, "idle": f"refused, so the arm stays where the move ended: {e}"}
+        except Halted as e:
+            return {**result, "idle": f"the user said stop on the way to the idle pose, so it {e}"}
+        except Tripped as e:
+            return {**result, "idle": f"the motors were cut on the way to the idle pose: {e}", "motors_cut": True}
         return {**result, "idle": "the arm waits in its idle pose"}
 
     def warm_up():
@@ -749,8 +735,10 @@ def build_toolbox(bench: Bench) -> Toolbox:
             hand.home()
             return {"ok": True, "home": True}
 
-        return move("Move the arm to its idle pose?" if bench.hand and bench.hand.idle_q is not None
-                    else "Move the arm back to where it rested?", home, idle_after=False)
+        idles = (bench.robot_cfg.get("hand") or {}).get("idle_deg") is not None  # what home() will see
+        held = bench.hand.held if bench.hand is not None else None  # nothing yet before the hand opens
+        return move("Move the arm to its idle pose?" if idles and not held else "Move the arm back to where it rested?",
+                    home, idle_after=False)
 
     return tb
 
