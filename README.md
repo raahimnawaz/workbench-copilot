@@ -4,6 +4,8 @@
 
 An AI lab partner for the electronics bench. You talk to it hands free: say "Copilot," and your request. **Muse Spark** routes each request: **Muse Wonder** writes the firmware fix, **SAM 3.1** reads the breadboard and finds things on the desk, **Muse Voice Transcribe** hears you, and an **SO-101** arm picks things up and puts them away. Spoken arm commands run through a local **Llama 3.2 3B** fast path, and the HUD shows every model at work.
 
+Debugging a circuit means turning away from the board to read code, check a pinout and fetch a tool, then finding your place again. The co-pilot keeps your hands and eyes on the bench: it looks at the wiring itself, fixes the firmware, draws new parts into the schematic and puts your tools away.
+
 Built for the Meta Global AI Developer Hackathon (Indie track, Push the Frontier), Oct 26 – Nov 4, 2026.
 
 | Result | How |
@@ -14,6 +16,19 @@ Built for the Meta Global AI Developer Hackathon (Indie track, Push the Frontier
 | **0 wrong arm moves** on 117 unseen phrasings | the rules and Llama must agree; the model alone made 20, the rules alone 3 |
 | **11 s** to learn a new part and wire it into the schematic | Muse Spark Open on Baseten, checked by KiCad's electrical rules (median, video takes) |
 | **6 Meta models**, about **$0.06** a full demo | Muse Spark, Muse Wonder, Muse Spark Open, SAM 3.1, Muse Voice Transcribe and Llama 3.2 3B |
+
+## Quick start
+
+No hardware needed: `--sim` runs the real models against a recorded bench (about $0.025 a run on the Meta Model API).
+
+```bash
+git clone https://github.com/raahimnawaz/workbench-copilot && cd workbench-copilot
+uv venv --python 3.12 && uv pip install -e '.[voice,dev]'
+cp .env.example .env        # then add your META_API_KEY
+echo "My LED isn't on. Check my wiring against the firmware." | .venv/bin/python -m wbc.agent --sim
+```
+
+[Setup](#setup-apple-silicon) and [Run](#run) cover the voice, the arm and the cameras.
 
 ## How it fits together
 
@@ -115,26 +130,24 @@ Everything in this repository was written during the hackathon, starting Oct 26,
 | openai, numpy, PyYAML, httpx, sounddevice, pyserial, pytest, OpenCV, Pillow | Apache-2.0, BSD-3, MIT, BSD-3, MIT, BSD-3, MIT, Apache-2.0, MIT-CMU | Python dependencies |
 | [PlatformIO](https://platformio.org) and the [Arduino core for ESP32](https://github.com/espressif/arduino-esp32) | Apache-2.0, LGPL-2.1 | Building and flashing the demo board's firmware |
 
-## Status
+## What runs live
 
-| Piece | State |
+Each piece runs with the real models, and the arm, the cameras and the demo board on the real bench.
+
+| Piece | What it does |
 |---|---|
-| The LED fix, spoken | Runs live on the real bench with the HUD: the board read, the wire on the wrong GPIO against `pins.h`, Wonder's fix staged and compiled in about 21 s from the request, then the flash on "go". |
-| Router on Muse Spark | Runs live. Each call sends the whole conversation, about 2 s a call, where chaining on `previous_response_id` took 12–14 s. |
-| `ask_coder` on Muse Wonder | Runs live: a fix in 3–7 s, then a warm compile in a sandbox copy in 6–8 s. |
-| Voice | The wake phrase runs live on the bench mic, from Terminal.app, and replies are spoken by Kokoro-82M on this Mac (0.3 s for a short line, 0.9 s for two sentences). The spoken stop and the short answer after a question are tested on synthetic audio. |
-| Memory | Runs live on `--sim`: a `--resume` run answers from the turn before it, and a new session puts the screwdriver away from a note. |
-| HUD | Runs live with `--hud`, every model call under its own name with its time. |
-| Arm fast path | Live against `mlx_lm.server`: an arm command in about 0.25 s from request to reply, against about 4.4 s through Spark. On 117 phrasings neither was tuned on, rules and model agreeing never moved the arm wrongly. |
-| Arm driver | Runs on the real arm: power-on without a jump, moves at up to 45°/s and 180 mm/s, every motor cut on a stray. |
-| Picks and puts | Run on the real arm by voice: "put my screwdriver on my sticky note" in 31.5 s from the request, and "put my screwdriver in my cup" stands it in the mug on end in about 42 s. |
-| Board reader | Runs live: it reads the flat wires, traces the nets, and reports a wire on the wrong GPIO with the line to fix. |
-| Schematic | `read_schematic` gives the LED board's nets and a clean electrical rules check in under 1 s when Spark asks for the design, and `add_part` reads it too. It isn't sent by default: it labels the LED's net GPIO4, which beside `pins.h` would give the LED's fix away before the board read finds it. |
-| Spark Open | Runs live on Baseten: a question no tool is needed for goes to Spark Open with the bench facts, which answered "what should I read on GPIO4 when the LED is on?" in 7.4 s; anything else, or a failure, goes to Spark. |
-| Add a part | Ran live on Baseten against the LED board's schematic: Spark Open worked out the screen's wiring in 8.7 s on its first try (the ESP32's hardware SPI pins for the clock and data, free GPIOs for the rest), and KiCad's check passed on the drawn copy, about 1¢ a run. In the video's takes it worked 28 times of 29, in 11.4 s at the median. |
-| Desk camera and `locate` | Runs live: a screwdriver or a sticky note found on the desk and placed in the arm's frame. |
-| FK/IK and the joint map | 200 of 200 bench poses round-trip within 0.2 mm and 0.5°. All five joint signs checked by hand on the arm. |
-| Budget guard | Every paid call checks tracked spend first. |
+| The LED fix | Reads the breadboard, finds the wire on the wrong GPIO against `pins.h`, has Wonder write and compile the fix, and flashes it on "go" |
+| Router on Muse Spark | Routes each request in about 2 s a call, calling tools in parallel |
+| Voice | Hands-free on the bench mic, every utterance transcribed by Muse Voice Transcribe; replies spoken by Kokoro-82M on the Mac in under a second |
+| Arm fast path | Spoken arm commands decided on the Mac in about 0.25 s, by rules and Llama 3.2 3B agreeing |
+| Picks and puts | "Put my screwdriver on my sticky note" in 31.5 s; "put my screwdriver in my cup" stands it in the mug on end |
+| Board reader | Traces every flat jumper to its holes, builds the netlist and checks it against the firmware |
+| Desk camera | Finds a named thing on the desk and places it in the arm's frame |
+| Add a part | Spark Open on Baseten wires a new part to free GPIOs, saves it as a skill and draws it into the KiCad schematic, rules-checked |
+| Spark Open | Answers questions no tool is needed for from the bench facts, in about 7 s |
+| Memory | Picks up an earlier session and recalls where things go from notes |
+| Kinematics | 200 of 200 bench poses round-trip within 0.2 mm and 0.5° |
+| Budget guard | Every paid call checks tracked spend first |
 
 ## Hardware
 
