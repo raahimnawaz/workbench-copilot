@@ -8,7 +8,7 @@ from fakes import FakeChatClient, FakeClient, SilentHud, chat_response, response
 from wbc.agent import fast_arm
 from wbc.agent.budget import Budget
 from wbc.agent.fast_arm import FastArm, call, goes, parse, rules, said
-from wbc.agent.loop import ChatRouter, Router
+from wbc.agent.loop import Router
 from wbc.agent.memory import Memory, Notebook, Session
 from wbc.agent.tools import Bench, build_toolbox
 from wbc.config import ROOT, load_yaml
@@ -236,27 +236,21 @@ def test_a_move_that_fails_goes_to_spark_to_explain_without_running_again(tmp_pa
         "move_thing"] and not turn["calls"][0]["ok"]
 
 
-def test_the_backup_router_runs_it_first_too(tmp_path):
-    fast, _, _, _ = ready(tmp_path, answer("pick_up", "screwdriver"))
-    client = FakeChatClient([chat_response("Picked up.")])
-    router = ChatRouter(client, "glimmer", fast.toolbox, Budget(10, {"glimmer": {"in": 0, "out": 0}}), fast.hud,
-                        "system", fast=fast)
-    assert router.run_turn("grab the screwdriver") == "I've got the screwdriver."
-    assert router.messages[1:] == [{"role": "user", "content": "grab the screwdriver"},
-                                   {"role": "assistant", "content": "I've got the screwdriver."}]
-    assert client.chat.completions.requests == []
-
-
 @pytest.mark.parametrize("text", ["Copilot, put my screwdriver in my cup and add my screen.",
                                   "Put my screwdriver in my cup, and while it does that, add my screen.",
                                   "Add my screen, and put my screwdriver in my cup.",
-                                  "While you put my screwdriver in my cup, add my screen to the board."])
+                                  "While you put my screwdriver in my cup, add my screen to the board.",
+                                  "Put my screwdriver in my cup and take a reading.",
+                                  "Move the screwdriver to the tray, then go home.",
+                                  "Put the screwdriver in the cup and put the tweezers on the sticky note."])
 def test_a_request_with_a_clause_for_something_else_goes_to_spark_whole(text):
     """So Spark runs the arm's move and the other request side by side, instead of the fast path dropping half."""
     assert fast_arm.rules(text, None, THINGS, PLACES)["tool"] == "not_mine"
 
 
 @pytest.mark.parametrize("text", ["Copilot, pick my screwdriver up and put it on the sticky note.",
-                                  "Put my screwdriver in my cup, please.", "Put my screwdriver in my cup, thanks."])
+                                  "Put my screwdriver in my cup, please.", "Put my screwdriver in my cup, thanks.",
+                                  "Um, put my screwdriver in my cup.", "Co-pilot, put my screwdriver in my cup.",
+                                  "Put my screwdriver, in my cup."])
 def test_clauses_that_all_move_the_arm_or_are_courtesy_stay_on_the_fast_path(text):
     assert fast_arm.rules(text, None, THINGS, PLACES)["tool"] == "move_thing"

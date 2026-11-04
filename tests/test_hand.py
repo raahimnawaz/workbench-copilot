@@ -1203,7 +1203,7 @@ def test_no_prefetch_skips_the_bench_facts_fetched_before_each_turn(monkeypatch,
     monkeypatch.setattr(agent, "build", lambda *a: built.append(a) or parts)
     monkeypatch.setattr(agent.coder, "compile_in_sandbox", lambda *a: None)
     monkeypatch.setattr("sys.stdin", io.StringIO("pick up the screwdriver\n"))
-    assert agent.main(flags) == 0 and built[0][5] is prefetch
+    assert agent.main(flags) == 0 and built[0][4] is prefetch
     monkeypatch.setattr(agent.config, "meta_client", lambda models: NS())  # so building needs no key
     router = build(*built[0])[3]
     assert bool(router.prefetch) is prefetch  # without it, the router fetches nothing before a turn
@@ -1423,7 +1423,42 @@ def test_a_put_that_leaves_the_jaws_empty_ends_in_the_idle_pose_and_a_pick_doesn
 def test_arm_home_goes_to_the_idle_pose_and_enter_asks_for_it():
     arm, robot, _ = make(FakeFollower(start=pose(REST)), table=TABLE)
     b, tb, asked = bench(arm_port="fake")
-    b.hand = Hand(arm, IDLE)
+    b.robot_cfg, b.hand = IDLE, Hand(arm, IDLE)  # both from robot.yaml, as in the agent
     assert tb.dispatch("arm_home", {}) == {"ok": True, "idle": True}
     assert asked == ["Move the arm to its idle pose? The motors come on first."]
     assert np.degrees(arm.read().q) == pytest.approx([0, 0, 0, 90, 0], abs=0.5)
+
+
+def test_the_first_arm_home_of_a_session_asks_about_the_idle_pose_it_moves_to(monkeypatch):
+    arm, robot, _ = make(FakeFollower(start=pose(REST)), table=TABLE)
+    b, tb, asked = bench(arm_port="fake")
+    b.robot_cfg = IDLE
+    monkeypatch.setattr(tools, "_open_hand", lambda bench: setattr(bench, "hand", bench.hand or Hand(arm, IDLE))
+                        or bench.hand)
+    assert tb.dispatch("arm_home", {}) == {"ok": True, "idle": True}
+    assert asked == ["Move the arm to its idle pose? The motors come on first."], "asked before the hand opened"
+
+
+@pytest.mark.parametrize("stop, said", [(driver.Halted("stopped partway through a move"), "said stop"),
+                                        (driver.Tripped("the elbow strayed 6°"), "motors were cut")])
+def test_a_stop_or_a_cut_on_the_way_to_the_idle_pose_leaves_the_put_standing(monkeypatch, stop, said):
+    arm, robot, _ = make(FakeFollower(start=pose(REST)), table=TABLE)
+    b, tb, _ = bench(arm_port="fake", go_ahead="request")
+    b.hand = Hand(arm, IDLE)
+    b.seen["screwdriver"] = (SCREWDRIVER, time.monotonic())
+    b.seen["tray"] = (TRAY, time.monotonic())
+    robot.between["gripper"] = (1400, math.inf)
+    assert tb.dispatch("pick_up", {"thing": "screwdriver"})["ok"]
+
+    def idle():
+        raise stop
+    monkeypatch.setattr(b.hand, "idle", idle)
+    put = tb.dispatch("put_down", {"thing": "tray"})
+    assert put["ok"] and put["put"] == "screwdriver" and said in put["idle"], "the put happened, and the stop is said"
+    assert put.get("motors_cut", False) == isinstance(stop, driver.Tripped)
+
+
+def test_the_fast_path_says_the_arm_is_in_the_idle_pose_not_at_rest():
+    from wbc.agent.fast_arm import said
+    assert said("arm_home", {"ok": True, "idle": True}) == "In the idle pose, with the motors on."
+    assert said("arm_home", {"ok": True, "home": True}) == "Back at rest."

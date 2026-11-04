@@ -18,8 +18,8 @@ from wbc.agent import memory as memory_module
 from wbc.agent import tools
 from wbc.agent.approve import Keyboard
 from wbc.agent.budget import Budget, BudgetExceeded
-from wbc.agent.loop import ChatRouter, Router
-from wbc.agent.memory import (SUMMARY_PROMPT, Memory, Notebook, Session, call_record, context_full, embed_client,
+from wbc.agent.loop import Router
+from wbc.agent.memory import (SUMMARY_PROMPT, Memory, Notebook, Session, call_record, context_full,
                               importance, matches, ranked, recency, render, terms, transient,
                               turn_record)
 from wbc.agent.tools import Toolbox, add_memory_tools
@@ -141,7 +141,8 @@ def test_recall_weighs_a_word_by_how_rare_it_is_and_only_whole_words_count(tmp_p
 
 def test_terms_keep_the_words_that_tell_things_apart():
     assert terms("What's on the screwdriver's handle? Check pins.h, GPIO4 and both boards.") == {
-        "screwdriver", "handle", "check", "pins.h", "gpio4", "both", "board"}
+        "screwdriver", "handle", "check", "pins.h", "pin", "gpio4", "both", "board"}
+    assert terms("flash this") == {"flash"}, "a common word stays out, not as 'thi'"
     assert terms("Copilot, is it there now?") == set()
 
 
@@ -163,6 +164,13 @@ def test_past_the_newest_twenty_an_old_note_the_request_is_about_reaches_its_tur
     assert nb.older("where does the screwdriver go", 30) == [], "every note is in view already"
 
 
+def test_a_compound_is_found_by_its_parts(tmp_path):
+    nb = Notebook(tmp_path / "notebook.jsonl")
+    nb.add("pins.h says LED_PIN 5 on the demo board.")
+    nb.add("The screwdriver goes in the cup.")
+    assert [n["id"] for n in nb.search("LED pin")] == ["n1"] and [n["id"] for n in nb.search("pins")] == ["n1"]
+
+
 def test_bm25_counts_a_word_less_in_a_long_text_than_in_a_short_one_about_it():
     short, long_ = "Screwdriver in the cup.", " ".join(["The arm moved the screwdriver"] + ["and then more words"] * 12)
     scores = matches("screwdriver", [short, long_])
@@ -178,36 +186,6 @@ def test_a_turn_that_changed_the_bench_counts_more_than_talk():
     texts = ["The LED fix: GPIO 4.", "The LED: GPIO 4."]
     assert ranked("LED", texts) == [1, 0], "alike, the newer first"
     assert ranked("LED", texts, [1.5, 1]) == [0, 1], "the one that changed the bench first"
-
-
-def test_with_embeddings_a_match_by_meaning_counts_beside_words():
-    texts = ["The 330 ohm resistor read 1.2 V.", "The screwdriver is in the cup."]
-
-    def embed(batch):
-        return [[1.0, 0.0] if ("resistor" in t or "R1" in t) else [0.0, 1.0] for t in batch]
-
-    assert ranked("What did R1 show?", texts) == [], "no shared word"
-    assert ranked("What did R1 show?", texts, embed=embed) == [0]
-
-    def down(batch):
-        raise ConnectionError("no embedding server")
-
-    assert ranked("the screwdriver", texts, embed=down) == [1], "the words alone"
-
-
-def test_the_embedding_client_is_off_without_a_server_and_makes_each_vector_once(monkeypatch):
-    assert embed_client(None) is None and embed_client({"model": "m"}) is None
-    calls = []
-
-    class Embeddings:
-        def create(self, model, input):
-            calls.append(list(input))
-            return NS(data=[NS(embedding=[float(len(t))]) for t in input])
-
-    monkeypatch.setattr("openai.OpenAI", lambda **kw: NS(embeddings=Embeddings()))
-    embed = embed_client({"base_url": "http://127.0.0.1:9000/v1", "model": "m"})
-    assert embed(["ab", "abc"]) == [[2.0], [3.0]] and embed(["abc", "a"]) == [[3.0], [1.0]]
-    assert calls == [["ab", "abc"], ["a"]], "each text sent once"
 
 
 def test_a_line_that_isnt_a_whole_note_is_skipped_kept_and_counted(tmp_path):
@@ -799,48 +777,6 @@ def test_a_place_from_the_notebook_still_needs_locate_and_enter(tmp_path, monkey
     assert asked[1].startswith("Put it down on the sticky note at x 208, y -167 mm?"), "from locate, not the note"
 
 
-# Glimmer with memory
-
-
-def test_chat_router_compacts_and_starts_over(tmp_path):
-    memory = make_memory(tmp_path, compact_at_tokens=400)  # every fake chat reply reports 500 prompt tokens
-    client = FakeChatClient([chat_response(content="hi"), chat_response(content="Said hi."),
-                             chat_response(content="ok")])
-    router = ChatRouter(client, "glimmer", Toolbox(), Budget(10, PRICES), SilentHud(), "system", memory=memory,
-                        reasoning="medium")
-    router.run_turn("hello")
-    router.run_turn("again")
-    summary_call = client.chat.completions.requests[1]
-    assert summary_call["messages"][0]["content"] == SUMMARY_PROMPT and "tools" not in summary_call
-    assert summary_call["messages"][1]["content"].startswith("Earlier summary:")
-    assert [m["role"] for m in router.messages] == ["system", "user", "assistant"]
-    assert "Said hi." in router.messages[0]["content"]
-    assert router.messages[0]["content"].endswith("Reasoning strength: medium")
-
-
-def test_chat_router_sends_the_bench_facts_in_full_to_a_new_conversation(tmp_path):
-    memory = make_memory(tmp_path, compact_at_tokens=400)
-    client = FakeChatClient([chat_response(content="hi"), chat_response(content="Said hi."),
-                             chat_response(content="ok")])
-    router = ChatRouter(client, "glimmer", arm_toolbox([]), Budget(10, PRICES), SilentHud(), "system", memory=memory,
-                        prefetch=[{"tool": "read_breadboard"}])
-    router.run_turn("hello")
-    router.run_turn("again")
-    assert router.messages[1]["content"].startswith("again")
-    assert "mismatches" in router.messages[1]["content"] and "unchanged" not in router.messages[1]["content"]
-
-
-def test_chat_router_keeps_a_failed_turn_in_its_conversation(tmp_path):
-    memory = make_memory(tmp_path)
-    router = ChatRouter(FakeChatClient([chat_response(content="hi"), ConnectionError("reset")]), "glimmer", Toolbox(),
-                        Budget(10, PRICES), SilentHud(), "system", memory=memory)
-    router.run_turn("hello")
-    with pytest.raises(ConnectionError):
-        router.run_turn("again")
-    assert [t["live"] for t in memory.session.turns] == [True, True]
-    assert "again" not in router._instructions(), "in the history already, so not carried as text too"
-
-
 # Starting the agent
 
 
@@ -852,12 +788,11 @@ def config_copy(tmp_path, monkeypatch, **memory):
     path.write_text(yaml.safe_dump(models), encoding="utf-8")
     monkeypatch.setattr(config, "ROOT", tmp_path)
     monkeypatch.setattr(config, "meta_client", lambda models: FakeClient([]))
-    monkeypatch.setattr(config, "backup_client", lambda models: FakeChatClient([]))
 
 
 def test_build_gives_the_router_a_memory_from_models_yaml_and_its_tools(tmp_path, monkeypatch):
     config_copy(tmp_path, monkeypatch, compact_at_tokens=1234, keep_turns=3, notebook_in_prompt=2)
-    router = agent.build(sim=True, backup=False)[3]
+    router = agent.build(sim=True)[3]
     assert {"remember", "recall", "forget"} <= set(router.toolbox.names())
     memory = router.memory
     assert memory.session.path == tmp_path / ".wbc" / "session-sim.json", "--sim keeps its own"
@@ -866,13 +801,12 @@ def test_build_gives_the_router_a_memory_from_models_yaml_and_its_tools(tmp_path
 
 
 @pytest.mark.parametrize("resume", [False, True])
-def test_build_resumes_only_when_asked_with_either_router(tmp_path, monkeypatch, resume):
+def test_build_resumes_only_when_asked(tmp_path, monkeypatch, resume):
     config_copy(tmp_path, monkeypatch)
     saved(tmp_path / ".wbc" / "session-sim.json", "Rehearsed Act 1.")
-    for backup in (False, True):
-        router = agent.build(sim=True, backup=backup, resume=resume)[3]
-        assert router.memory.session.summary == ("Rehearsed Act 1." if resume else "")
-        assert "remember" in router.toolbox.names()
+    router = agent.build(sim=True, resume=resume)[3]
+    assert router.memory.session.summary == ("Rehearsed Act 1." if resume else "")
+    assert "remember" in router.toolbox.names()
 
 
 @pytest.mark.parametrize("flags, resume", [([], False), (["--resume"], True)])
@@ -887,7 +821,7 @@ def test_resume_is_off_unless_asked_and_the_hud_says_what_memory_holds(monkeypat
     monkeypatch.setattr(agent, "build", lambda *a: built.append(a) or parts)
     monkeypatch.setattr(agent.coder, "compile_in_sandbox", lambda *a: None)
     monkeypatch.setattr("sys.stdin", io.StringIO("hello\n"))
-    assert agent.main(flags) == 0 and built[0][6] is resume
+    assert agent.main(flags) == 0 and built[0][5] is resume
     assert ("note", "memory: new session · 1 note in the notebook") in hud.events
 
 

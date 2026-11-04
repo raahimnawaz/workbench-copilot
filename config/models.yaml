@@ -18,7 +18,8 @@ router:
     # A board read takes 6-9 s, 5 of them opening the camera, and a second read of the same wiring can miss a
     # wire. The kept read is checked against pins.h each turn, so a staged fix shows.
     - {tool: read_breadboard, keep: true}
-    - {tool: read_schematic, keep: true}   # the design, from KiCad: under 1 s
+    # Not the schematic: it labels the LED's net GPIO4, which beside pins.h would give Act 1's fix away before the
+    # board read finds it. Spark calls read_schematic itself when the design is asked about, and add_part reads it.
     - {tool: read_file, args: {path: firmware/dut_demo/include/pins.h}}
 
 coder:
@@ -80,11 +81,6 @@ open:                               # Muse Spark Open on Baseten: questions no t
   label: Spark Open
   timeout_s: 20                     # then the router answers instead
 
-backup:                             # open-weights router served on your own machine
-  model: muse-glimmer-30b           # the name your local server registers
-  base_url: http://127.0.0.1:8080/v1
-  reasoning: medium                 # Glimmer reads "Reasoning strength: <value>" from the system prompt
-
 memory:                             # what outlives a conversation (wbc/agent/memory.py); both files stay in .wbc/
   session_file: .wbc/session.json   # each turn's record and a summary; --resume picks it up (--sim: session-sim.json)
   notebook_file: .wbc/notebook.jsonl  # facts the router keeps with `remember`, which every session sees
@@ -93,7 +89,6 @@ memory:                             # what outlives a conversation (wbc/agent/me
   compact_at_tokens: 60000
   keep_turns: 40                    # ...or once this many turns have piled up since the last summary
   notebook_in_prompt: 20            # newest notes the router sees every turn; recall finds the rest
-  # embeddings: {base_url: http://127.0.0.1:8091/v1, model: <name>}   # optional: matches by meaning beside words
 
 budget:
   # Hard stop. Every paid call checks it first, and the agent, coder, voice and smoke test stop once
@@ -108,5 +103,4 @@ budget:
     muse-wonder-1.0: {in: 4.00, cached_in: 0.20, out: 20.00}    # third-party
     muse-voice-transcribe-1.0: {per_hour: 0.18}                # third-party
     sam-3.1: {per_1k_images: 2.50}                              # Meta's pricing page
-    muse-glimmer-30b: {in: 0, out: 0}                           # runs locally
     meta-models/muse-spark-open-1026: {in: 1.00, out: 4.00}    # a placeholder: Baseten's price not checked

@@ -20,6 +20,7 @@ from pathlib import Path
 from wbc.perception.schematic import FONT, HIDDEN, library_symbol, sexpr_block, turned
 
 ASK_TOKENS = 4096  # the answer is a few hundred tokens; the rest is room for Spark Open's reasoning
+ASK_TIMEOUT_S = 180  # its own, where a spoken question gives up at open.timeout_s: this waits for that reasoning
 POWER = {"GND": "GND", "VCC": "3V3", "VDD": "3V3", "VIN": "3V3", "3V3": "3V3"}  # where a pin with that name goes
 INPUT_ONLY = {34, 35, 36, 39}
 AVOID = {0: "a boot pin", 1: "the USB serial's TX", 2: "a boot pin", 3: "the USB serial's RX",
@@ -181,7 +182,8 @@ def learn(client, model: str, budget, key: str, part: dict, use: str, board: str
     answer, problems = None, []
     for _ in range(2):
         budget.check()
-        r = client.chat.completions.create(model=model, max_tokens=ASK_TOKENS, messages=messages)
+        r = client.chat.completions.create(model=model, max_tokens=ASK_TOKENS, messages=messages,
+                                           timeout=ASK_TIMEOUT_S)
         budget.add_tokens(model, r.usage)
         text = r.choices[0].message.content or ""
         answer = parse(text)

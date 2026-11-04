@@ -52,9 +52,3 @@ def open_client(models: dict):
     return OpenAI(base_url=o["base_url"], api_key=key, timeout=o.get("timeout_s", 20), max_retries=0) if o and key \
         else None
 
-
-def backup_client(models: dict):
-    """Client for the open-weights router on your own machine (any OpenAI-compatible server)."""
-    from openai import OpenAI
-
-    return OpenAI(base_url=models["backup"]["base_url"], api_key=os.environ.get("BACKUP_API_KEY", "local"))

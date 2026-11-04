@@ -164,7 +164,7 @@ def ask_coder(client, cfg: dict, budget, root: Path, task: str, files: list, fac
         budget.add_tokens(cfg["model"], getattr(r, "usage", None))
         result = _checked(getattr(r, "output_text", "") or "", root, cfg, timing)
         result["attempts"] = attempt + 1
-        if result["ok"]:
+        if result["ok"] or result.get("declined"):  # a reasoned "can't, X wasn't sent" isn't a failed check
             break
     return result
 
@@ -173,6 +173,8 @@ def _checked(text: str, root: Path, cfg: dict, timing: dict) -> dict:
     """Wonder's answer checked: its diff must apply to the working tree and compile in the sandbox."""
     diff, why = split_diff(text)
     if not diff:
+        if why:  # coder.md: with no diff, a WHY line says what's missing, which the router acts on
+            return {"ok": False, "error": "coder returned no diff", "why": why, "declined": True, "_timing": timing}
         return {"ok": False, "error": "coder returned no diff", "raw": text[:400], "_timing": timing}
     ok, log = git_apply(diff, root)
     if not ok:

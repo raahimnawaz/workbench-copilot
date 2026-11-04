@@ -67,8 +67,7 @@ class Feed:
 
 def test_every_model_with_a_role_has_its_place_on_the_page():
     pages = page_models(MODELS)
-    assert pages == {WONDER: "wonder", SAM: "sam", EARS: "transcribe", MODELS["backup"]["model"]: "open",
-                     MODELS["fast_arm"]["model"]: "llama", MODELS["open"]["model"]: "open"}
+    assert pages == {WONDER: "wonder", SAM: "sam", EARS: "transcribe", MODELS["fast_arm"]["model"]: "llama", MODELS["open"]["model"]: "open"}
     block = re.search(r"const MODELS = \{(.*?)\n\};", PAGE, re.S).group(1)
     assert set(pages.values()) | {"spark"} <= set(re.findall(r"^\s+(\w+): \{ name:", block, re.M))
     line = next(line for line in PAGE.splitlines() if "const live = {" in line)
@@ -192,7 +191,7 @@ def test_a_watched_client_times_every_call_even_one_that_fails(hud):
     drain(page)
     chat = hud.watch(FakeChatClient([RuntimeError("no server")]))
     with pytest.raises(RuntimeError):
-        chat.chat.completions.create(model=MODELS["backup"]["model"], messages=[])
+        chat.chat.completions.create(model=MODELS["open"]["model"], messages=[])
     assert drain(page) == [["begin", "open"], ["setModel", "open"], ["call", "open", 1]]
     assert isinstance(chat, Watched) and chat.chat.completions.requests  # the rest is the client's own
 
@@ -201,14 +200,12 @@ def test_hud_puts_the_web_hud_in_front_of_every_model_client(tmp_path, monkeypat
     shutil.copytree(ROOT / "config", tmp_path / "config")
     monkeypatch.setattr(config, "ROOT", tmp_path)
     monkeypatch.setattr(config, "meta_client", lambda models: FakeClient([]))
-    monkeypatch.setattr(config, "backup_client", lambda models: FakeChatClient([]))
-    for backup in (False, True):
-        _, _, hud, router, bench, _ = agent.build(True, backup, hud_port=0)
-        try:
-            assert isinstance(hud, WebHud) and isinstance(router.client, Watched) and bench.client._hud is hud
-            assert hud._shown == ("idle", "open" if backup else "spark")
-        finally:
-            hud.close()
+    _, _, hud, router, bench, _ = agent.build(True, hud_port=0)
+    try:
+        assert isinstance(hud, WebHud) and isinstance(router.client, Watched) and bench.client._hud is hud
+        assert hud._shown == ("idle", "spark")
+    finally:
+        hud.close()
 
 
 @pytest.mark.parametrize("flags, port", [([], None), (["--hud"], 8766), (["--hud", "8800"], 8800)])
@@ -231,7 +228,7 @@ def test_each_turn_and_how_it_ended_go_to_the_hud(monkeypatch, flags, port):
     monkeypatch.setattr(agent, "build", lambda *a: built.append(a) or parts)
     monkeypatch.setattr(agent.coder, "compile_in_sandbox", lambda *a: None)
     monkeypatch.setattr("sys.stdin", io.StringIO("check my wiring\nflash it\n"))
-    assert agent.main(flags) == 0 and built[0][7] == port
+    assert agent.main(flags) == 0 and built[0][6] == port
     assert hud.shown == [("turn", "check my wiring"), ("turn_over", ""), ("turn", "flash it"),
                          ("turn_over", agent.FAILED)]
 

@@ -82,7 +82,10 @@ AWAY = re.compile(r"\b(away|back|where (it|they) (goes|go|belongs?|lives?))\b")
 # moves the arm ("pick it up and put it on the note") or is a courtesy: one asking for anything else goes to Spark,
 # which runs the arm's tool and the other side by side in one round, instead of the fast path dropping half of it.
 CLAUSE = re.compile(r"[,;]|\b(?:and|then|while|also|after that|plus)\b")
-COURTESY = frozenset("please thanks thank you copilot now ok okay for me".split())
+# What a clause may hold besides the command: courtesy, fillers the ears' commas cut off ("um, put..."), the wake word
+COURTESY = frozenset("please thanks thank you copilot co pilot now ok okay for me um uh er so yeah well hey right "
+                     "alright and".split())
+PRONOUN = re.compile(r"\b(it|that|this|them|those|these)\b")
 NOTE = re.compile(r'\bthe (.+?) goe?s? .*?"(.+?)"', re.IGNORECASE)  # The screwdriver goes on the "sticky note" in ...
 INSIDE = ("cup", "mug", "tray", "box", "bin", "bowl", "jar", "case", "drawer")  # it goes in these, not on them
 
@@ -94,14 +97,30 @@ def plain(text: str) -> str:
     return re.sub(r"^((um|uh|okay|ok|hey|so|and|well)\s+)+", "", t)
 
 
-def asks_more(text: str) -> bool:
-    """Whether a clause of the request asks for something besides moving the arm (see CLAUSE)."""
+def asks_more(text: str, things: dict, places: dict) -> bool:
+    """Whether the request asks for more than one arm command (see CLAUSE): a clause for something else ("add my
+    screen"), a clause with an arm word but nothing to move ("take a reading", "get me the schematic"), two things
+    named ("put the screwdriver in the cup and the tweezers on the note"), or a move and going home together. A
+    clause that only names a place or a thing ("put my screwdriver, in my cup") goes on from the one before it."""
+    named_things, kinds = set(), []
     for part in CLAUSE.split(text.lower()):
         part = plain(part)
-        words = set(part.split()) - COURTESY
-        if words and not any(r.search(part) for r in (*TRIGGER.values(), AWAY)):
+        if not set(part.split()) - COURTESY:
+            continue
+        thing, place = named(things, part), named(places, part)
+        if thing:
+            named_things.add(thing)
+        if not any(r.search(part) for r in (*TRIGGER.values(), AWAY)):
+            if thing or place:
+                continue
             return True
-    return False
+        if TRIGGER["arm_home"].search(part):
+            kinds.append("home")
+        elif thing or place or PRONOUN.search(part) or AWAY.search(part):
+            kinds.append("carry")
+        else:
+            return True
+    return len(named_things) > 1 or ("home" in kinds and len(kinds) > 1)
 
 
 def named(table: dict, t: str) -> str | None:
@@ -131,7 +150,7 @@ def rules(text: str, holding: str | None, things: dict, places: dict, notes: lis
     """The arm command the rules find in `text`, with what the arm holds (a thing's name, or None), or not_mine.
     A thing has to be named: a bare "that" or "it" is Spark's."""
     t = plain(text)
-    if not t or NOT_A_COMMAND.search(t) or asks_more(text):
+    if not t or NOT_A_COMMAND.search(t) or asks_more(text, things, places):
         return call("not_mine")
     if TRIGGER["arm_home"].search(t):
         return call("arm_home")
@@ -195,7 +214,7 @@ def said(tool: str, result: dict) -> str:
             return f"I think I've got the {result['holding']}: the jaws closed all the way, so I can't be sure."
         return f"I've got the {result['holding']}."
     if tool == "arm_home":
-        return "Back at rest."
+        return "In the idle pose, with the motors on." if result.get("idle") else "Back at rest."
     return "Done."
 
 

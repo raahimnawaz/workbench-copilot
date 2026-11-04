@@ -14,7 +14,7 @@ student is the fast path's Llama 3.2 3B (wbc/agent/fast_arm.py), and the steps a
 Out: .wbc/toolformer/train.jsonl and valid.jsonl, chat messages as the fast path sends them, with the label as the
 answer; and labels.jsonl, every request with its label and why it was kept or dropped.
 
-    .venv/bin/python scripts/toolformer_data.py --per 30          # PAID: about $0.65 for 13 intents
+    .venv/bin/python scripts/toolformer_data.py --per 30          # PAID: about $1 for 13 intents ($0.99 on Nov 3)
 """
 from __future__ import annotations
 
