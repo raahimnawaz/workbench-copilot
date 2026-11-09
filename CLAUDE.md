@@ -8,6 +8,7 @@ Entry for the Meta Global AI Developer Hackathon (Indie track, Push the Frontier
 - Never read, print or commit `.env`, which holds `META_API_KEY` (and `BASETEN_API_KEY`).
 - The demo may only show work built during the event. Keep the README's built-vs-reused table accurate, and add any reused code with its license.
 - Nothing the agent reads by default may say where Act 1's bug is: not `pins.h`, `main.cpp`, `system.md`, the tool descriptions or the `--sim` recording, and a test checks it. This file, the README and `bench.yaml` describe the bug, and Spark sees them only through `read_file`. Start a take without `--resume`, with the notebook moved aside.
+- **The arm's results come from Raahim.** Don't write, restore or argue for a success count, a miss tally or a "first worked" date for the arm's picks and puts, in the README, the blueprint, a write-up or a review. Raahim has turned these down more than once (most recently Nov 9) and says the ones written so far were wrong. Ask Raahim before stating any.
 
 ## Commands (Python 3.12 via uv, which lives in `~/.local/bin`)
 ```bash
