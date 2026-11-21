@@ -4,6 +4,8 @@
 
 An AI lab partner for the electronics bench. You talk to it hands free: say "Copilot," and your request. **Muse Spark** routes each request: **Muse Wonder** writes the firmware fix, **SAM 3.1** reads the breadboard and finds things on the desk, **Muse Voice Transcribe** hears you, and an **SO-101** arm picks things up and puts them away. Spoken arm commands run through a local **Llama 3.2 3B** fast path, and the HUD shows every model at work.
 
+> **Builds on** two earlier projects, as ideas rather than code: [singularity-robust-control](https://github.com/raahimnawaz/singularity-robust-control) studies the damped-least-squares IK the arm uses, and [vision_demos](https://github.com/raahimnawaz/vision_demos) closed the same perception → decision → action loop with a gesture-driven robot base.
+
 Debugging a circuit means turning away from the board to read code, check a pinout and fetch a tool, then finding your place again. The co-pilot keeps your hands and eyes on the bench: it looks at the wiring itself, fixes the firmware, draws new parts into the schematic and puts your tools away.
 
 Built for the Meta Global AI Developer Hackathon (Indie track, Push the Frontier), Oct 26 – Nov 4, 2026.
