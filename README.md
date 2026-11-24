@@ -149,6 +149,7 @@ Voice, the arm, the cameras and the HUD are covered in [docs/setup.md](docs/setu
 
 - **Stronger servos and gravity-aware planning:** 12 V STS3215s for reach with a load, and the URDF's link masses used to refuse poses a joint can't hold before the arm moves.
 - **Reinforcement learning in simulation:** the URDF already carries every link's mass and inertia, so grasping odd shapes and recovering from slips can be trained in MuJoCo with domain randomisation, then fine-tuned on the arm under the driver's same safety limits.
+- **A camera on the arm's wrist:** an eye-in-hand view for the last few centimetres, where the desk camera's 0.5 mm per pixel and a cup's height error add up. Hand-eye calibration (OpenCV's `calibrateHandEye`, from the same AprilTags) ties it to the gripper, metric depth from a single camera gives the distance to a thing, and visual servoing corrects the final approach. It also sees whether the jaws actually closed on the tool.
 - **V-JEPA 2** on the desk camera, to tell a held tool from empty jaws, which the servos can't.
 - **ROS 2:** each skill as a node, actions for long moves, tf2 for the camera and arm frames, and MoveIt's collision checks.
 
@@ -175,7 +176,7 @@ More in [docs/design.md](docs/design.md#after-the-hackathon).
 | [docs/design.md](docs/design.md) | Design notes, measured results, references |
 | [docs/credits.md](docs/credits.md) | What was built here and what it reuses, with licenses |
 
-Builds on two earlier projects, as ideas rather than code: [singularity-guard](https://github.com/raahimnawaz/singularity-guard) (the damped least-squares IK the arm uses) and [ros2-vision-nodes](https://github.com/raahimnawaz/ros2-vision-nodes) (the same perception → decision → action loop on a gesture-driven robot base).
+Builds on three earlier projects, as ideas rather than code: [singularity-guard](https://github.com/raahimnawaz/singularity-guard) (the damped least-squares IK the arm uses), [ros2-vision-nodes](https://github.com/raahimnawaz/ros2-vision-nodes) (the same perception → decision → action loop on a gesture-driven robot base) and [monocular-vo](https://github.com/raahimnawaz/monocular-vo) (calibrated capture, PnP and metric depth from Depth Anything v2, the basis for the planned wrist camera).
 
 ## Research it draws on
 
