@@ -66,6 +66,18 @@ Each piece runs with the real models, and the arm, the cameras and the demo boar
 - **Reinforcement learning, in simulation and then on the arm.** The URDF already carries every link's mass and inertia, so the arm can be simulated (MuJoCo, say) and policies trained there for what the written skills do least well: grasping odd shapes, standing a thing in the cup, recovering from a slip. Randomizing the desk, the lighting and the masses in simulation [18] is what lets a policy carry over to the real arm, where it would fine-tune on real runs with the reward read from the desk camera (SAM finding the thing where it should be), every action still under the driver's speed and torque caps and its cuts.
 - **ROS 2.** Each skill as its own node, with actions for long moves (progress, and cancelling for the spoken stop), rosbag logs, tf2 for the camera and arm frames, and MoveIt's collision checks. The driver stays the bus's one owner.
 
+### Stronger algorithms, and when each would pay off
+
+The arm's algorithms are the standard ones, chosen because they fit a five-joint arm, known things and an open desk. Each has a stronger successor; the line after each says when it would be worth the change.
+
+- **Geometric IK.** The lift, elbow and wrist-flex axes are parallel, so the pan angle comes from the target's bearing (allowing for the shoulder's small sideways offset) and the rest is a planar three-link solve. It is exact, constant-time and gives every solution, so a plan can choose elbow-up or elbow-down, and prefer the branch that keeps the wrist roll off its stop, instead of taking whichever one damped least squares [16] converges to. *Worth it now:* small work, and damped least squares stays as the cross-check.
+- **Time-optimal path parameterization.** TOPP-RA [19] times a path to the fastest its joint speed and acceleration limits allow; the quintic [15] uses one duration for the whole move. *Worth it now:* the same caps with shorter picks and puts.
+- **Constrained IK and motion planning.** IK as a quadratic program (Pink) takes joint limits and keep-out zones as constraints rather than as refusals after the solve; RRT-Connect [20] through OMPL, or GPU trajectory optimization with cuRobo [21], plans around obstacles. *Worth it for a cluttered desk;* on today's open desk every straight move is already clear.
+- **A learned policy, measured against the written skills.** LeRobot supports the SO-101 directly, so teleoperated demonstrations of standing the screwdriver in the cup can train ACT [22], Diffusion Policy [23] or SmolVLA [24]. Both run the same trials, the policy under the driver's same caps and cuts. *Worth it as a comparison:* a policy generalizes to new tasks and recovers from a bump, while the written skills keep their checks before anything moves and can say why a move was refused.
+- **Learned grasps.** A depth camera and a grasp network such as Contact-GraspNet [25] or AnyGrasp propose grasps for any shape. *Worth it for unfamiliar things;* the things on this desk have measured sizes in the config.
+- **Compliance.** Impedance control [26] lets a joint give under contact. The STS3215s have no torque sensing, so the nearest version backs off on their current draw, once its units (register 69) are confirmed. *Worth it for contact tasks* such as the probe hold.
+- **Hybrid recall.** BM25 [11] beside embedding search, fused by reciprocal rank [27] and reranked, finds a turn by meaning as well as by its rare words. *Marginal at today's session sizes.*
+
 ## References
 
 Meta's research first.
@@ -88,3 +100,12 @@ Meta's research first.
 16. Y. Nakamura and H. Hanafusa. *Inverse kinematic solutions with singularity robustness for robot manipulator control.* Journal of Dynamic Systems, Measurement, and Control 108(3), 1986.
 17. J. L. Pech-Pacheco, G. Cristóbal, J. Chamorro-Martínez and J. Fernández-Valdivia. *Diatom autofocusing in brightfield microscopy: a comparative study.* ICPR 2000.
 18. J. Tobin, R. Fong, A. Ray, J. Schneider, W. Zaremba and P. Abbeel. *Domain Randomization for Transferring Deep Neural Networks from Simulation to the Real World.* IROS 2017. [arXiv:1703.06907](https://arxiv.org/abs/1703.06907)
+19. H. Pham and Q.-C. Pham. *A New Approach to Time-Optimal Path Parameterization Based on Reachability Analysis.* IEEE Transactions on Robotics 34(3), 2018. [arXiv:1707.07239](https://arxiv.org/abs/1707.07239)
+20. J. J. Kuffner and S. M. LaValle. *RRT-Connect: An Efficient Approach to Single-Query Path Planning.* ICRA 2000.
+21. B. Sundaralingam et al. *cuRobo: Parallelized Collision-Free Robot Motion Generation.* ICRA 2023. [arXiv:2310.17274](https://arxiv.org/abs/2310.17274)
+22. T. Z. Zhao, V. Kumar, S. Levine and C. Finn. *Learning Fine-Grained Bimanual Manipulation with Low-Cost Hardware.* RSS 2023. [arXiv:2304.13705](https://arxiv.org/abs/2304.13705)
+23. C. Chi et al. *Diffusion Policy: Visuomotor Policy Learning via Action Diffusion.* RSS 2023. [arXiv:2303.04137](https://arxiv.org/abs/2303.04137)
+24. M. Shukor et al. *SmolVLA: A Vision-Language-Action Model for Affordable and Efficient Robotics.* 2025. [arXiv:2506.01844](https://arxiv.org/abs/2506.01844)
+25. M. Sundermeyer, A. Mousavian, R. Triebel and D. Fox. *Contact-GraspNet: Efficient 6-DoF Grasp Generation in Cluttered Scenes.* ICRA 2021. [arXiv:2103.14127](https://arxiv.org/abs/2103.14127)
+26. N. Hogan. *Impedance Control: An Approach to Manipulation.* Journal of Dynamic Systems, Measurement, and Control 107(1), 1985.
+27. G. V. Cormack, C. L. A. Clarke and S. Büttcher. *Reciprocal Rank Fusion Outperforms Condorcet and Individual Rank Learning Methods.* SIGIR 2009.

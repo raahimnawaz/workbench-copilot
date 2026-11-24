@@ -152,6 +152,16 @@ Voice, the arm, the cameras and the HUD are covered in [docs/setup.md](docs/setu
 - **V-JEPA 2** on the desk camera, to tell a held tool from empty jaws, which the servos can't.
 - **ROS 2:** each skill as a node, actions for long moves, tf2 for the camera and arm frames, and MoveIt's collision checks.
 
+**Stronger algorithms, and when each would pay off:**
+
+- **Geometric IK:** the SO-101's lift, elbow and wrist-flex axes are parallel, so its pan angle comes from the target's bearing and the rest is a planar three-link solve. That is exact, takes constant time and returns every solution, so the planner can choose elbow-up or elbow-down instead of taking whichever one damped least squares converges to. Damped least squares stays as the check.
+- **Time-optimal timing (TOPP-RA):** time each path to the fastest the joint speed and acceleration limits allow, in place of a fixed quintic, to shorten picks and puts under the same caps.
+- **Constrained IK and motion planning for a cluttered desk:** IK as a quadratic program ([Pink](https://github.com/stephane-caron/pink)) with joint limits and keep-out zones as constraints, and collision-checked paths from RRT-Connect (OMPL) or GPU trajectory optimization (cuRobo).
+- **A learned policy, measured against this pipeline:** the SO-101 is LeRobot's reference arm, so teleoperated demonstrations of the cup task can train ACT, Diffusion Policy or SmolVLA. Both run the same trials, the policy under the driver's same limits and cuts, and the result says where each one wins.
+- **Learned grasps for unfamiliar things:** a depth camera and a grasp network (Contact-GraspNet, AnyGrasp) for things with no measured shape in the config.
+- **Compliance for contact:** backing off on the servos' current draw, as close to impedance control as the STS3215s allow with no torque sensing.
+- **Hybrid recall for memory:** BM25 beside embeddings, fused and reranked, so a turn is found by meaning as well as by its rare words.
+
 More in [docs/design.md](docs/design.md#after-the-hackathon).
 
 ## Documentation
